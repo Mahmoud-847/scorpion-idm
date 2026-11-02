@@ -93,37 +93,44 @@ def bump_patch_version(ver: str) -> str:
     return ".".join(str(x) for x in parts)
 
 
+def _py_str(s: str) -> str:
+    # JSON string literals are valid Python string literals
+    return json.dumps(s, ensure_ascii=False)
+
+
 def update_version_in_source(new_ver: str, note_ar: str, note_en: str):
+    """Sets APP_VERSION and adds a CHANGELOG_HISTORY entry for new_ver (each release keeps its own notes)."""
     qt_file = os.path.join(PROJECT_ROOT, "native_app", "scorpion_qt.py")
     with open(qt_file, "r", encoding="utf-8") as f:
         content = f.read().replace("\r\n", "\n")
 
     content = re.sub(r'APP_VERSION\s*=\s*"[^"]+"', f'APP_VERSION = "{new_ver}"', content, count=1)
 
-    today = time.strftime("%Y-%m-%d")
-    content = re.sub(
-        r'("version":\s*)"[^"]+"(\s*,\s*"date":\s*)"[^"]+"(\s*,\s*"title_ar":\s*)"[^"]+"(\s*,\s*"title_en":\s*)"[^"]+"',
-        f'\\g<1>"{new_ver}"\\g<2>"{today}"\\g<3>"الإصدار {new_ver} — تحديث جديد"\\g<4>"Version {new_ver} — New Update"',
-        content,
-        count=1,
-    )
-    if note_ar.strip():
-        escaped_ar = note_ar.strip().replace('"', '\\"')
-        escaped_en = (note_en.strip() or note_ar.strip()).replace('"', '\\"')
-        if f'"{escaped_ar}"' not in content:
-            content = re.sub(
-                r'("ar":\s*\[\s*)',
-                f'\\g<1>"{escaped_ar}",\n            ',
-                content,
-                count=1,
-            )
-        if f'"{escaped_en}"' not in content:
-            content = re.sub(
-                r'("en":\s*\[\s*)',
-                f'\\g<1>"{escaped_en}",\n            ',
-                content,
-                count=1,
-            )
+    # Several notes can be typed on one line, separated by "|"
+    notes_ar = [n.strip() for n in re.split(r"[\n|]", note_ar) if n.strip()]
+    notes_en = [n.strip() for n in re.split(r"[\n|]", note_en or note_ar) if n.strip()]
+    if not notes_ar:
+        notes_ar, notes_en = ["تحسينات وإصلاحات عامة."], ["General improvements and fixes."]
+
+    top = re.search(r'CHANGELOG_HISTORY\s*=\s*\[\s*\{\s*"version":\s*"([^"]+)"', content)
+    if top and top.group(1) == new_ver:
+        # Same version published again (no bump): add the new notes to its existing entry
+        for key, notes in (("ar", notes_ar), ("en", notes_en)):
+            new_lines = "".join(f"            {_py_str(n)},\n" for n in notes if _py_str(n) not in content)
+            content = re.sub(rf'("{key}":\s*\[\n)', lambda m: m.group(1) + new_lines, content, count=1)
+    else:
+        today = time.strftime("%Y-%m-%d")
+        entry = (
+            "    {\n"
+            f'        "version": "{new_ver}",\n'
+            f'        "date": "{today}",\n'
+            f'        "title_ar": {_py_str(f"الإصدار {new_ver}")},\n'
+            f'        "title_en": {_py_str(f"Version {new_ver}")},\n'
+            '        "ar": [\n' + "".join(f"            {_py_str(n)},\n" for n in notes_ar) + "        ],\n"
+            '        "en": [\n' + "".join(f"            {_py_str(n)},\n" for n in notes_en) + "        ],\n"
+            "    },\n"
+        )
+        content = re.sub(r"(CHANGELOG_HISTORY\s*=\s*\[\n)", lambda m: m.group(1) + entry, content, count=1)
 
     with open(qt_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
@@ -139,6 +146,33 @@ def run_git(*args) -> subprocess.CompletedProcess:
         errors="replace",
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+
+
+def find_gh() -> str:
+    for cand in (shutil.which("gh"), r"C:\Program Files\GitHub CLI\gh.exe"):
+        if cand and os.path.isfile(cand):
+            return cand
+    return ""
+
+
+def publish_tools_pack(version: str, pack_path: str, log) -> None:
+    """Uploads the tools pack as release 'tools-<version>' unless that release already exists."""
+    gh = find_gh()
+    if not gh:
+        raise RuntimeError("أداة GitHub CLI (gh) غير مثبتة — مطلوبة لرفع حزمة الأدوات (winget install GitHub.cli ثم gh auth login)")
+    tag = f"tools-{version}"
+    run = lambda *a: subprocess.run(
+        [gh, *a], cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if run("release", "view", tag).returncode == 0:
+        log(f"==> Tools pack {tag} already published")
+        return
+    log(f"==> Uploading tools pack {tag} ({os.path.getsize(pack_path) // (1024 * 1024)} MB)...")
+    res = run("release", "create", tag, pack_path, "--title", f"Tools {version}",
+              "--notes", "Bundled programs (ffmpeg, ffprobe, QuickJS) downloaded by the app.", "--latest=false")
+    if res.returncode != 0:
+        raise RuntimeError(f"تعذر رفع حزمة الأدوات: {(res.stderr or res.stdout).strip()[:160]}")
 
 
 def ensure_on_up_to_date_main():
@@ -301,7 +335,7 @@ class AutoPublisherWindow(QMainWindow):
 
         cl.addWidget(QLabel("وصف التعديل (يظهر للمستخدمين في نافذة «ما الجديد في التحديث»):"))
         self.txt_note = QLineEdit()
-        self.txt_note.setPlaceholderText("مثال: تحسين سرعة التحميل وإصلاح بعض الأخطاء...")
+        self.txt_note.setPlaceholderText("ما الذي سيلاحظه المستخدم؟ افصل بين النقاط بعلامة |   مثال: تحميل أسرع | إصلاح مشكلة الفيديو")
         cl.addWidget(self.txt_note)
         root.addWidget(ctrl_card)
 
@@ -430,11 +464,15 @@ class AutoPublisherWindow(QMainWindow):
                     errors="replace",
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
-                setup_path = ""
+                setup_path = tools_version = tools_pack = ""
                 for line in proc.stdout:
                     line_s = line.strip()
                     if line_s.startswith("SETUP_PATH="):
                         setup_path = line_s.split("=", 1)[1]
+                    elif line_s.startswith("TOOLS_VERSION="):
+                        tools_version = line_s.split("=", 1)[1]
+                    elif line_s.startswith("TOOLS_PACK="):
+                        tools_pack = line_s.split("=", 1)[1]
                     if line_s:
                         self.signals.log.emit(line_s)
                 proc.wait()
@@ -468,6 +506,10 @@ class AutoPublisherWindow(QMainWindow):
                     pkg_sha = hashlib.sha256(f.read()).hexdigest()
                 if manifest.get("version") != new_ver or manifest.get("sha256") != pkg_sha:
                     raise RuntimeError("ملف update.json لا يطابق حزمة التحديث (الإصدار أو بصمة SHA-256) — تم إيقاف الرفع")
+                if not tools_version or not os.path.isfile(tools_pack) or (manifest.get("tools") or {}).get("version") != tools_version:
+                    raise RuntimeError("حزمة الأدوات (ffmpeg / QuickJS) غير جاهزة أو لا تطابق update.json — تم إيقاف الرفع")
+                self.signals.progress.emit(75, "جاري رفع حزمة الأدوات إن كانت جديدة...")
+                publish_tools_pack(tools_version, tools_pack, self.signals.log.emit)
 
                 self.signals.progress.emit(80, "جاري رفع التحديث إلى GitHub (Mahmoud-847/scorpion-idm)...")
                 self.signals.log.emit(f"==> Pushing v{new_ver} to {REPO_URL} ...")
