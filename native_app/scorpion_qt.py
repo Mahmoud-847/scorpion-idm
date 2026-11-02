@@ -138,15 +138,17 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.1"
+APP_VERSION = "2.1.3"
 
 CHANGELOG_HISTORY = [
     {
-        "version": "2.1.1",
+        "version": "2.1.3",
         "date": "2026-11-02",
-        "title_ar": "الإصدار 2.1.1 — تحديث تلقائي",
-        "title_en": "Version 2.1.1 — Auto Update",
+        "title_ar": "الإصدار 2.1.3 — تحديث تلقائي",
+        "title_en": "Version 2.1.3 — Auto Update",
         "ar": [
+            "تحديث تلقائي للإصدار 2.1.3 وتحسينات في الأداء.",
+            "تحديث تلقائي للإصدار 2.1.2 وتحسينات في الأداء.",
             "تحديث تلقائي للإصدار 2.1.1 وتحسينات في الأداء.",
             "إضافة نظام التحديث الذكي من داخل التطبيق (In-App Auto Update) مع عرض سجل التغييرات وتثبيت التحديث بضغطة زر دون الحاجة لتشغيل ملف Setup يدوياً.",
             "دعم كامل لتحميل المقاطع الصوتية والأغاني من Spotify و SoundCloud و Anghami و Deezer عبر 32 بورت متوازي وتحويلها تلقائياً إلى MP3.",
@@ -154,6 +156,8 @@ CHANGELOG_HISTORY = [
             "حماية ذاتية لاختصارات سطح المكتب وقائمة ابدأ وتثبيت آمن بدون أي تعارض مع Windows Defender.",
         ],
         "en": [
+            "Auto-update v2.1.3 with performance and stability improvements.",
+            "Auto-update v2.1.2 with performance and stability improvements.",
             "Auto-update v2.1.1 with performance and stability improvements.",
             "Built-in In-App Auto Updater with release notes viewer and one-click silent update installation across all your PCs.",
             "Full audio & music download support for Spotify, SoundCloud, Anghami, and Deezer across 32 parallel ports with automatic MP3 conversion.",

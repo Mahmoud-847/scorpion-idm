@@ -2,17 +2,21 @@
 """
 Scorpion IDM — Automatic GitHub Builder & Publisher
 Watches project files for any modification, automatically bumps the version,
-rebuilds the app + update payload + installer, and pushes to GitHub so all PCs receive the update.
+rebuilds the app + update payload + installer, safely updates the local install,
+and pushes to GitHub so all PCs receive the update.
 """
 import os
 import re
 import sys
 import json
 import time
+import socket
 import shutil
 import hashlib
+import ctypes
 import threading
 import subprocess
+import urllib.request
 
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w", encoding="utf-8")
@@ -52,12 +56,17 @@ WATCH_TARGETS = [
 
 
 def compute_snapshot() -> dict:
+    """Computes SHA-256 of watched source files, ignoring APP_VERSION & CHANGELOG_HISTORY so version bumps never loop."""
     snap = {}
     for p in WATCH_TARGETS:
         if os.path.isfile(p):
             try:
-                with open(p, "rb") as f:
-                    snap[p] = hashlib.sha256(f.read()).hexdigest()
+                with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                    txt = f.read()
+                if p.endswith("scorpion_qt.py"):
+                    txt = re.sub(r'APP_VERSION\s*=\s*"[^"]+"', 'APP_VERSION = ""', txt, count=1)
+                    txt = re.sub(r'CHANGELOG_HISTORY\s*=\s*\[.*?\n\]', 'CHANGELOG_HISTORY = []', txt, count=1, flags=re.S)
+                snap[p] = hashlib.sha256(txt.encode("utf-8")).hexdigest()
             except Exception:
                 pass
     return snap
@@ -73,7 +82,7 @@ def read_current_version() -> str:
             return m.group(1)
     except Exception:
         pass
-    return "2.1.0"
+    return "2.1.1"
 
 
 def bump_patch_version(ver: str) -> str:
@@ -87,35 +96,96 @@ def bump_patch_version(ver: str) -> str:
 def update_version_in_source(new_ver: str, note_ar: str, note_en: str):
     qt_file = os.path.join(PROJECT_ROOT, "native_app", "scorpion_qt.py")
     with open(qt_file, "r", encoding="utf-8") as f:
-        content = f.read()
+        content = f.read().replace("\r\n", "\n")
 
     content = re.sub(r'APP_VERSION\s*=\s*"[^"]+"', f'APP_VERSION = "{new_ver}"', content, count=1)
 
     today = time.strftime("%Y-%m-%d")
     content = re.sub(
         r'("version":\s*)"[^"]+"(\s*,\s*"date":\s*)"[^"]+"(\s*,\s*"title_ar":\s*)"[^"]+"(\s*,\s*"title_en":\s*)"[^"]+"',
-        f'\\g<1>"{new_ver}"\\g<2>"{today}"\\g<3>"الإصدار {new_ver} — تحديث تلقائي"\\g<4>"Version {new_ver} — Auto Update"',
+        f'\\g<1>"{new_ver}"\\g<2>"{today}"\\g<3>"الإصدار {new_ver} — تحديث جديد"\\g<4>"Version {new_ver} — New Update"',
         content,
         count=1,
     )
     if note_ar.strip():
         escaped_ar = note_ar.strip().replace('"', '\\"')
         escaped_en = (note_en.strip() or note_ar.strip()).replace('"', '\\"')
-        content = re.sub(
-            r'("ar":\s*\[\s*)',
-            f'\\g<1>"{escaped_ar}",\n            ',
-            content,
-            count=1,
-        )
-        content = re.sub(
-            r'("en":\s*\[\s*)',
-            f'\\g<1>"{escaped_en}",\n            ',
-            content,
-            count=1,
-        )
+        if f'"{escaped_ar}"' not in content:
+            content = re.sub(
+                r'("ar":\s*\[\s*)',
+                f'\\g<1>"{escaped_ar}",\n            ',
+                content,
+                count=1,
+            )
+        if f'"{escaped_en}"' not in content:
+            content = re.sub(
+                r'("en":\s*\[\s*)',
+                f'\\g<1>"{escaped_en}",\n            ',
+                content,
+                count=1,
+            )
 
-    with open(qt_file, "w", encoding="utf-8") as f:
+    with open(qt_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
+
+
+def stop_running_scorpion():
+    """Requests ScorpionIDM.exe to quit cleanly via RPC and waits until its files are unlocked."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:19615/quit", data=b"{}", method="POST")
+        urllib.request.urlopen(req, timeout=2).read()
+    except Exception:
+        pass
+    for _ in range(16):
+        time.sleep(0.35)
+        try:
+            urllib.request.urlopen("http://127.0.0.1:19615/ping", timeout=0.4).read()
+        except Exception:
+            break
+    time.sleep(0.6)
+
+
+def copy_tree_safely(src_dir: str, dst_dir: str):
+    """
+    Copies all files from src_dir to dst_dir safely on Windows.
+    If any target .exe / .dll / .pyd is still locked by Windows, renames it to .old_<timestamp>
+    in-place first so PermissionError never occurs.
+    """
+    if not os.path.isdir(src_dir):
+        return
+    ts = int(time.time() * 1000)
+    idx = 0
+    for root, dirs, files in os.walk(src_dir):
+        rel = os.path.relpath(root, src_dir)
+        target_root = dst_dir if rel == "." else os.path.join(dst_dir, rel)
+        os.makedirs(target_root, exist_ok=True)
+        for fn in files:
+            idx += 1
+            s_file = os.path.join(root, fn)
+            d_file = os.path.join(target_root, fn)
+            if os.path.exists(d_file):
+                try:
+                    os.remove(d_file)
+                except PermissionError:
+                    stale = f"{d_file}.old_{ts}_{idx}"
+                    try:
+                        if os.path.exists(stale):
+                            os.remove(stale)
+                    except Exception:
+                        pass
+                    try:
+                        os.replace(d_file, stale)
+                    except Exception:
+                        continue
+            try:
+                shutil.copy2(s_file, d_file)
+            except PermissionError:
+                stale = f"{d_file}.old_{ts}_{idx}"
+                try:
+                    os.replace(d_file, stale)
+                    shutil.copy2(s_file, d_file)
+                except Exception:
+                    pass
 
 
 class PublisherSignals(QObject):
@@ -171,7 +241,7 @@ class AutoPublisherWindow(QMainWindow):
         title.setStyleSheet("font-size: 15px; font-weight: 700; color: #2563eb;")
         sub = QLabel(
             f"المستودع المربوط: {REPO_URL}\n"
-            "تراقب هذه الأداة ملفات المشروع تلقائياً؛ وبمجرد تعديل أي ملف، تقوم بزيادة رقم الإصدار وبناء حزمة التحديث ورفعها إلى GitHub لتصل لكل أجهزتك فوراً."
+            "تقوم هذه الأداة ببناء النسخة الجديدة وحزمة التحديث ورفعها إلى حسابك على GitHub ليصل التحديث فوراً لكل أجهزتك."
         )
         sub.setWordWrap(True)
         sub.setStyleSheet("color: #6b7280;")
@@ -197,7 +267,7 @@ class AutoPublisherWindow(QMainWindow):
         row1.addWidget(self.chk_watch)
         cl.addLayout(row1)
 
-        self.chk_bump = QCheckBox("زيادة رقم الإصدار تلقائياً مع كل رفعة (مثلاً 2.1.0 ← 2.1.1) ليظهر إشعار التحديث على الأجهزة الأخرى")
+        self.chk_bump = QCheckBox("زيادة رقم الإصدار تلقائياً مع كل رفعة (مثلاً 2.1.1 ← 2.1.2) ليظهر إشعار التحديث على الأجهزة الأخرى")
         self.chk_bump.setChecked(True)
         cl.addWidget(self.chk_bump)
 
@@ -214,8 +284,9 @@ class AutoPublisherWindow(QMainWindow):
         ll.setContentsMargins(16, 12, 16, 12)
         ll.setSpacing(8)
 
-        self.lbl_status = QLabel("👀 في وضع المراقبة النشطة — بانتظار أي تعديل في ملفات المشروع...")
+        self.lbl_status = QLabel("👀 جاهز — في وضع المراقبة النشطة أو اضغط زر البناء والرفع بالأسفل.")
         self.lbl_status.setStyleSheet("font-weight: 600;")
+        self.lbl_status.setWordWrap(True)
         ll.addWidget(self.lbl_status)
 
         self.prog = QProgressBar()
@@ -262,13 +333,14 @@ class AutoPublisherWindow(QMainWindow):
         self.is_building = False
         self.btn_publish.setEnabled(True)
         self.last_snapshot = compute_snapshot()
+        self.pending_change_time = None
         self.lbl_ver.setText(f"الإصدار الحالي: v{read_current_version()}")
         if ok:
             self.prog.setValue(100)
             self.lbl_status.setText(f"✅ {msg}")
             self.txt_note.clear()
         else:
-            self.lbl_status.setText(f"❌ {msg}")
+            self.lbl_status.setText(f"❌ {msg[:220]}")
 
     def _check_file_changes(self):
         if self.is_building or not self.chk_watch.isChecked():
@@ -293,6 +365,7 @@ class AutoPublisherWindow(QMainWindow):
         if self.is_building:
             return
         self.is_building = True
+        self.pending_change_time = None
         self.btn_publish.setEnabled(False)
         self.prog.setValue(5)
         note_ar = self.txt_note.text().strip()
@@ -306,20 +379,15 @@ class AutoPublisherWindow(QMainWindow):
                     self.signals.progress.emit(10, f"جاري تحديث رقم الإصدار إلى v{new_ver}...")
                     update_version_in_source(
                         new_ver,
-                        note_ar or f"تحديث تلقائي للإصدار {new_ver} وتحسينات في الأداء.",
-                        f"Auto-update v{new_ver} with performance and stability improvements.",
+                        note_ar,
+                        note_ar,
                     )
+                    self.last_snapshot = compute_snapshot()
                     self.signals.log.emit(f"==> Version updated: v{cur_ver} -> v{new_ver}")
 
                 self.signals.progress.emit(20, "جاري إغلاق النسخة المفتوحة وبناء البرنامج وحزمة التحديث...")
-                self.signals.log.emit("==> Running build_installer.ps1 ...")
-                try:
-                    import urllib.request
-                    req = urllib.request.Request("http://127.0.0.1:19615/quit", data=b"{}", method="POST")
-                    urllib.request.urlopen(req, timeout=2).read()
-                    time.sleep(1.5)
-                except Exception:
-                    pass
+                self.signals.log.emit("==> Stopping running ScorpionIDM instance & running build_installer.ps1 ...")
+                stop_running_scorpion()
 
                 build_script = os.path.join(PROJECT_ROOT, "build_installer.ps1")
                 proc = subprocess.Popen(
@@ -340,18 +408,18 @@ class AutoPublisherWindow(QMainWindow):
                 if proc.returncode != 0:
                     raise RuntimeError("فشل بناء البرنامج عبر PyInstaller")
 
-                self.signals.progress.emit(65, "جاري تحديث النسخة المثبتة على هذا الجهاز...")
+                self.signals.progress.emit(65, "جاري تحديث النسخة المثبتة على هذا الجهاز بأمان...")
+                stop_running_scorpion()
                 src_dist = os.path.join(PROJECT_ROOT, "native_app", "_build", "dist", "ScorpionIDM")
                 dst_app = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ScorpionIDM")
-                if os.path.isdir(src_dist):
-                    shutil.copytree(src_dist, dst_app, dirs_exist_ok=True)
+                copy_tree_safely(src_dist, dst_app)
+
                 ext_src = os.path.join(PROJECT_ROOT, "browser-extension")
                 for ext_dst in (
                     os.path.join(dst_app, "browser-extension"),
                     os.path.join(os.environ.get("LOCALAPPDATA", ""), "ScorpionIDM", "browser-extension"),
                 ):
-                    if os.path.isdir(ext_src):
-                        shutil.copytree(ext_src, ext_dst, dirs_exist_ok=True)
+                    copy_tree_safely(ext_src, ext_dst)
 
                 exe_p = os.path.join(dst_app, "ScorpionIDM.exe")
                 if os.path.isfile(exe_p):
@@ -373,6 +441,7 @@ class AutoPublisherWindow(QMainWindow):
                         text=True,
                         encoding="utf-8",
                         errors="replace",
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                     )
                     if p_git.stdout.strip():
                         self.signals.log.emit(p_git.stdout.strip())
@@ -380,14 +449,16 @@ class AutoPublisherWindow(QMainWindow):
                         self.signals.log.emit(p_git.stderr.strip())
                     if cmd[1] == "push" and p_git.returncode != 0:
                         raise RuntimeError(
-                            "تعذر الرفع إلى GitHub — تأكد من تسجيل الدخول في نافذة GitHub أو وجود المستودع العام."
+                            f"تعذر الرفع إلى GitHub: {p_git.stderr.strip()[:160]}"
                         )
 
+                self.last_snapshot = compute_snapshot()
                 self.signals.finished.emit(
                     True,
                     f"تم بناء ورفع الإصدار v{new_ver} إلى GitHub بنجاح! سيظهر التحديث الآن على كل أجهزتك.",
                 )
             except Exception as e:
+                self.signals.log.emit(f"[ERROR] {e}")
                 self.signals.finished.emit(False, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -397,7 +468,6 @@ def ensure_publisher_shortcut():
     """Creates a Desktop shortcut for Scorpion Auto-Publisher via pure-Python Win32 COM."""
     if os.name != "nt":
         return
-    import ctypes
     from ctypes import wintypes
 
     ole32 = ctypes.windll.ole32
@@ -457,8 +527,17 @@ def ensure_publisher_shortcut():
         ole32.CoUninitialize()
 
 
+_LOCK_SOCK = None
+
+
 if __name__ == "__main__":
     ensure_publisher_shortcut()
+    try:
+        _LOCK_SOCK = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _LOCK_SOCK.bind(("127.0.0.1", 19616))
+        _LOCK_SOCK.listen(1)
+    except OSError:
+        sys.exit(0)
     app = QApplication(sys.argv)
     win = AutoPublisherWindow(auto_run_now="--now" in sys.argv)
     win.show()
