@@ -27,10 +27,11 @@
       sending: 'جاري الإرسال إلى Scorpion IDM... ⚡',
       sentOk: 'تم الإرسال إلى Scorpion IDM ✅',
       sentErr: 'تأكد من تشغيل Scorpion IDM ⚠️',
-      bestHd: '🎬 أعلى جودة متاحة (Full HD / 1080p MP4)',
-      medHd: '📺 جودة متوسطة سريعة (720p HD MP4)',
-      lowMp4: '📱 جودة اقتصادية (480p MP4)',
+      bestHd: '🎬 أفضل جودة تشتغل على أي جهاز (MP4)',
       audioMp3: '🎵 تحميل الصوت فقط (MP3 Audio)',
+      loadingQualities: '⏳ جاري قراءة الجودات المتاحة...',
+      noQualities: 'تعذر قراءة الجودات — استخدم أفضل جودة',
+      qualityItem: (label) => `🎞️ ${label}`,
       bestAudioOrig: '🎵 تحميل المقطع الصوتي بأعلى جودة (MP3 32-Port)',
       convertMp3: '🎧 تحويل وتحميل بصيغة MP3 (192kbps)',
       directHeader: 'الروابط المباشرة المكتشفة من المشغل:',
@@ -46,10 +47,11 @@
       sending: 'Sending to Scorpion IDM... ⚡',
       sentOk: 'Sent to Scorpion IDM ✅',
       sentErr: 'Make sure Scorpion IDM is running ⚠️',
-      bestHd: '🎬 Best Available Quality (Full HD / 1080p MP4)',
-      medHd: '📺 Medium Fast Quality (720p HD MP4)',
-      lowMp4: '📱 Data Saver Quality (480p MP4)',
+      bestHd: '🎬 Best quality that plays everywhere (MP4)',
       audioMp3: '🎵 Audio Only (MP3 Audio)',
+      loadingQualities: '⏳ Reading available qualities...',
+      noQualities: "Couldn't read the qualities — use Best quality",
+      qualityItem: (label) => `🎞️ ${label}`,
       bestAudioOrig: '🎵 Download Best Audio Quality (MP3 32-Port)',
       convertMp3: '🎧 Convert & Download as MP3 (192kbps)',
       directHeader: 'Direct streams detected from player:',
@@ -221,6 +223,27 @@
       if (aud) return aud;
     }
     return detectedStreams.length > 0 ? detectedStreams[0] : null;
+  }
+
+  // Embedded players often carry no video id in their address (Dailymotion's own pages load
+  // geo.dailymotion.com/player/<player>.html? in an iframe). Rebuild the video page address from the
+  // player's address or from the requests it made, which name the video.
+  function resolveEmbeddedVideoPage(url) {
+    try {
+      const u = new URL(url);
+      if (/(^|\.)dailymotion\.com$/i.test(u.hostname) && /^\/(player|embed)\b/i.test(u.pathname)) {
+        let id = u.searchParams.get('video') || (u.pathname.match(/\/embed\/video\/([a-z0-9]+)/i) || [])[1];
+        if (!id) {
+          // The latest match wins, so the video playing now beats one played earlier in the same player
+          for (const entry of performance.getEntriesByType('resource')) {
+            const m = /dailymotion\.com\/(?:cdn\/manifest\/video|player\/metadata\/video|video)\/(x[a-z0-9]+)/i.exec(entry.name);
+            if (m) id = m[1];
+          }
+        }
+        if (id) return `https://www.dailymotion.com/video/${id}`;
+      }
+    } catch (_) {}
+    return url;
   }
 
   // Extract the exact currently playing song title, artist, and track URL from music sites
@@ -450,7 +473,7 @@
         : null;
 
     const sniffed = bestStream(activeMode === 'audio');
-    const effectivePageUrl = trackInfo.trackUrl || pageUrl;
+    const effectivePageUrl = resolveEmbeddedVideoPage(trackInfo.trackUrl || pageUrl);
     const isMusicPlatform = MUSIC_SITE_RE.test(isFramed ? document.referrer || effectivePageUrl : effectivePageUrl);
     const isKnownVideoSite =
       /youtube\.com|youtu\.be|facebook\.com|instagram\.com|tiktok\.com|twitter\.com|x\.com|vimeo\.com|dailymotion\.com/i.test(
@@ -501,20 +524,6 @@
           url: targetUrl,
         },
         {
-          label: tr.medHd,
-          tag: '720p HD',
-          quality: '720p',
-          type: 'video',
-          url: targetUrl,
-        },
-        {
-          label: tr.lowMp4,
-          tag: '480p',
-          quality: '480p',
-          type: 'video',
-          url: targetUrl,
-        },
-        {
           label: tr.audioMp3,
           tag: 'MP3',
           quality: 'audio',
@@ -524,13 +533,15 @@
       ];
     }
 
-    presets.forEach((opt) => {
+    const makeOption = (opt) => {
       const btn = document.createElement('button');
       btn.className = 'scorpion-idm-option';
       btn.innerHTML = `
-        <span>${opt.label}</span>
-        <span class="scorpion-idm-option-tag">${opt.tag}</span>
+        <span></span>
+        <span class="scorpion-idm-option-tag"></span>
       `;
+      btn.children[0].textContent = opt.label;
+      btn.children[1].textContent = opt.tag;
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         e.preventDefault();
@@ -544,8 +555,33 @@
           filename: opt.filename || '',
         });
       });
-      dropdownEl.appendChild(btn);
-    });
+      return btn;
+    };
+    presets.forEach((opt) => dropdownEl.appendChild(makeOption(opt)));
+
+    // Every quality the video really offers, read by the app (yt-dlp), listed under "best"
+    if (!(activeMode === 'audio' || isMusicPlatform)) {
+      const box = document.createElement('div');
+      const status = document.createElement('div');
+      status.style.cssText = 'font-size:11px;color:#94a3b8;padding:6px 10px;';
+      status.textContent = tr.loadingQualities;
+      box.appendChild(status);
+      dropdownEl.insertBefore(box, dropdownEl.children[1] || null);
+      listQualities(targetUrl, pageUrl).then((res) => {
+        const list = (res && res.qualities) || [];
+        if (!list.length) {
+          status.textContent = tr.noQualities;
+          return;
+        }
+        status.remove();
+        list.forEach((q) => {
+          const size = q.size ? `~${q.size >= 1073741824 ? (q.size / 1073741824).toFixed(1) + ' GB' : Math.round(q.size / 1048576) + ' MB'}` : '';
+          box.appendChild(
+            makeOption({ label: t().qualityItem(q.label), tag: size || q.quality, quality: q.quality, type: 'video', url: targetUrl })
+          );
+        });
+      });
+    }
 
     // Only list raw network streams when not on a DRM music site (where raw URLs require DRM keys)
     if (!isMusicPlatform && detectedStreams.length > 0) {
@@ -581,6 +617,28 @@
         dropdownEl.appendChild(btn);
       });
     }
+  }
+
+  // Qualities per address, cached so reopening the menu is instant (one request per video)
+  const qualityCache = new Map();
+  function listQualities(url, referer) {
+    if (!qualityCache.has(url)) {
+      qualityCache.set(
+        url,
+        new Promise((resolve) => {
+          try {
+            chrome.runtime.sendMessage({ action: 'SCORPION_LIST_QUALITIES', url, referer }, (res) => {
+              if (chrome.runtime.lastError || !res || !res.ok) qualityCache.delete(url);
+              resolve(chrome.runtime.lastError ? null : res);
+            });
+          } catch (_) {
+            qualityCache.delete(url);
+            resolve(null);
+          }
+        })
+      );
+    }
+    return qualityCache.get(url);
   }
 
   function triggerVideoDownload(payload) {

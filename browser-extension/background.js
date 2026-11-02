@@ -194,6 +194,9 @@ async function sendToScorpion(payload) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'SCORPION_DOWNLOAD_VIDEO' || msg.action === 'SCORPION_DOWNLOAD_LINK') {
     const payload = { ...(msg.payload || {}) };
+    // From an embedded player (iframe): also send the page the user is on, for when the player's own
+    // address doesn't identify the video
+    if (sender && sender.tab && sender.frameId && sender.tab.url) payload.tabUrl = sender.tab.url;
     const generic = !payload.title || /^(scorpion_video|video|embed|player)$/i.test(String(payload.title).trim());
     const finish = () => sendToScorpion(payload).then((ok) => sendResponse({ ok }));
     if (generic && sender && sender.tab && sender.frameId) {
@@ -208,6 +211,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.action === 'SCORPION_GET_TAB_STREAMS') {
     sendResponse({ streams: [], config });
+    return true;
+  }
+  if (msg.action === 'SCORPION_LIST_QUALITIES') {
+    // Reading a video's qualities can take several seconds (the app asks yt-dlp)
+    const params = new URLSearchParams({ url: msg.url || '', referer: msg.referer || '' });
+    if (sender && sender.tab && sender.frameId && sender.tab.url) params.set('tab', sender.tab.url);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60000);
+    fetch(`${SCORPION_SERVER}/formats?${params}`, { headers: SCORPION_HEADERS, signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => sendResponse(data || { ok: false }))
+      .catch(() => sendResponse({ ok: false }))
+      .finally(() => clearTimeout(timer));
     return true;
   }
   if (msg.action === 'SCORPION_SET_APP_LANG') {
