@@ -9,6 +9,7 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 import json
+import re
 import time
 import uuid
 import shutil
@@ -173,6 +174,29 @@ def find_tool(name: str) -> str:
         if cand and os.path.isfile(cand):
             return cand
     return ""
+
+
+def video_format_for(quality: str, has_ffmpeg: bool = True) -> str:
+    """yt-dlp format selector for a quality picked by the user: "best", "audio" or a height like "1080p"."""
+    import re
+
+    m = re.fullmatch(r"(\d{3,4})p", (quality or "").strip().lower())
+    if not has_ffmpeg:
+        # Without ffmpeg only single-file formats (video + audio together) can be saved
+        return f"best[height<={m.group(1)}]/best" if m else "best"
+    if quality == "audio":
+        return "bestaudio[ext=m4a]/bestaudio/best"
+    if m:
+        h = m.group(1)
+        # The exact height first (H.264 plays everywhere, other codecs if that's all there is at this height),
+        # then the closest lower one
+        return (
+            f"bestvideo[height={h}][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height={h}]+bestaudio/"
+            f"bestvideo[height<={h}][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<={h}]+bestaudio/"
+            f"best[height<={h}]/best"
+        )
+    # Prefer H.264 (avc1): AV1/VP9 files do not play in the default Windows player
+    return "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
 
 
 # Local browser bridge (127.0.0.1:19615): only extension pages and native local processes are trusted.
@@ -1104,6 +1128,8 @@ class IDMProgressDialog(QDialog):
 # NATIVE ADD NEW DOWNLOAD DIALOG (IDM FILE INFO POPUP)
 # ==============================================================================
 class AddDownloadDialog(QDialog):
+    qualities_ready = pyqtSignal(str, dict)
+
     def __init__(self, engine, initial_url: str = "", is_video: bool = False, lang: str = "ar", parent=None, is_torrent: bool = False):
         super().__init__(parent)
         self.engine = engine
@@ -1178,7 +1204,8 @@ class AddDownloadDialog(QDialog):
         if is_video:
             form_grid.addWidget(QLabel("جودة الفيديو:" if self.is_ar else "Video Quality:"), 2, 0)
             self.cmb_quality = QComboBox()
-            self.cmb_quality.addItems(["best (1080p/4K MP4)", "720p HD", "480p", "audio (MP3)"])
+            self.qualities_ready.connect(self._on_qualities_ready)
+            self._fill_qualities([])
             form_grid.addWidget(self.cmb_quality, 2, 1)
         else:
             form_grid.addWidget(QLabel("عدد البورتات (الأجزاء):" if self.is_ar else "Parallel Ports:"), 2, 0)
@@ -1261,6 +1288,18 @@ class AddDownloadDialog(QDialog):
             return
         if not url.startswith("http"):
             return
+        if self.is_video:
+            self.lbl_probe_info.setText("⏳ جاري قراءة الجودات المتاحة..." if self.is_ar else "⏳ Reading available qualities...")
+
+            def worker():
+                try:
+                    res = self.engine.list_video_qualities(url)
+                except Exception:
+                    res = {"ok": False, "qualities": []}
+                self.qualities_ready.emit(url, res)
+
+            threading.Thread(target=worker, daemon=True).start()
+            return
         self.lbl_probe_info.setText("⏳ جاري فحص الرابط..." if self.is_ar else "⏳ Probing URL...")
         QApplication.processEvents()
         try:
@@ -1274,14 +1313,44 @@ class AddDownloadDialog(QDialog):
         except Exception as e:
             self.lbl_probe_info.setText(f"ℹ جاهز للتحميل ({str(e)[:40]})")
 
+    def _fill_qualities(self, qualities: list):
+        """Best (plays everywhere) first, then every quality the video offers, then audio only."""
+        keep = self.cmb_quality.currentData()
+        self.cmb_quality.clear()
+        self.cmb_quality.addItem("أفضل جودة تشتغل على أي جهاز (MP4)" if self.is_ar else "Best quality that plays everywhere (MP4)", "best")
+        for q in qualities:
+            size = q.get("size") or 0
+            size_txt = f"  ~{L(format_bytes(size))}" if size else ""
+            self.cmb_quality.addItem(f"{q['label']}{size_txt}", q["quality"])
+        self.cmb_quality.addItem("الصوت فقط (MP3)" if self.is_ar else "Audio only (MP3)", "audio")
+        idx = self.cmb_quality.findData(keep) if keep else -1
+        self.cmb_quality.setCurrentIndex(max(0, idx))
+
+    def _on_qualities_ready(self, url: str, res: dict):
+        if url != self.txt_url.text().strip():
+            return  # the link changed while reading
+        qualities = res.get("qualities") or []
+        self._fill_qualities(qualities)
+        if res.get("title") and not self.txt_filename.text().strip():
+            self.txt_filename.setText(sanitize_filename(res["title"]))
+        if qualities:
+            self.lbl_probe_info.setText(
+                # Leading RLM: the line starts with a number, which would otherwise make it left-to-right
+                f"‏✅ {L(len(qualities))} جودة متاحة — أعلاها {L(qualities[0]['label'])}" if self.is_ar
+                else f"✅ {len(qualities)} qualities available — up to {qualities[0]['label']}"
+            )
+        else:
+            self.lbl_probe_info.setText(
+                "ℹ تعذر قراءة الجودات — اختر أفضل جودة" if self.is_ar else "ℹ Couldn't read the qualities — choose Best quality"
+            )
+
     def accept_download(self, start_immediately: bool):
         url = self.txt_url.text().strip()
         if not url:
             return
         q_val = "best"
         if self.is_video:
-            raw_q = self.cmb_quality.currentText()
-            q_val = "720p" if "720p" in raw_q else "480p" if "480p" in raw_q else "audio" if "audio" in raw_q else "best"
+            q_val = self.cmb_quality.currentData() or "best"
 
         is_tor = (
             self.is_torrent
@@ -1879,6 +1948,16 @@ class ScorpionNativeEngine:
                     self._send_cors(200)
                     self.wfile.write(json.dumps({"ok": True}).encode("utf-8"))
                     return
+                if parsed.path == "/formats":
+                    qs = urllib.parse.parse_qs(parsed.query)
+                    arg = lambda k: (qs.get(k) or [""])[0]
+                    try:
+                        res = engine_ref.list_video_qualities(arg("url"), arg("referer"), arg("tab"))
+                    except Exception:
+                        res = {"ok": False, "qualities": []}
+                    self._send_cors(200)
+                    self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+                    return
                 if parsed.path == "/capture":
                     qs = urllib.parse.parse_qs(parsed.query)
                     payload = {k: v[0] for k, v in qs.items() if v}
@@ -2133,6 +2212,8 @@ class ScorpionNativeEngine:
             "isTorrent": is_torrent,
             "videoQuality": opts.get("videoQuality", "best"),
             "referer": (opts.get("referer") or "").strip(),
+            # Page the user was on when the download came from an embedded player (iframe)
+            "tabUrl": (opts.get("tabUrl") or "").strip(),
             "checksumSha256": None,
             "checksumMd5": None,
         }
@@ -2553,6 +2634,15 @@ class ScorpionNativeEngine:
                 found_info = _extract_via_audio_search()
                 if found_info:
                     return found_info
+            # An embedded player's address may not identify the video; the page around it usually does
+            tab_url = (item.get("tabUrl") or "").strip()
+            if tab_url.lower().startswith(("http://", "https://")) and tab_url != item["url"]:
+                try:
+                    info = _unwrap_info(ydl.extract_info(tab_url, download=False))
+                    item["url"] = tab_url
+                    return info
+                except Exception:
+                    pass
             if not item["url"].lower().split("?")[0].endswith((".html", ".htm", "/")) and "unsupported url" not in str(first_err).lower():
                 raise
             for cand in self._scrape_media_urls(item["url"], item.get("referer") or item["url"]):
@@ -2566,6 +2656,88 @@ class ScorpionNativeEngine:
                 "الموقع ده بيخفي رابط الفيديو. شغّل الفيديو الأول لثواني ثم اضغط زر التحميل تاني "
                 "علشان الإضافة تلتقط الرابط المباشر من المشغل."
             ) from first_err
+
+    def _js_runtime_opts(self) -> dict:
+        """YouTube needs a JavaScript runtime: the bundled QuickJS, or deno if this PC has it (about 3x faster)."""
+        qjs_bundled = os.path.join(TOOLS_DIR, "qjs.exe")
+        deno_bin = find_tool("deno")
+        js_runtime = (
+            {"quickjs": {"path": qjs_bundled}} if os.path.isfile(qjs_bundled) and not deno_bin
+            else {"deno": {"path": deno_bin}} if deno_bin
+            else {"quickjs": {"path": find_tool("qjs")}} if find_tool("qjs")
+            else None
+        )
+        if not js_runtime:
+            return {}
+        opts = {"js_runtimes": js_runtime}
+        try:
+            import yt_dlp_ejs  # noqa: F401  (challenge scripts bundled with the app)
+        except ImportError:
+            opts["remote_components"] = ["ejs:github"]
+        return opts
+
+    def list_video_qualities(self, url: str, referer: str = "", tab_url: str = "") -> dict:
+        """
+        Every video quality a page offers (as yt-dlp sees it), for the quality pickers in the browser
+        button and the Add Download dialog. Cached for a few minutes per address.
+        """
+        url = (url or "").strip()
+        if not url.lower().startswith(("http://", "https://")) or not HAS_YTDLP:
+            return {"ok": False, "qualities": []}
+        cache = self.__dict__.setdefault("_quality_cache", {})
+        hit = cache.get(url)
+        if hit and time.time() - hit[0] < 600:
+            return hit[1]
+
+        class _Quiet:
+            def debug(self, msg):
+                pass
+
+            info = warning = error = debug
+
+        opts = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True,
+                "nocheckcertificate": True, "logger": _Quiet()}
+        opts.update(self._js_runtime_opts())
+        if referer:
+            pr = urllib.parse.urlparse(referer)
+            opts["http_headers"] = {"Referer": referer, "Origin": f"{pr.scheme}://{pr.netloc}", "User-Agent": BROWSER_UA}
+        item = {"url": url, "referer": referer, "tabUrl": tab_url, "videoQuality": "best", "category": ""}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = self._extract_with_fallback(ydl, item)
+        info = info or {}
+        best_audio = max(
+            (f for f in info.get("formats") or [] if f.get("vcodec") == "none" and f.get("acodec") not in (None, "none")),
+            key=lambda f: f.get("abr") or 0, default=None,
+        )
+        audio_size = (best_audio or {}).get("filesize") or (best_audio or {}).get("filesize_approx") or 0
+        by_height = {}
+        for f in info.get("formats") or []:
+            h = f.get("height")
+            if not h or f.get("vcodec") == "none":
+                continue
+            size = f.get("filesize") or f.get("filesize_approx") or 0
+            if size and f.get("acodec") in (None, "none"):
+                size += audio_size  # video-only stream: the saved file also holds the audio
+            cur = by_height.setdefault(h, {"height": h, "fps": 0, "size": 0})
+            cur["fps"] = max(cur["fps"], int(f.get("fps") or 0))
+            cur["size"] = max(cur["size"], int(size or 0))
+        qualities = []
+        for h in sorted(by_height, reverse=True):
+            q = by_height[h]
+            tag = {4320: "8K", 2160: "4K", 1440: "2K", 1080: "Full HD", 720: "HD"}.get(h, "")
+            q["label"] = f"{h}p{q['fps'] if q['fps'] > 30 else ''}" + (f" {tag}" if tag else "")
+            q["quality"] = f"{h}p"
+            qualities.append(q)
+        res = {
+            "ok": True,
+            "title": info.get("title") or "",
+            "duration": info.get("duration") or 0,
+            "pageUrl": item["url"],
+            "qualities": qualities,
+            "hasAudio": bool(best_audio) or any(f.get("acodec") not in (None, "none") for f in info.get("formats") or []),
+        }
+        cache[url] = (time.time(), res)
+        return res
 
     def get_item_temp_dir(self, dl_id: str) -> str:
         d = os.path.join(self.temp_root, str(dl_id))
@@ -2953,19 +3125,7 @@ class ScorpionNativeEngine:
         q = item.get("videoQuality", "best")
         ffmpeg_bin = find_tool("ffmpeg")
         has_ffmpeg = bool(ffmpeg_bin)
-
-        if has_ffmpeg:
-            # Prefer H.264 (avc1): AV1/VP9 files do not play in the default Windows player
-            if q == "720p":
-                fmt = "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/bestvideo+bestaudio/best"
-            elif q == "480p":
-                fmt = "bestvideo[height<=480][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/bestvideo+bestaudio/best"
-            elif q == "audio":
-                fmt = "bestaudio[ext=m4a]/bestaudio/best"
-            else:
-                fmt = "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
-        else:
-            fmt = "best"
+        fmt = video_format_for(q, has_ffmpeg)
 
         class QuietYtdlpLogger:
             def debug(self, msg):
@@ -3067,21 +3227,7 @@ class ScorpionNativeEngine:
                 "Origin": f"{pr.scheme}://{pr.netloc}",
                 "User-Agent": BROWSER_UA,
             }
-        # YouTube needs a JavaScript runtime: the bundled QuickJS, or deno if this PC has it (about 3x faster)
-        qjs_bundled = os.path.join(TOOLS_DIR, "qjs.exe")
-        deno_bin = find_tool("deno")
-        js_runtime = (
-            {"quickjs": {"path": qjs_bundled}} if os.path.isfile(qjs_bundled) and not deno_bin
-            else {"deno": {"path": deno_bin}} if deno_bin
-            else {"quickjs": {"path": find_tool("qjs")}} if find_tool("qjs")
-            else None
-        )
-        if js_runtime:
-            ydl_opts["js_runtimes"] = js_runtime
-            try:
-                import yt_dlp_ejs  # noqa: F401  (challenge scripts bundled with the app)
-            except ImportError:
-                ydl_opts["remote_components"] = ["ejs:github"]
+        ydl_opts.update(self._js_runtime_opts())
         if has_ffmpeg:
             # The folder, so yt-dlp also finds ffprobe (needed for MP3 conversion)
             ydl_opts["ffmpeg_location"] = os.path.dirname(ffmpeg_bin)
@@ -5777,13 +5923,16 @@ class ScorpionMainWindow(QMainWindow):
                 "url": url,
                 "filename": filename,
                 "referer": (payload.get("referer") or payload.get("pageUrl") or "").strip(),
+                "tabUrl": (payload.get("tabUrl") or "").strip(),
                 "category": cat,
                 "totalSize": int(payload.get("totalSize") or 0),
                 "connections": 32,
                 "startImmediately": True,
                 "isVideo": is_video and quality != "direct",
                 "isTorrent": is_torrent,
-                "videoQuality": "audio" if is_audio else (quality if quality in ("best", "720p", "480p", "audio") else "best"),
+                "videoQuality": "audio" if is_audio else (
+                    quality if quality in ("best", "audio") or re.fullmatch(r"\d{3,4}p", quality or "") else "best"
+                ),
             }
             item = self.engine.add_download(opts)
             self.open_progress_window(item["id"])
