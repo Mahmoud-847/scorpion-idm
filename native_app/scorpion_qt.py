@@ -38,9 +38,10 @@ except ImportError:
     HAS_YTDLP = False
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSize, QRectF, QPointF, QTime
-from PyQt6.QtGui import QIcon, QFont, QColor, QPainter, QPen, QLinearGradient, QAction, QClipboard, QPainterPath, QPolygonF
+from PyQt6.QtGui import QIcon, QFont, QColor, QPainter, QPen, QLinearGradient, QAction, QClipboard, QPainterPath, QPolygonF, QShortcut, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
+    QSizePolicy,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -138,7 +139,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.4"
+APP_VERSION = "2.1.5"
 
 # Local browser bridge (127.0.0.1:19615): only extension pages and native local processes are trusted.
 BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
@@ -146,10 +147,10 @@ BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "ex
 
 CHANGELOG_HISTORY = [
     {
-        "version": "2.1.4",
+        "version": "2.1.5",
         "date": "2026-11-02",
-        "title_ar": "الإصدار 2.1.4 — تحديث جديد",
-        "title_en": "Version 2.1.4 — New Update",
+        "title_ar": "الإصدار 2.1.5 — تحديث جديد",
+        "title_en": "Version 2.1.5 — New Update",
         "ar": [
             "تحديث تلقائي للإصدار 2.1.3 وتحسينات في الأداء.",
             "تحديث تلقائي للإصدار 2.1.2 وتحسينات في الأداء.",
@@ -1069,7 +1070,7 @@ class AddDownloadDialog(QDialog):
         # URL Input + Probe + Browse .torrent
         layout.addWidget(
             QLabel(
-                "رابط التحميل أو Magnet أو مسار ملف التورنت (.torrent):"
+                "رابط التحميل، أو رابط ماجنت، أو مسار ملف تورنت:"
                 if self.is_ar
                 else "Download URL, Magnet URI, or .torrent File Path:"
             )
@@ -1080,7 +1081,7 @@ class AddDownloadDialog(QDialog):
         self.txt_url.textChanged.connect(self._on_url_text_changed)
         url_row.addWidget(self.txt_url, 1)
 
-        btn_torrent_file = QPushButton("🧲 ملف .torrent" if self.is_ar else "🧲 .torrent File")
+        btn_torrent_file = QPushButton("🧲 ملف تورنت" if self.is_ar else "🧲 .torrent File")
         btn_torrent_file.clicked.connect(self.browse_torrent_file)
         url_row.addWidget(btn_torrent_file)
 
@@ -1088,17 +1089,6 @@ class AddDownloadDialog(QDialog):
         btn_probe.clicked.connect(self.probe_now)
         url_row.addWidget(btn_probe)
         layout.addLayout(url_row)
-
-        # Sample presets
-        presets_row = QHBoxLayout()
-        for title_ar, title_en, s_url in [
-            ("💿 برنامج 7-Zip (.exe)", "💿 7-Zip (.exe)", "https://www.7-zip.org/a/7z2408-x64.exe"),
-            ("🎬 برنامج VLC (.exe)", "🎬 VLC Player (.exe)", "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe"),
-        ]:
-            b = QPushButton(title_ar if self.is_ar else title_en)
-            b.clicked.connect(lambda _checked, u=s_url: self.set_sample(u))
-            presets_row.addWidget(b)
-        layout.addLayout(presets_row)
 
         self.lbl_probe_info = QLabel("")
         self.lbl_probe_info.setStyleSheet("color: #059669; font-weight: bold;")
@@ -1141,16 +1131,16 @@ class AddDownloadDialog(QDialog):
 
         # IDM 3 Action Buttons
         btn_row = QHBoxLayout()
-        btn_start = QPushButton("🚀 بدء التحميل الآن (Start Download)" if self.is_ar else "🚀 Start Download Now")
+        btn_start = QPushButton("🚀 بدء التحميل الآن" if self.is_ar else "🚀 Start Download Now")
         btn_start.setObjectName("PrimaryBtn")
         btn_start.clicked.connect(lambda: self.accept_download(True))
         btn_row.addWidget(btn_start)
 
-        btn_later = QPushButton("🕒 التحميل لاحقاً (Download Later)" if self.is_ar else "🕒 Download Later")
+        btn_later = QPushButton("🕒 التحميل لاحقاً" if self.is_ar else "🕒 Download Later")
         btn_later.clicked.connect(lambda: self.accept_download(False))
         btn_row.addWidget(btn_later)
 
-        btn_cancel = QPushButton("إلغاء (Cancel)" if self.is_ar else "Cancel")
+        btn_cancel = QPushButton("إلغاء" if self.is_ar else "Cancel")
         btn_cancel.clicked.connect(self.reject)
         btn_row.addWidget(btn_cancel)
         layout.addLayout(btn_row)
@@ -1159,10 +1149,6 @@ class AddDownloadDialog(QDialog):
             QTimer.singleShot(150, self.probe_now)
         elif is_torrent:
             QTimer.singleShot(150, self.browse_torrent_file)
-
-    def set_sample(self, u: str):
-        self.txt_url.setText(u)
-        self.probe_now()
 
     def browse_dir(self):
         d = QFileDialog.getExistingDirectory(self, "Select Save Folder", self.txt_savedir.text())
@@ -2806,6 +2792,7 @@ class ScorpionNativeEngine:
     def _run_video_worker(self, item: dict, ctrl: dict):
         if not HAS_YTDLP:
             item["status"] = "error"
+            item["errorMsg"] = "yt-dlp غير مثبت / yt-dlp is not installed"
             return
 
         item["phase"] = "connecting"
@@ -4477,7 +4464,7 @@ class SettingsDialog(QDialog):
         self.chk_startup = QCheckBox(T("تشغيل البرنامج تلقائياً مع ويندوز (في الخلفية)", "Start with Windows (in the tray)"))
         self.chk_startup.setChecked(bool(s.get("startWithWindows", True)))
         g2.addWidget(self.chk_startup, 3, 0, 1, 3)
-        self.chk_assoc = QCheckBox(T(f"فتح ملفات {L('.torrent')} وروابط {L('Magnet')} بالبرنامج", "Open .torrent files and Magnet links with Scorpion"))
+        self.chk_assoc = QCheckBox(T("فتح ملفات التورنت وروابط ماجنت بالبرنامج","Open .torrent files and Magnet links with Scorpion"))
         self.chk_assoc.setChecked(bool(s.get("associateTorrents", True)))
         g2.addWidget(self.chk_assoc, 4, 0, 1, 3)
 
@@ -4669,6 +4656,9 @@ class UpdateDialog(QDialog):
         has_upd = bool(self.info.get("hasUpdate"))
         lat_ver = self.info.get("latestVersion") or APP_VERSION
         pub_date = self.info.get("publishedAt") or CHANGELOG_HISTORY[0]["date"]
+        # Nothing to install when already on the latest version (a LAN/local package can still be applied)
+        if not self._updating:
+            self.btn_update_now.setEnabled(has_upd or bool(self.info.get("localPackage")))
 
         if has_upd:
             self.lbl_headline.setText(
@@ -4836,7 +4826,7 @@ class UpdateDialog(QDialog):
 
     def _on_finished(self, ok: bool, msg: str):
         self._updating = False
-        self.btn_update_now.setEnabled(True)
+        self.btn_update_now.setEnabled(bool(self.info.get("hasUpdate") or self.info.get("localPackage")))
         self.btn_check.setEnabled(True)
         if ok:
             self.prog_bar.setValue(100)
@@ -5280,6 +5270,15 @@ class ScorpionMainWindow(QMainWindow):
         tb.addWidget(sep2)
         tool("btn_delete", self.delete_selected)
         tool("btn_clear_done", self.engine.delete_completed)
+        tb.addSpacing(10)
+        self.txt_search = QLineEdit()
+        self.txt_search.setClearButtonEnabled(True)
+        # Shrinks on small screens instead of forcing a wider window
+        self.txt_search.setMinimumWidth(130)
+        self.txt_search.setMaximumWidth(240)
+        self.txt_search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.txt_search.textChanged.connect(lambda _t: self.refresh_all())
+        tb.addWidget(self.txt_search)
         tb.addStretch()
         tool("btn_browser_setup", self.open_browser_setup_dialog)
         tool("btn_updates", self.open_update_dialog)
@@ -5327,6 +5326,8 @@ class ScorpionMainWindow(QMainWindow):
             hh.resizeSection(col, width)
         self.table.setItemDelegateForColumn(2, ProgressDelegate(self.table))
         self.table.cellDoubleClicked.connect(self.on_row_double_clicked)
+        # The table takes no focus, so leave the search box on click; otherwise Delete/Enter keep going to it
+        self.table.cellPressed.connect(lambda _r, _c: self.txt_search.clearFocus())
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.on_table_context_menu)
         self.stack.addWidget(self.table)
@@ -5348,6 +5349,41 @@ class ScorpionMainWindow(QMainWindow):
         self.lbl_status_bar.setObjectName("StatusBar")
         root_layout.addWidget(self.lbl_status_bar)
         self.nav_items = {}
+        self._setup_shortcuts()
+
+    def _setup_shortcuts(self):
+        def bind(seq, slot):
+            QShortcut(QKeySequence(seq), self, activated=slot)
+
+        bind("Ctrl+N", lambda: self.open_add_dialog("", False))
+        bind("Ctrl+V", self._paste_shortcut)
+        bind("Ctrl+F", lambda: (self.txt_search.setFocus(), self.txt_search.selectAll()))
+        bind("Delete", lambda: None if self._typing() else self.delete_selected())
+        bind("Return", self._open_selected_shortcut)
+        bind("Enter", self._open_selected_shortcut)
+        bind("Escape", lambda: (self.txt_search.clear(), self.txt_search.clearFocus()) if self.txt_search.hasFocus() else None)
+
+    def _typing(self) -> bool:
+        return isinstance(QApplication.focusWidget(), QLineEdit)
+
+    def _paste_shortcut(self):
+        """Ctrl+V pastes into a text field, otherwise opens the Add dialog with the copied link."""
+        fw = QApplication.focusWidget()
+        if isinstance(fw, QLineEdit):
+            fw.paste()
+            return
+        text = QApplication.clipboard().text().strip()
+        if text.lower().startswith("magnet:?") or text.split("?")[0].lower().endswith(".torrent"):
+            self.open_add_dialog(text, False, True)
+        else:
+            self.open_add_dialog(text if text.startswith(("http://", "https://")) else "", False)
+
+    def _open_selected_shortcut(self):
+        if self._typing():
+            return
+        dl_id = self.get_selected_id()
+        if dl_id:
+            self.open_progress_window(dl_id)
 
     def apply_theme_and_lang(self):
         is_ar = self.lang == "ar"
@@ -5377,6 +5413,7 @@ class ScorpionMainWindow(QMainWindow):
         for btn, text, icon, color in labels:
             btn.setText(text)
             btn.setIcon(glyph_icon(ICONS[icon], color or c["text"]))
+        self.txt_search.setPlaceholderText(T("🔍 بحث في التحميلات (Ctrl+F)", "🔍 Search downloads (Ctrl+F)"))
 
         self.tree.clear()
         self.nav_items = {}
@@ -5621,9 +5658,21 @@ class ScorpionMainWindow(QMainWindow):
 
     def delete_selected(self):
         dl_id = self.get_selected_id()
-        if dl_id:
-            self.engine.delete_download(dl_id)
-            self.refresh_all()
+        if not dl_id:
+            return
+        item = self.engine.downloads.get(dl_id) or {}
+        if item.get("status") != "completed":
+            is_ar = self.lang == "ar"
+            ans = QMessageBox.question(
+                self,
+                "حذف التحميل" if is_ar else "Delete download",
+                (f"حذف «{item.get('filename', '')}»؟\nسيتم حذف الأجزاء التي تم تحميلها." if is_ar
+                 else f"Delete “{item.get('filename', '')}”?\nThe downloaded parts will be discarded."),
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+        self.engine.delete_download(dl_id)
+        self.refresh_all()
 
     def on_clipboard_changed(self):
         text = self.clipboard.text().strip()
@@ -5713,6 +5762,7 @@ class ScorpionMainWindow(QMainWindow):
             n = counts.get(key, 0)
             nav_it.setText(1, str(n) if n else "")
 
+        query = self.txt_search.text().strip().lower()
         filtered = []
         for it in items:
             if self.filter_state == "unfinished" and it["status"] == "completed":
@@ -5721,9 +5771,17 @@ class ScorpionMainWindow(QMainWindow):
                 continue
             if self.filter_cat != "ALL" and (it.get("category") or "General") != self.filter_cat:
                 continue
+            if query and query not in (it.get("filename") or "").lower() and query not in (it.get("url") or "").lower():
+                continue
             filtered.append(it)
 
         self.stack.setCurrentIndex(0 if filtered else 1)
+        if not filtered:
+            self.empty_label.setText(
+                (f"لا توجد نتائج لـ «{query}»" if is_ar else f"No results for “{query}”") if query
+                else ("لا توجد تحميلات هنا بعد\n\nاضغط «إضافة رابط» أو استخدم زر التحميل في المتصفح" if is_ar
+                      else "No downloads here yet\n\nClick “Add URL” or use the download button in your browser")
+            )
         sel_id = self.get_selected_id()
         ids = [it["id"] for it in filtered]
         if ids != getattr(self, "_row_ids", []):
@@ -5765,6 +5823,12 @@ class ScorpionMainWindow(QMainWindow):
                     cell.setData(ROLE_MODE, mode)
                 elif col == 5:
                     cell.setForeground(QColor(mode_color(mode) if mode != "connecting" else c["muted"]))
+                    tip = ""
+                    if it["status"] == "error":
+                        reason = (it.get("errorMsg") or "").strip() or ("سبب غير معروف" if is_ar else "Unknown reason")
+                        tip = f"{'سبب الفشل' if is_ar else 'Failure reason'}: {reason}"
+                    if cell.toolTip() != tip:
+                        cell.setToolTip(tip)
             if it["id"] == sel_id and self.table.currentRow() != r:
                 self.table.selectRow(r)
 
