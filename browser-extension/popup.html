@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      body {
+        width: 340px;
+        margin: 0;
+        padding: 14px;
+        background: #090d16;
+        color: #f1f5f9;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #1e293b;
+        gap: 8px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 800;
+        font-size: 14px;
+        color: #fbbf24;
+      }
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .status {
+        font-size: 11px;
+        padding: 3px 8px;
+        border-radius: 99px;
+        font-weight: 700;
+      }
+      .status.online {
+        background: rgba(16, 185, 129, 0.18);
+        color: #34d399;
+      }
+      .status.offline {
+        background: rgba(244, 63, 94, 0.18);
+        color: #fb7185;
+      }
+      .lang-btn {
+        background: #1e293b;
+        color: #e2e8f0;
+        border: 1px solid #334155;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 3px 8px;
+        cursor: pointer;
+      }
+      .lang-btn:hover {
+        border-color: #22d3ee;
+        color: #22d3ee;
+      }
+      .card {
+        background: #0e1525;
+        border: 1px solid #1e293b;
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin-top: 10px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 12px;
+        margin: 6px 0;
+        cursor: pointer;
+      }
+      .btn {
+        width: 100%;
+        margin-top: 10px;
+        padding: 9px;
+        border: none;
+        border-radius: 9px;
+        background: linear-gradient(90deg, #f59e0b, #fbbf24);
+        color: #090d16;
+        font-weight: 800;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .btn:hover {
+        opacity: 0.92;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <div class="brand">🦂 Scorpion IDM</div>
+      <div class="header-actions">
+        <span id="statusBadge" class="status online">متصل بالبرنامج</span>
+        <button id="langToggleBtn" class="lang-btn" type="button">EN</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <label class="row">
+        <span id="lblIntercept">المسؤول الرئيسي لكل التحميلات:</span>
+        <input type="checkbox" id="interceptToggle" checked />
+      </label>
+      <label class="row">
+        <span id="lblVideoBtn">إظهار زر التحميل فوق الفيديوهات:</span>
+        <input type="checkbox" id="videoBtnToggle" checked />
+      </label>
+    </div>
+
+    <button id="grabCurrentPageBtn" class="btn">
+      🎬 سحب فيديو الصفحة الحالية الآن
+    </button>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

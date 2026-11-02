@@ -1,0 +1,26 @@
+# Build & temporary directories
+native_app/_build/
+native_app/build/
+native_app/dist/
+__pycache__/
+*.pyc
+*.pyo
+*.spec
+
+# Legacy web/electron prototype files
+node_modules/
+electron/
+src/
+public/
+package*.json
+tsconfig*.json
+vite.config.*
+postcss.config.*
+tailwind.config.*
+index.html
+Start-Scorpion.bat
+build_release.ps1
+pack_extension.py
+
+# Keep release/update.json and release/Scorpion-Update-Payload.zip for In-App Auto-Updates
+release/*.exe

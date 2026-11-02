@@ -1,0 +1,22 @@
+{
+  "version": "2.1.1",
+  "publishedAt": "2026-11-02",
+  "packageFile": "Scorpion-Update-Payload.zip",
+  "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
+  "title_ar": "الإصدار 2.1.1 — تحديث تلقائي",
+  "title_en": "Version 2.1.1 — Auto Update",
+  "changelog_ar": [
+    "تحديث تلقائي للإصدار 2.1.1 وتحسينات في الأداء.",
+    "إضافة نظام التحديث الذكي من داخل التطبيق (In-App Auto Update) مع عرض سجل التغييرات وتثبيت التحديث بضغطة زر دون الحاجة لتشغيل ملف Setup يدوياً.",
+    "دعم كامل لتحميل المقاطع الصوتية والأغاني من Spotify و SoundCloud و Anghami و Deezer عبر 32 بورت متوازي وتحويلها تلقائياً إلى MP3.",
+    "تطوير شريط التحميل العائم في المتصفح: إضافة زر إغلاق (✕) وزر تبديل اللغة (EN / ع) مع مزامنة اللغة تلقائياً مع البرنامج.",
+    "حماية ذاتية لاختصارات سطح المكتب وقائمة ابدأ وتثبيت آمن بدون أي تعارض مع Windows Defender."
+  ],
+  "changelog_en": [
+    "Auto-update v2.1.1 with performance and stability improvements.",
+    "Built-in In-App Auto Updater with release notes viewer and one-click silent update installation across all your PCs.",
+    "Full audio & music download support for Spotify, SoundCloud, Anghami, and Deezer across 32 parallel ports with automatic MP3 conversion.",
+    "Enhanced browser floating bar: added Close button (✕), language toggle (EN / ع), and real-time language sync with the desktop app.",
+    "Self-healing Desktop & Start Menu shortcuts and Defender-friendly native COM installer."
+  ]
+}
