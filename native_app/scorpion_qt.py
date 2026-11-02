@@ -139,7 +139,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.5"
+APP_VERSION = "2.1.6"
 
 # Local browser bridge (127.0.0.1:19615): only extension pages and native local processes are trusted.
 BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
@@ -147,10 +147,10 @@ BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "ex
 
 CHANGELOG_HISTORY = [
     {
-        "version": "2.1.5",
+        "version": "2.1.6",
         "date": "2026-11-02",
-        "title_ar": "الإصدار 2.1.5 — تحديث جديد",
-        "title_en": "Version 2.1.5 — New Update",
+        "title_ar": "الإصدار 2.1.6 — تحديث جديد",
+        "title_en": "Version 2.1.6 — New Update",
         "ar": [
             "تحديث تلقائي للإصدار 2.1.3 وتحسينات في الأداء.",
             "تحديث تلقائي للإصدار 2.1.2 وتحسينات في الأداء.",

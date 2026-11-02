@@ -129,10 +129,38 @@ def update_version_in_source(new_ver: str, note_ar: str, note_en: str):
         f.write(content)
 
 
+def run_git(*args) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def ensure_on_up_to_date_main():
+    """Releases are only built from main, synced with GitHub; otherwise the push silently sends nothing."""
+    branch = run_git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    if branch != "main":
+        raise RuntimeError(
+            f"المشروع حالياً على الفرع «{branch}» وليس main — بدّل إلى main أولاً (git switch main) ثم أعد المحاولة"
+        )
+    fetch = run_git("fetch", "origin", "main")
+    if fetch.returncode != 0:
+        raise RuntimeError(f"تعذر الاتصال بـ GitHub: {fetch.stderr.strip()[:160]}")
+    pull = run_git("merge", "--ff-only", "origin/main")
+    if pull.returncode != 0:
+        raise RuntimeError(f"فرع main المحلي مختلف عن GitHub ولا يمكن تحديثه تلقائياً: {pull.stderr.strip()[:160]}")
+
+
 def stop_running_scorpion():
     """Requests ScorpionIDM.exe to quit cleanly via RPC and waits until its files are unlocked."""
     try:
-        req = urllib.request.Request("http://127.0.0.1:19615/quit", data=b"{}", method="POST")
+        # The bridge only accepts /quit as a GET carrying the trusted-client header
+        req = urllib.request.Request("http://127.0.0.1:19615/quit", headers={"X-Scorpion-Client": "1"})
         urllib.request.urlopen(req, timeout=2).read()
     except Exception:
         pass
@@ -373,6 +401,8 @@ class AutoPublisherWindow(QMainWindow):
 
         def worker():
             try:
+                self.signals.progress.emit(7, "جاري التأكد من أن المشروع على فرع main ومحدّث من GitHub...")
+                ensure_on_up_to_date_main()
                 cur_ver = read_current_version()
                 new_ver = bump_patch_version(cur_ver) if do_bump else cur_ver
                 if do_bump or note_ar:
@@ -400,13 +430,19 @@ class AutoPublisherWindow(QMainWindow):
                     errors="replace",
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
+                setup_path = ""
                 for line in proc.stdout:
                     line_s = line.strip()
+                    if line_s.startswith("SETUP_PATH="):
+                        setup_path = line_s.split("=", 1)[1]
                     if line_s:
                         self.signals.log.emit(line_s)
                 proc.wait()
                 if proc.returncode != 0:
                     raise RuntimeError("فشل بناء البرنامج عبر PyInstaller")
+                if not setup_path or not os.path.isfile(setup_path):
+                    raise RuntimeError("تم البناء لكن لم يتم حفظ ملف التسطيب الجديد في مجلد التنزيلات")
+                self.signals.log.emit(f"==> New setup saved: {setup_path}")
 
                 self.signals.progress.emit(65, "جاري تحديث النسخة المثبتة على هذا الجهاز بأمان...")
                 stop_running_scorpion()
@@ -425,39 +461,47 @@ class AutoPublisherWindow(QMainWindow):
                 if os.path.isfile(exe_p):
                     subprocess.Popen([exe_p], cwd=dst_app)
 
+                # Clients refuse packages without a matching checksum, so never publish one that would fail
+                with open(os.path.join(PROJECT_ROOT, "release", "update.json"), "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                with open(os.path.join(PROJECT_ROOT, "release", "Scorpion-Update-Payload.zip"), "rb") as f:
+                    pkg_sha = hashlib.sha256(f.read()).hexdigest()
+                if manifest.get("version") != new_ver or manifest.get("sha256") != pkg_sha:
+                    raise RuntimeError("ملف update.json لا يطابق حزمة التحديث (الإصدار أو بصمة SHA-256) — تم إيقاف الرفع")
+
                 self.signals.progress.emit(80, "جاري رفع التحديث إلى GitHub (Mahmoud-847/scorpion-idm)...")
                 self.signals.log.emit(f"==> Pushing v{new_ver} to {REPO_URL} ...")
 
-                for cmd in (
+                for args in (
                     # Stage only tracked files + release artifacts (never stray/secret files); never rewrite remote history
-                    ["git", "add", "-u"],
-                    ["git", "add", "--", "release/update.json", "release/Scorpion-Update-Payload.zip"],
-                    ["git", "commit", "-m", f"Release Scorpion IDM v{new_ver}", "--allow-empty"],
-                    ["git", "push", "-u", "origin", "main"],
+                    ("add", "-u"),
+                    ("add", "--", "release/update.json", "release/Scorpion-Update-Payload.zip"),
+                    ("commit", "-m", f"Release Scorpion IDM v{new_ver}", "--allow-empty"),
+                    ("push", "-u", "origin", "main"),
                 ):
-                    self.signals.log.emit("$ " + " ".join(cmd))
-                    p_git = subprocess.run(
-                        cmd,
-                        cwd=PROJECT_ROOT,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    )
+                    self.signals.log.emit("$ git " + " ".join(args))
+                    p_git = run_git(*args)
                     if p_git.stdout.strip():
                         self.signals.log.emit(p_git.stdout.strip())
                     if p_git.stderr.strip():
                         self.signals.log.emit(p_git.stderr.strip())
-                    if cmd[1] == "push" and p_git.returncode != 0:
+                    if args[0] in ("commit", "push") and p_git.returncode != 0:
                         raise RuntimeError(
-                            f"تعذر الرفع إلى GitHub: {p_git.stderr.strip()[:160]}"
+                            f"تعذر تنفيذ git {args[0]}: {(p_git.stderr or p_git.stdout).strip()[:160]}"
                         )
+
+                # Confirm GitHub's main really has this release commit
+                run_git("fetch", "origin", "main")
+                local_head = run_git("rev-parse", "HEAD").stdout.strip()
+                remote_head = run_git("rev-parse", "origin/main").stdout.strip()
+                if not local_head or local_head != remote_head:
+                    raise RuntimeError("تم البناء لكن التحديث لم يصل إلى فرع main على GitHub — راجع السجل")
 
                 self.last_snapshot = compute_snapshot()
                 self.signals.finished.emit(
                     True,
-                    f"تم بناء ورفع الإصدار v{new_ver} إلى GitHub بنجاح! سيظهر التحديث الآن على كل أجهزتك.",
+                    f"تم بناء ورفع الإصدار v{new_ver} إلى GitHub بنجاح! سيظهر التحديث الآن على كل أجهزتك."
+                    f"\nملف التسطيب الجديد: {setup_path}",
                 )
             except Exception as e:
                 self.signals.log.emit(f"[ERROR] {e}")
