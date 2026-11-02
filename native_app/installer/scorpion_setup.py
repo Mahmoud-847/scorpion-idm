@@ -140,7 +140,9 @@ def _terminate_processes_by_name(names: tuple):
 def stop_running_app_and_wait():
     """Closes any running Scorpion instance and waits until its files are 100% unlocked."""
     try:
-        urllib.request.urlopen("http://127.0.0.1:19615/quit", timeout=1.2).read()
+        # The app's local bridge only accepts /quit with the trusted-client header
+        req = urllib.request.Request("http://127.0.0.1:19615/quit", headers={"X-Scorpion-Client": "1"})
+        urllib.request.urlopen(req, timeout=1.2).read()
     except Exception:
         pass
 
