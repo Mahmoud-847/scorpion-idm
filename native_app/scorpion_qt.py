@@ -26,6 +26,15 @@ import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# Verify HTTPS with the Windows certificate store (like browsers do), so antivirus or company HTTPS
+# inspection (e.g. Kaspersky) doesn't fail every check while certificates stay verified
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except Exception:
+    pass
+
 import requests
 import urllib3
 
