@@ -1544,7 +1544,12 @@ class ScorpionNativeEngine:
                     if r.status_code == 200:
                         rel = r.json()
                         ver = str(rel.get("tag_name") or rel.get("name") or APP_VERSION).lstrip("vV")
-                        if not isinstance(manifest, dict) or _ver_tuple(ver) > _ver_tuple(manifest.get("version") or "0"):
+                        # Only app releases count: other releases (e.g. the tools pack "tools-<id>") are not
+                        # versions, and their digits would read as a huge version number
+                        is_app_release = bool(re.fullmatch(r"\d+(\.\d+)+", ver)) and not rel.get("prerelease")
+                        if is_app_release and (
+                            not isinstance(manifest, dict) or _ver_tuple(ver) > _ver_tuple(manifest.get("version") or "0")
+                        ):
                             notes = [
                                 line.strip(" -*•\t")
                                 for line in (rel.get("body") or "").splitlines()
