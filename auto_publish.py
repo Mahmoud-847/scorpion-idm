@@ -171,7 +171,9 @@ def publish_tools_pack(version: str, pack_path: str, log) -> None:
         return
     log(f"==> Uploading tools pack {tag} ({os.path.getsize(pack_path) // (1024 * 1024)} MB)...")
     res = run("release", "create", tag, pack_path, "--title", f"Tools {version}",
-              "--notes", "Bundled programs (ffmpeg, ffprobe, QuickJS) downloaded by the app.", "--latest=false")
+              "--notes", "Bundled programs (ffmpeg, ffprobe, QuickJS) downloaded by the app.",
+              # Pre-release: GitHub must never report it as the latest release (apps read that as an update)
+              "--prerelease", "--latest=false")
     if res.returncode != 0:
         raise RuntimeError(f"تعذر رفع حزمة الأدوات: {(res.stderr or res.stdout).strip()[:160]}")
 
