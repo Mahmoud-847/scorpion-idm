@@ -24,3 +24,8 @@ pack_extension.py
 
 # Keep release/update.json and release/Scorpion-Update-Payload.zip for In-App Auto-Updates
 release/*.exe
+
+# Secrets & backups (never commit)
+*.pem
+*.key
+*.bak

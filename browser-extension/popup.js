@@ -65,7 +65,9 @@ document.addEventListener('DOMContentLoaded', () => {
       },
     });
     if (syncRemoteLang) {
-      fetch(`http://127.0.0.1:19615/ping?set_lang=${encodeURIComponent(currentLang)}`).catch(() => {});
+      fetch(`http://127.0.0.1:19615/ping?set_lang=${encodeURIComponent(currentLang)}`, {
+        headers: { 'X-Scorpion-Client': '1' },
+      }).catch(() => {});
     }
   }
 

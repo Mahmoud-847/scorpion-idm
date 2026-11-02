@@ -429,9 +429,11 @@ class AutoPublisherWindow(QMainWindow):
                 self.signals.log.emit(f"==> Pushing v{new_ver} to {REPO_URL} ...")
 
                 for cmd in (
-                    ["git", "add", "."],
+                    # Stage only tracked files + release artifacts (never stray/secret files); never rewrite remote history
+                    ["git", "add", "-u"],
+                    ["git", "add", "--", "release/update.json", "release/Scorpion-Update-Payload.zip"],
                     ["git", "commit", "-m", f"Release Scorpion IDM v{new_ver}", "--allow-empty"],
-                    ["git", "push", "-u", "origin", "main", "--force"],
+                    ["git", "push", "-u", "origin", "main"],
                 ):
                     self.signals.log.emit("$ " + " ".join(cmd))
                     p_git = subprocess.run(
