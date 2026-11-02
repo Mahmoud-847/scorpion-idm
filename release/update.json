@@ -1,10 +1,10 @@
 {
-  "version": "2.1.4",
+  "version": "2.1.5",
   "publishedAt": "2026-11-02",
   "packageFile": "Scorpion-Update-Payload.zip",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.4 — تحديث جديد",
-  "title_en": "Version 2.1.4 — New Update",
+  "title_ar": "الإصدار 2.1.5 — تحديث جديد",
+  "title_en": "Version 2.1.5 — New Update",
   "changelog_ar": [
     "تحديث تلقائي للإصدار 2.1.3 وتحسينات في الأداء.",
     "تحديث تلقائي للإصدار 2.1.2 وتحسينات في الأداء.",

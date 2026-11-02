@@ -139,14 +139,14 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.4"
+APP_VERSION = "2.1.5"
 
 CHANGELOG_HISTORY = [
     {
-        "version": "2.1.4",
+        "version": "2.1.5",
         "date": "2026-11-02",
-        "title_ar": "الإصدار 2.1.4 — تحديث جديد",
-        "title_en": "Version 2.1.4 — New Update",
+        "title_ar": "الإصدار 2.1.5 — تحديث جديد",
+        "title_en": "Version 2.1.5 — New Update",
         "ar": [
             "تحديث تلقائي للإصدار 2.1.3 وتحسينات في الأداء.",
             "تحديث تلقائي للإصدار 2.1.2 وتحسينات في الأداء.",
