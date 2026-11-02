@@ -45,7 +45,8 @@ REPO_URL = "https://github.com/Mahmoud-847/scorpion-idm.git"
 
 WATCH_TARGETS = [
     os.path.join(PROJECT_ROOT, "native_app", "scorpion_qt.py"),
-    os.path.join(PROJECT_ROOT, "native_app", "installer", "scorpion_setup.py"),
+    os.path.join(PROJECT_ROOT, "native_app", "sitecustomize.py"),
+    os.path.join(PROJECT_ROOT, "native_app", "installer", "scorpion_setup.iss"),
     os.path.join(PROJECT_ROOT, "browser-extension", "manifest.json"),
     os.path.join(PROJECT_ROOT, "browser-extension", "background.js"),
     os.path.join(PROJECT_ROOT, "browser-extension", "content.js"),
@@ -477,7 +478,7 @@ class AutoPublisherWindow(QMainWindow):
                         self.signals.log.emit(line_s)
                 proc.wait()
                 if proc.returncode != 0:
-                    raise RuntimeError("فشل بناء البرنامج عبر PyInstaller")
+                    raise RuntimeError("فشل بناء البرنامج وملف التسطيب (راجع السجل بالأعلى)")
                 if not setup_path or not os.path.isfile(setup_path):
                     raise RuntimeError("تم البناء لكن لم يتم حفظ ملف التسطيب الجديد في مجلد التنزيلات")
                 self.signals.log.emit(f"==> New setup saved: {setup_path}")
@@ -486,6 +487,7 @@ class AutoPublisherWindow(QMainWindow):
                 stop_running_scorpion()
                 src_dist = os.path.join(PROJECT_ROOT, "native_app", "_build", "dist", "ScorpionIDM")
                 dst_app = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ScorpionIDM")
+                shutil.rmtree(os.path.join(dst_app, "_internal"), ignore_errors=True)
                 copy_tree_safely(src_dist, dst_app)
 
                 ext_src = os.path.join(PROJECT_ROOT, "browser-extension")

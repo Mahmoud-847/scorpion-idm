@@ -30,7 +30,8 @@ release/*.exe
 *.key
 *.bak
 
-# Bundled programs and the tools pack (too large for the repo; the pack is a release asset)
+# Bundled programs, signed runtime zip, and the tools pack (too large for the repo; the pack is a release asset)
+build/runtime/
 build/tools/
 release/Scorpion-Tools.zip
 release/Scorpion-Tools.version
