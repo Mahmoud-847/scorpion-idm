@@ -1,4 +1,6 @@
 const SCORPION_SERVER = 'http://127.0.0.1:19615';
+// Required by the desktop app for any state-changing call (web pages cannot send it cross-site).
+const SCORPION_HEADERS = { 'X-Scorpion-Client': '1' };
 
 let config = {
   interceptAllDownloads: true,
@@ -155,7 +157,7 @@ async function checkScorpionAlive() {
     const br = await detectBrowserKey();
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 900);
-    const res = await fetch(`${SCORPION_SERVER}/ping?ext=1&browser=${encodeURIComponent(br)}`, { signal: ctrl.signal });
+    const res = await fetch(`${SCORPION_SERVER}/ping?ext=1&browser=${encodeURIComponent(br)}`, { signal: ctrl.signal, headers: SCORPION_HEADERS });
     clearTimeout(timer);
     if (res.ok) {
       try {
@@ -180,7 +182,7 @@ async function sendToScorpion(payload) {
   try {
     const res = await fetch(`${SCORPION_SERVER}/capture`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
       body: JSON.stringify(payload),
     });
     return res.ok;
@@ -206,6 +208,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.action === 'SCORPION_GET_TAB_STREAMS') {
     sendResponse({ streams: [], config });
+    return true;
+  }
+  if (msg.action === 'SCORPION_SET_APP_LANG') {
+    const lang = msg.lang === 'en' ? 'en' : 'ar';
+    fetch(`${SCORPION_SERVER}/ping?set_lang=${lang}`, { headers: SCORPION_HEADERS })
+      .then((r) => sendResponse({ ok: r.ok }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+  if (msg.action === 'SCORPION_GET_APP_LANG') {
+    fetch(`${SCORPION_SERVER}/ping`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => sendResponse({ lang: data && data.lang }))
+      .catch(() => sendResponse({ lang: null }));
     return true;
   }
   if (msg.action === 'SCORPION_CHECK_STATUS') {

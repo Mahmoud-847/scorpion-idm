@@ -18,8 +18,10 @@ if ($remotes -notcontains "origin") {
     git remote set-url origin "https://github.com/Mahmoud-847/scorpion-idm.git"
 }
 
-git add .
+# Stage only tracked files + release artifacts (never stray/secret files); never rewrite remote history
+git add -u
+git add -- release/update.json release/Scorpion-Update-Payload.zip
 git commit -m "Release Scorpion IDM update" --allow-empty
-git push -u origin main --force
+git push -u origin main
 
 Write-Host "==> Update published successfully to GitHub! All connected PCs will now receive this update." -ForegroundColor Green

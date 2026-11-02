@@ -28,7 +28,7 @@ $payload = Join-Path $work "payload.zip"
 Compress-Archive -Path "$appDir\*" -DestinationPath $payload -Force
 Copy-Item $payload "$out\Scorpion-Update-Payload.zip" -Force
 
-& $py -c "import sys, json; sys.path.insert(0, r'$root\native_app'); import scorpion_qt as sq; h = sq.CHANGELOG_HISTORY[0]; m = {'version': sq.APP_VERSION, 'publishedAt': h['date'], 'packageFile': 'Scorpion-Update-Payload.zip', 'downloadUrl': 'https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip', 'title_ar': h['title_ar'], 'title_en': h['title_en'], 'changelog_ar': h['ar'], 'changelog_en': h['en']}; open(r'$out\update.json', 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2))"
+& $py -c "import sys, json; sys.path.insert(0, r'$root\native_app'); import scorpion_qt as sq; h = sq.CHANGELOG_HISTORY[0]; m = {'version': sq.APP_VERSION, 'publishedAt': h['date'], 'packageFile': 'Scorpion-Update-Payload.zip', 'sha256': __import__('hashlib').sha256(open(r'$out\Scorpion-Update-Payload.zip', 'rb').read()).hexdigest(), 'downloadUrl': 'https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip', 'title_ar': h['title_ar'], 'title_en': h['title_en'], 'changelog_ar': h['ar'], 'changelog_en': h['en']}; open(r'$out\update.json', 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2))"
 
 # 3) Setup wizard (single exe built into staging dir first, then copied atomically)
 & $py -m PyInstaller --noconfirm --clean --windowed --onefile `

@@ -107,21 +107,19 @@
     } catch (_) {}
     if (syncRemote) {
       try {
-        fetch(`http://127.0.0.1:19615/ping?set_lang=${encodeURIComponent(lang)}`).catch(() => {});
+        chrome.runtime.sendMessage({ action: 'SCORPION_SET_APP_LANG', lang }, () => void chrome.runtime.lastError);
       } catch (_) {}
     }
   }
 
   function syncLangFromApp() {
     try {
-      fetch('http://127.0.0.1:19615/ping')
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (data && (data.lang === 'ar' || data.lang === 'en') && data.lang !== currentLang) {
-            setLanguage(data.lang, false);
-          }
-        })
-        .catch(() => {});
+      chrome.runtime.sendMessage({ action: 'SCORPION_GET_APP_LANG' }, (data) => {
+        if (chrome.runtime.lastError) return;
+        if (data && (data.lang === 'ar' || data.lang === 'en') && data.lang !== currentLang) {
+          setLanguage(data.lang, false);
+        }
+      });
     } catch (_) {}
   }
 
@@ -603,15 +601,7 @@
       }, 2200);
     };
 
-    const directFallback = () => {
-      fetch('http://127.0.0.1:19615/capture', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-        .then((r) => onDone(r.ok))
-        .catch(() => onDone(false));
-    };
+    const directFallback = () => onDone(false);
 
     try {
       chrome.runtime.sendMessage(

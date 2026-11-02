@@ -140,6 +140,10 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
 
 APP_VERSION = "2.1.4"
 
+# Local browser bridge (127.0.0.1:19615): only extension pages and native local processes are trusted.
+BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
+BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
+
 CHANGELOG_HISTORY = [
     {
         "version": "2.1.4",
@@ -1393,7 +1397,7 @@ class ScorpionNativeEngine:
                     # Check raw update.json in main/master branch first
                     for branch in ("main", "master"):
                         raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/release/update.json"
-                        r_raw = requests.get(raw_url, headers={"User-Agent": BROWSER_UA}, timeout=10, verify=False)
+                        r_raw = requests.get(raw_url, headers={"User-Agent": BROWSER_UA}, timeout=10)
                         if r_raw.status_code == 200:
                             manifest = r_raw.json()
                             if isinstance(manifest, dict) and not manifest.get("downloadUrl"):
@@ -1402,23 +1406,37 @@ class ScorpionNativeEngine:
                             break
                     # Also check GitHub Releases API in case a newer Release tag was published
                     api_url = f"https://api.github.com/repos/{repo}/releases/latest"
-                    r = requests.get(api_url, headers={"User-Agent": BROWSER_UA}, timeout=10, verify=False)
+                    r = requests.get(api_url, headers={"User-Agent": BROWSER_UA}, timeout=10)
                     if r.status_code == 200:
                         rel = r.json()
                         ver = str(rel.get("tag_name") or rel.get("name") or APP_VERSION).lstrip("vV")
-                        if not isinstance(manifest, dict) or _ver_tuple(ver) >= _ver_tuple(manifest.get("version") or "0"):
+                        if not isinstance(manifest, dict) or _ver_tuple(ver) > _ver_tuple(manifest.get("version") or "0"):
                             notes = [
                                 line.strip(" -*•\t")
                                 for line in (rel.get("body") or "").splitlines()
                                 if line.strip(" -*•\t")
                             ]
                             dl_url = ""
-                            for asset in rel.get("assets") or []:
+                            pkg_name = ""
+                            assets = rel.get("assets") or []
+                            for asset in assets:
                                 aname = (asset.get("name") or "").lower()
                                 if aname.endswith((".zip", ".exe")):
                                     dl_url = asset.get("browser_download_url") or ""
+                                    pkg_name = aname
                                     if aname.endswith(".zip"):
                                         break
+                            rel_sha = ""
+                            for asset in assets:
+                                if pkg_name and (asset.get("name") or "").lower() == pkg_name + ".sha256":
+                                    r_sha = requests.get(
+                                        asset.get("browser_download_url") or "",
+                                        headers={"User-Agent": BROWSER_UA},
+                                        timeout=10,
+                                    )
+                                    if r_sha.status_code == 200:
+                                        rel_sha = (r_sha.text.split() or [""])[0]
+                                    break
                             manifest = {
                                 "version": ver,
                                 "publishedAt": (rel.get("published_at") or "")[:10] or latest_entry["date"],
@@ -1427,6 +1445,7 @@ class ScorpionNativeEngine:
                                 "changelog_ar": notes or latest_entry["ar"],
                                 "changelog_en": notes or latest_entry["en"],
                                 "downloadUrl": dl_url or (manifest.get("downloadUrl") if isinstance(manifest, dict) else ""),
+                                "sha256": rel_sha,
                             }
                 # 3) Direct HTTP/HTTPS URL to update.json (or direct .zip/.exe link)
                 elif src.startswith(("http://", "https://")):
@@ -1436,7 +1455,7 @@ class ScorpionNativeEngine:
                             "downloadUrl": src,
                         }
                     else:
-                        r = requests.get(src, headers={"User-Agent": BROWSER_UA}, timeout=10, verify=False)
+                        r = requests.get(src, headers={"User-Agent": BROWSER_UA}, timeout=10)
                         if r.status_code == 200:
                             manifest = r.json()
             except Exception as e:
@@ -1454,22 +1473,35 @@ class ScorpionNativeEngine:
                 result["changelog_en"] = list(manifest["changelog_en"])
             result["downloadUrl"] = (manifest.get("downloadUrl") or "").strip()
             result["localPackage"] = (manifest.get("localPackage") or "").strip()
+            result["sha256"] = (manifest.get("sha256") or "").strip().lower()
             result["hasUpdate"] = _ver_tuple(rem_ver) > _ver_tuple(APP_VERSION)
 
         return result
 
-    def install_update_package(self, pkg_path: str, progress_cb=None) -> tuple:
+    def install_update_package(self, pkg_path: str, expected_sha256: str = "", progress_cb=None) -> tuple:
         """
         Applies an update package (.zip payload or Setup .exe) in-place without triggering Defender,
         syncs browser extensions, and restarts ScorpionIDM.exe.
+        The package must match the SHA-256 published in update.json, otherwise nothing is installed.
         """
         import zipfile
 
         if not os.path.isfile(pkg_path):
             return False, "ملف التحديث غير موجود"
 
+        expected = (expected_sha256 or "").strip().lower()
+        if len(expected) != 64:
+            return False, "التحديث بدون بصمة SHA-256 — تم الإلغاء / Update has no SHA-256 checksum, aborted"
+        sha = hashlib.sha256()
+        with open(pkg_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                sha.update(chunk)
+        if sha.hexdigest() != expected:
+            return False, "بصمة ملف التحديث غير مطابقة — تم الإلغاء / Update checksum mismatch, aborted"
+
         install_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ScorpionIDM")
         os.makedirs(install_dir, exist_ok=True)
+        install_root = os.path.normcase(os.path.abspath(install_dir))
         exe_path = os.path.join(install_dir, "ScorpionIDM.exe")
 
         if pkg_path.lower().endswith(".exe") and not zipfile.is_zipfile(pkg_path):
@@ -1481,6 +1513,11 @@ class ScorpionNativeEngine:
         try:
             with zipfile.ZipFile(pkg_path, "r") as zf:
                 members = zf.infolist()
+                # Zip Slip guard: refuse the whole package if any entry escapes the install folder
+                for member in members:
+                    dest = os.path.normcase(os.path.abspath(os.path.join(install_dir, member.filename)))
+                    if os.path.commonpath([install_root, dest]) != install_root:
+                        return False, f"مسار غير آمن داخل ملف التحديث / Unsafe path in update package: {member.filename}"
                 total = max(1, len(members))
                 for idx, member in enumerate(members, 1):
                     target_path = os.path.normpath(os.path.join(install_dir, member.filename))
@@ -1629,26 +1666,51 @@ class ScorpionNativeEngine:
             def log_message(self, format, *args):
                 return
 
+            def _origin_allowed(self) -> bool:
+                """Only our browser extension or a native local process (no Origin) may talk to the bridge."""
+                origin = (self.headers.get("Origin") or "").strip().lower()
+                if not origin:
+                    return True
+                return origin.startswith(BRIDGE_ALLOWED_ORIGIN_PREFIXES)
+
+            def _is_trusted_client(self) -> bool:
+                # A custom header can't be sent cross-site without a CORS preflight, and the preflight
+                # is only granted to extension origins, so web pages can't trigger state-changing calls.
+                return self._origin_allowed() and self.headers.get(BRIDGE_CLIENT_HEADER) == "1"
+
             def _send_cors(self, code=200):
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type")
-                self.send_header("Access-Control-Allow-Private-Network", "true")
+                origin = (self.headers.get("Origin") or "").strip()
+                if origin and self._origin_allowed():
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Vary", "Origin")
+                    self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                    self.send_header("Access-Control-Allow-Headers", f"Content-Type, {BRIDGE_CLIENT_HEADER}")
+                    self.send_header("Access-Control-Allow-Private-Network", "true")
                 self.end_headers()
 
+            def _reject(self):
+                self._send_cors(403)
+                self.wfile.write(json.dumps({"ok": False, "error": "forbidden"}).encode("utf-8"))
+
             def do_OPTIONS(self):
-                self._send_cors(204)
+                self._send_cors(204 if self._origin_allowed() else 403)
 
             def do_GET(self):
                 parsed = urllib.parse.urlparse(self.path)
+                if not self._origin_allowed():
+                    self._reject()
+                    return
+                if parsed.path != "/ping" and not self._is_trusted_client():
+                    self._reject()
+                    return
                 if parsed.path == "/ping":
                     qs = urllib.parse.parse_qs(parsed.query)
                     if qs.get("ext"):
                         br = (qs.get("browser") or ["chrome"])[0]
                         engine_ref.record_browser_connection(br)
-                    if qs.get("set_lang"):
+                    if qs.get("set_lang") and self._is_trusted_client():
                         new_lang = (qs.get("set_lang") or [""])[0].strip().lower()
                         if new_lang in ("ar", "en") and engine_ref.settings.get("lang") != new_lang:
                             engine_ref.settings["lang"] = new_lang
@@ -1688,8 +1750,11 @@ class ScorpionNativeEngine:
 
             def do_POST(self):
                 parsed = urllib.parse.urlparse(self.path)
+                if not self._is_trusted_client():
+                    self._reject()
+                    return
                 if parsed.path == "/capture":
-                    length = int(self.headers.get("Content-Length") or 0)
+                    length = min(int(self.headers.get("Content-Length") or 0), 1024 * 1024)
                     raw = self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else "{}"
                     try:
                         payload = json.loads(raw)
@@ -4699,9 +4764,11 @@ class UpdateDialog(QDialog):
             (self.info.get("downloadUrl") or "").strip()
             or "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip"
         )
-        self._run_update_from_path_or_url(local_pkg=local_pkg, dl_url=dl_url)
+        self._run_update_from_path_or_url(
+            local_pkg=local_pkg, dl_url=dl_url, expected_sha256=self.info.get("sha256") or ""
+        )
 
-    def _run_update_from_path_or_url(self, local_pkg: str = "", dl_url: str = ""):
+    def _run_update_from_path_or_url(self, local_pkg: str = "", dl_url: str = "", expected_sha256: str = ""):
         self._updating = True
         self.prog_card.setVisible(True)
         self.btn_update_now.setEnabled(False)
@@ -4713,11 +4780,13 @@ class UpdateDialog(QDialog):
             try:
                 target_pkg = local_pkg
                 if not target_pkg and dl_url:
+                    if not dl_url.lower().startswith("https://"):
+                        raise ValueError("Update URL must use HTTPS")
                     ext = ".exe" if dl_url.lower().split("?")[0].endswith(".exe") else ".zip"
                     target_pkg = os.path.join(self.engine.temp_root, f"Scorpion_Update_Pkg{ext}")
                     os.makedirs(self.engine.temp_root, exist_ok=True)
                     with requests.get(
-                        dl_url, headers={"User-Agent": BROWSER_UA}, stream=True, timeout=25, verify=False
+                        dl_url, headers={"User-Agent": BROWSER_UA}, stream=True, timeout=25
                     ) as r:
                         r.raise_for_status()
                         total = int(r.headers.get("Content-Length") or 0)
@@ -4746,6 +4815,7 @@ class UpdateDialog(QDialog):
                 )
                 ok, msg = self.engine.install_update_package(
                     target_pkg,
+                    expected_sha256=expected_sha256,
                     progress_cb=lambda p: self.progress_sig.emit(
                         p,
                         self.T(
@@ -5725,9 +5795,14 @@ if __name__ == "__main__":
         r = requests.get("http://127.0.0.1:19615/ping", timeout=0.6)
         if r.status_code == 200:
             if open_target:
-                requests.post("http://127.0.0.1:19615/capture", json=_target_payload(open_target), timeout=2)
+                requests.post(
+                    "http://127.0.0.1:19615/capture",
+                    json=_target_payload(open_target),
+                    headers={BRIDGE_CLIENT_HEADER: "1"},
+                    timeout=2,
+                )
             elif not start_in_tray:
-                requests.get("http://127.0.0.1:19615/focus", timeout=0.6)
+                requests.get("http://127.0.0.1:19615/focus", headers={BRIDGE_CLIENT_HEADER: "1"}, timeout=0.6)
             sys.exit(0)
     except Exception:
         pass
