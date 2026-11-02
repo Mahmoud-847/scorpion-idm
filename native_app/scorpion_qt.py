@@ -18,6 +18,11 @@ if getattr(sys, "frozen", False):
     RESOURCE_ROOT = os.path.dirname(sys.executable)
 else:
     RESOURCE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Installed builds run on the official, signed Python runtime renamed to ScorpionIDM.exe, with this file
+# in <install>/app (see build_installer.ps1). Older builds were frozen by PyInstaller.
+EMBEDDED_RUNTIME = not getattr(sys, "frozen", False) and os.path.basename(sys.executable).lower() == "scorpionidm.exe"
+INSTALLED = getattr(sys, "frozen", False) or EMBEDDED_RUNTIME
 import hashlib
 import socket
 import base64
@@ -1372,6 +1377,9 @@ class ScorpionNativeEngine:
     def cleanup_old_update_files(self):
         """Removes any .old_* renamed binaries left over from a previous in-place update."""
         install_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ScorpionIDM")
+        if EMBEDDED_RUNTIME:
+            # PyInstaller runtime of versions before the move to the signed Python runtime
+            shutil.rmtree(os.path.join(RESOURCE_ROOT, "_internal"), ignore_errors=True)
         for root_dir in {self.project_root, install_dir}:
             if not root_dir or not os.path.isdir(root_dir):
                 continue
@@ -1626,7 +1634,9 @@ class ScorpionNativeEngine:
 
         if pkg_path.lower().endswith(".exe") and not zipfile.is_zipfile(pkg_path):
             # Launch the installer in silent update mode and close current instance
-            subprocess.Popen([pkg_path, "--silent-update"], cwd=os.path.dirname(pkg_path))
+            subprocess.Popen(
+                [pkg_path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], cwd=os.path.dirname(pkg_path)
+            )
             self.signals.quit_requested.emit()
             return True, "restarting"
 
@@ -5074,7 +5084,7 @@ def app_launch_command() -> str:
 
 
 def set_start_with_windows(enabled: bool):
-    if os.name != "nt" or not getattr(sys, "frozen", False):
+    if os.name != "nt" or not INSTALLED:
         return
     import winreg
     try:
@@ -5113,11 +5123,13 @@ def _reg_delete_tree(path: str):
 
 def set_torrent_association(enabled: bool):
     """Registers Scorpion as handler for .torrent files and magnet: links (current user only)."""
-    if os.name != "nt" or not getattr(sys, "frozen", False):
+    if os.name != "nt" or not INSTALLED:
         return
     import winreg
     cmd = f'{app_launch_command()} "%1"'
-    icon = f"{sys.executable},0"
+    # The runtime exe carries Python's icon (changing it would break its signature), so point at ours
+    scorpion_ico = os.path.join(RESOURCE_ROOT, "build", "icon.ico")
+    icon = scorpion_ico if EMBEDDED_RUNTIME and os.path.isfile(scorpion_ico) else f"{sys.executable},0"
     try:
         if enabled:
             base = rf"Software\Classes\{TORRENT_PROGID}"
@@ -5223,7 +5235,7 @@ def ensure_app_shortcuts(settings: dict):
     installed_exe = os.path.join(
         os.environ.get("LOCALAPPDATA", ""), "Programs", "ScorpionIDM", "ScorpionIDM.exe"
     )
-    target_exe = sys.executable if getattr(sys, "frozen", False) else installed_exe
+    target_exe = sys.executable if INSTALLED else installed_exe
     if not os.path.exists(target_exe):
         return
     work_dir = os.path.dirname(target_exe)
@@ -6020,6 +6032,14 @@ if __name__ == "__main__":
             sys.exit(0)
     except Exception:
         pass
+
+    if EMBEDDED_RUNTIME:
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Scorpion.DownloadManager")
+        except Exception:
+            pass
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
