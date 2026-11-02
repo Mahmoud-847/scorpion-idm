@@ -42,6 +42,7 @@ from PyQt6.QtGui import QIcon, QFont, QColor, QPainter, QPen, QLinearGradient, Q
 from PyQt6.QtWidgets import (
     QApplication,
     QSizePolicy,
+    QScrollArea,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -141,6 +142,25 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
 
 APP_VERSION = "2.1.6"
 
+# External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
+TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
+TOOLS_PACK_FILES = ("ffmpeg.exe", "ffprobe.exe", "qjs.exe")
+
+
+def find_tool(name: str) -> str:
+    """Path of a bundled program, falling back to one installed on the PC (developer machines)."""
+    exe = name if name.lower().endswith(".exe") else name + ".exe"
+    for cand in (
+        os.path.join(TOOLS_DIR, exe),
+        os.path.join(RESOURCE_ROOT, "build", exe),
+        shutil.which(name) or "",
+        os.path.expandvars(rf"%LOCALAPPDATA%\Microsoft\WinGet\Links\{exe}"),
+    ):
+        if cand and os.path.isfile(cand):
+            return cand
+    return ""
+
+
 # Local browser bridge (127.0.0.1:19615): only extension pages and native local processes are trusted.
 BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
@@ -149,41 +169,55 @@ CHANGELOG_HISTORY = [
     {
         "version": "2.1.6",
         "date": "2026-11-02",
-        "title_ar": "الإصدار 2.1.6 — تحديث جديد",
-        "title_en": "Version 2.1.6 — New Update",
+        "title_ar": "الإصدار 2.1.6 — بحث واختصارات",
+        "title_en": "Version 2.1.6 — Search & Shortcuts",
         "ar": [
-            "تحديث تلقائي للإصدار 2.1.3 وتحسينات في الأداء.",
-            "تحديث تلقائي للإصدار 2.1.2 وتحسينات في الأداء.",
-            "تحديث تلقائي للإصدار 2.1.1 وتحسينات في الأداء.",
-            "إضافة نظام التحديث الذكي من داخل التطبيق (In-App Auto Update) مع عرض سجل التغييرات وتثبيت التحديث بضغطة زر دون الحاجة لتشغيل ملف Setup يدوياً.",
-            "دعم كامل لتحميل المقاطع الصوتية والأغاني من Spotify و SoundCloud و Anghami و Deezer عبر 32 بورت متوازي وتحويلها تلقائياً إلى MP3.",
-            "تطوير شريط التحميل العائم في المتصفح: إضافة زر إغلاق (✕) وزر تبديل اللغة (EN / ع) مع مزامنة اللغة تلقائياً مع البرنامج.",
-            "حماية ذاتية لاختصارات سطح المكتب وقائمة ابدأ وتثبيت آمن بدون أي تعارض مع Windows Defender.",
+            "خانة بحث في قائمة التحميلات بالاسم أو الرابط.",
+            "اختصارات لوحة المفاتيح: Ctrl+N للإضافة، Ctrl+V للصق رابط، Ctrl+F للبحث، Delete للحذف، Enter لنافذة التقدم.",
+            "عرض سبب فشل التحميل عند الوقوف على كلمة «فشل».",
+            "تأكيد قبل حذف تحميل لم يكتمل.",
+            "نافذة إضافة رابط أبسط وأوضح.",
         ],
         "en": [
-            "Auto-update v2.1.3 with performance and stability improvements.",
-            "Auto-update v2.1.2 with performance and stability improvements.",
-            "Auto-update v2.1.1 with performance and stability improvements.",
-            "Built-in In-App Auto Updater with release notes viewer and one-click silent update installation across all your PCs.",
-            "Full audio & music download support for Spotify, SoundCloud, Anghami, and Deezer across 32 parallel ports with automatic MP3 conversion.",
-            "Enhanced browser floating bar: added Close button (✕), language toggle (EN / ع), and real-time language sync with the desktop app.",
-            "Self-healing Desktop & Start Menu shortcuts and Defender-friendly native COM installer.",
+            "Search box for the downloads list (file name or URL).",
+            "Keyboard shortcuts: Ctrl+N add, Ctrl+V paste a link, Ctrl+F search, Delete, Enter opens the progress window.",
+            "Hover “Failed” to see why a download failed.",
+            "Confirmation before deleting an unfinished download.",
+            "Simpler, clearer Add Download dialog.",
+        ],
+    },
+    {
+        "version": "2.1.4",
+        "date": "2026-11-02",
+        "title_ar": "الإصدار 2.1.4 — التحديث من داخل البرنامج",
+        "title_en": "Version 2.1.4 — In-App Updates",
+        "ar": [
+            "التحديث من داخل البرنامج بضغطة زر، مع عرض ما الجديد.",
+            "تحميل الصوتيات من SoundCloud والمواقع المدعومة وحفظها بصيغة MP3.",
+            "شريط التحميل العائم في المتصفح: زر إغلاق وزر لتبديل اللغة.",
+            "اختصارات سطح المكتب وقائمة ابدأ ترجع تلقائياً لو اتحذفت.",
+        ],
+        "en": [
+            "One-click in-app updates with release notes.",
+            "Audio downloads from SoundCloud and other supported sites, saved as MP3.",
+            "Browser floating bar: close button and language toggle.",
+            "Desktop and Start Menu shortcuts come back automatically if deleted.",
         ],
     },
     {
         "version": "2.0.0",
         "date": "2026-10-29",
-        "title_ar": "الإصدار 2.0.0 — محرك 32 بورت ودعم التورنت والفيديو",
-        "title_en": "Version 2.0.0 — 32-Port Engine, Video & Torrent Support",
+        "title_ar": "الإصدار 2.0.0 — محرك 32 اتصال ودعم التورنت والفيديو",
+        "title_en": "Version 2.0.0 — 32-Connection Engine, Video & Torrent Support",
         "ar": [
-            "محرك تحميل فائق السرعة يقسم الملفات والفيديوهات حتى 32 بورت متوازي مع ميزة Dynamic Work Stealing.",
-            "دعم كامل لتحميل ملفات التورنت وروابط Magnet مع نافذة اختيار الملفات.",
-            "واجهة Windows 11 حديثة باللغتين العربية والإنجليزية مع الوضع الليلي والنهاري.",
+            "محرك تحميل يقسم الملفات والفيديوهات حتى 32 اتصالاً متوازياً، ويعيد توزيع الأجزاء عندما ينتهي أحدها مبكراً.",
+            "تحميل ملفات التورنت وروابط ماجنت مع نافذة لاختيار الملفات.",
+            "واجهة حديثة باللغتين العربية والإنجليزية مع الوضع الداكن والفاتح.",
         ],
         "en": [
-            "High-speed 32-port parallel download engine with Dynamic Work Stealing for files and video streams.",
-            "Full BitTorrent & Magnet link support with selective file download dialog.",
-            "Modern Windows 11 Fluent UI in Arabic & English with Light and Dark themes.",
+            "Download engine that splits files and videos across up to 32 parallel connections, rebalancing when one finishes early.",
+            "BitTorrent and Magnet support with a file selection dialog.",
+            "Modern UI in Arabic and English with light and dark themes.",
         ],
     },
 ]
@@ -226,6 +260,7 @@ QPushButton:pressed {{ background: {p['track']}; }}
 QPushButton:disabled {{ color: {p['muted']}; background: {p['surface2']}; }}
 QPushButton#PrimaryBtn, QPushButton#SuccessBtn {{ background: {p['accent']}; border-color: {p['accent']}; color: #ffffff; }}
 QPushButton#PrimaryBtn:hover, QPushButton#SuccessBtn:hover {{ background: {p['accent_hover']}; border-color: {p['accent_hover']}; }}
+QPushButton#PrimaryBtn:disabled, QPushButton#SuccessBtn:disabled {{ background: {p['surface2']}; border-color: {p['border']}; color: {p['muted']}; }}
 QPushButton#DangerBtn {{ color: {p['danger']}; }}
 QPushButton#DangerBtn:hover {{ border-color: {p['danger']}; }}
 QPushButton#ToolBtn {{ background: transparent; border: 1px solid transparent; padding: 7px 11px; }}
@@ -1382,8 +1417,11 @@ class ScorpionNativeEngine:
                         repo = repo[:-4]
                     # Check raw update.json in main/master branch first
                     for branch in ("main", "master"):
-                        raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/release/update.json"
-                        r_raw = requests.get(raw_url, headers={"User-Agent": BROWSER_UA}, timeout=10)
+                        # raw.githubusercontent.com caches files for 5 minutes; a unique query string skips that cache
+                        raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/release/update.json?t={int(time.time())}"
+                        r_raw = requests.get(
+                            raw_url, headers={"User-Agent": BROWSER_UA, "Cache-Control": "no-cache"}, timeout=10
+                        )
                         if r_raw.status_code == 200:
                             manifest = r_raw.json()
                             if isinstance(manifest, dict) and not manifest.get("downloadUrl"):
@@ -1444,25 +1482,112 @@ class ScorpionNativeEngine:
                         r = requests.get(src, headers={"User-Agent": BROWSER_UA}, timeout=10)
                         if r.status_code == 200:
                             manifest = r.json()
-            except Exception as e:
-                result["error"] = str(e)
+            except requests.exceptions.SSLError:
+                result["error"] = "تعذر التحقق من شهادة الاتصال بخادم التحديثات (قد يكون بسبب جدار حماية الشبكة) / Couldn't verify the update server's certificate (a network firewall may be inspecting HTTPS)"
+            except requests.exceptions.Timeout:
+                result["error"] = "انتهت مهلة الاتصال بخادم التحديثات / Connection to the update server timed out"
+            except requests.exceptions.ConnectionError:
+                result["error"] = "لا يوجد اتصال بخادم التحديثات / Can't reach the update server"
+            except Exception:
+                # Raw exception text can contain server addresses; never show those to users
+                result["error"] = "تعذر قراءة معلومات التحديث / Couldn't read the update information"
+            if manifest is None and not result.get("error"):
+                result["error"] = "لم يتم العثور على معلومات التحديث / No update information found"
 
+        result["checkedAt"] = time.strftime("%Y-%m-%d %H:%M")
         if isinstance(manifest, dict):
             rem_ver = str(manifest.get("version") or APP_VERSION).strip().lstrip("vV")
             result["latestVersion"] = rem_ver
-            result["publishedAt"] = manifest.get("publishedAt") or result["publishedAt"]
-            result["title_ar"] = manifest.get("title_ar") or f"الإصدار {rem_ver}"
-            result["title_en"] = manifest.get("title_en") or f"Version {rem_ver}"
-            if manifest.get("changelog_ar"):
-                result["changelog_ar"] = list(manifest["changelog_ar"])
-            if manifest.get("changelog_en"):
-                result["changelog_en"] = list(manifest["changelog_en"])
-            result["downloadUrl"] = (manifest.get("downloadUrl") or "").strip()
-            result["localPackage"] = (manifest.get("localPackage") or "").strip()
-            result["sha256"] = (manifest.get("sha256") or "").strip().lower()
             result["hasUpdate"] = _ver_tuple(rem_ver) > _ver_tuple(APP_VERSION)
+            # Release notes come from the server only for a newer version; otherwise the
+            # local history describes what is installed (the server copy may be older or cached)
+            if result["hasUpdate"]:
+                result["publishedAt"] = manifest.get("publishedAt") or result["publishedAt"]
+                result["title_ar"] = manifest.get("title_ar") or f"الإصدار {rem_ver}"
+                result["title_en"] = manifest.get("title_en") or f"Version {rem_ver}"
+                if manifest.get("changelog_ar"):
+                    result["changelog_ar"] = list(manifest["changelog_ar"])
+                if manifest.get("changelog_en"):
+                    result["changelog_en"] = list(manifest["changelog_en"])
+                result["downloadUrl"] = (manifest.get("downloadUrl") or "").strip()
+                result["localPackage"] = (manifest.get("localPackage") or "").strip()
+                result["sha256"] = (manifest.get("sha256") or "").strip().lower()
+            if isinstance(manifest.get("tools"), dict):
+                result["tools"] = manifest["tools"]
 
         return result
+
+    def tools_ready(self) -> bool:
+        return all(os.path.isfile(os.path.join(TOOLS_DIR, f)) for f in TOOLS_PACK_FILES)
+
+    def ensure_tools(self, tools: dict) -> bool:
+        """
+        Installs or refreshes the bundled programs (ffmpeg, ffprobe, QuickJS) from the tools pack
+        described in update.json, so video and audio work without installing anything.
+        """
+        tools = tools or {}
+        version = str(tools.get("version") or "").strip()
+        url = str(tools.get("url") or "").strip()
+        expected = str(tools.get("sha256") or "").strip().lower()
+        if not version or not url.lower().startswith("https://") or len(expected) != 64:
+            return False
+        ver_file = os.path.join(TOOLS_DIR, "version.txt")
+        try:
+            with open(ver_file, "r", encoding="utf-8") as f:
+                if f.read().strip() == version and self.tools_ready():
+                    return True
+        except OSError:
+            pass
+        if getattr(self, "_tools_busy", False):
+            return False
+        self._tools_busy = True
+        pkg = os.path.join(self.temp_root, "Scorpion_Tools_Pkg.zip")
+        try:
+            import zipfile
+
+            os.makedirs(self.temp_root, exist_ok=True)
+            sha = hashlib.sha256()
+            with requests.get(url, headers={"User-Agent": BROWSER_UA}, stream=True, timeout=30) as r:
+                r.raise_for_status()
+                with open(pkg, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+                            sha.update(chunk)
+            if sha.hexdigest() != expected:
+                return False
+            os.makedirs(TOOLS_DIR, exist_ok=True)
+            root = os.path.normcase(os.path.abspath(TOOLS_DIR))
+            with zipfile.ZipFile(pkg) as zf:
+                for m in zf.infolist():
+                    dest = os.path.normcase(os.path.abspath(os.path.join(TOOLS_DIR, m.filename)))
+                    if os.path.commonpath([root, dest]) != root:
+                        return False
+                for m in zf.infolist():
+                    if m.is_dir():
+                        continue
+                    target = os.path.join(TOOLS_DIR, m.filename)
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    tmp = target + ".part"
+                    with zf.open(m) as src_f, open(tmp, "wb") as dst_f:
+                        shutil.copyfileobj(src_f, dst_f)
+                    try:
+                        os.replace(tmp, target)
+                    except PermissionError:
+                        # The old file is in use: move it aside, it is cleaned up on the next start
+                        os.replace(target, f"{target}.old_{int(time.time() * 1000)}")
+                        os.replace(tmp, target)
+            with open(ver_file, "w", encoding="utf-8") as f:
+                f.write(version)
+            return self.tools_ready()
+        except Exception:
+            return False
+        finally:
+            self._tools_busy = False
+            try:
+                os.remove(pkg)
+            except OSError:
+                pass
 
     def install_update_package(self, pkg_path: str, expected_sha256: str = "", progress_cb=None) -> tuple:
         """
@@ -1884,17 +2009,9 @@ class ScorpionNativeEngine:
         return False
 
     def _find_aria2c(self) -> str:
-        candidates = [
-            os.path.join(RESOURCE_ROOT, "build", "aria2c.exe"),
-            shutil.which("aria2c") or "",
-            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\aria2c.EXE"),
-            os.path.expandvars(
-                r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\aria2.aria2_Microsoft.Winget.Source_8wekyb3d8bbwe\aria2-1.37.0-win-64bit-build1\aria2c.EXE"
-            ),
-        ]
-        for c in candidates:
-            if c and os.path.isfile(c):
-                return c
+        found = find_tool("aria2c")
+        if found:
+            return found
         return ""
 
     def add_download(self, opts: dict) -> dict:
@@ -2803,10 +2920,8 @@ class ScorpionNativeEngine:
             item["segments"][0]["info"] = "Extracting streams..."
 
         q = item.get("videoQuality", "best")
-        ffmpeg_bin = shutil.which("ffmpeg") or os.path.expandvars(
-            r"%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.EXE"
-        )
-        has_ffmpeg = bool(ffmpeg_bin and os.path.exists(ffmpeg_bin))
+        ffmpeg_bin = find_tool("ffmpeg")
+        has_ffmpeg = bool(ffmpeg_bin)
 
         if has_ffmpeg:
             # Prefer H.264 (avc1): AV1/VP9 files do not play in the default Windows player
@@ -2921,8 +3036,24 @@ class ScorpionNativeEngine:
                 "Origin": f"{pr.scheme}://{pr.netloc}",
                 "User-Agent": BROWSER_UA,
             }
+        # YouTube needs a JavaScript runtime: the bundled QuickJS, or deno if this PC has it (about 3x faster)
+        qjs_bundled = os.path.join(TOOLS_DIR, "qjs.exe")
+        deno_bin = find_tool("deno")
+        js_runtime = (
+            {"quickjs": {"path": qjs_bundled}} if os.path.isfile(qjs_bundled) and not deno_bin
+            else {"deno": {"path": deno_bin}} if deno_bin
+            else {"quickjs": {"path": find_tool("qjs")}} if find_tool("qjs")
+            else None
+        )
+        if js_runtime:
+            ydl_opts["js_runtimes"] = js_runtime
+            try:
+                import yt_dlp_ejs  # noqa: F401  (challenge scripts bundled with the app)
+            except ImportError:
+                ydl_opts["remote_components"] = ["ejs:github"]
         if has_ffmpeg:
-            ydl_opts["ffmpeg_location"] = ffmpeg_bin
+            # The folder, so yt-dlp also finds ffprobe (needed for MP3 conversion)
+            ydl_opts["ffmpeg_location"] = os.path.dirname(ffmpeg_bin)
             if q == "audio":
                 ydl_opts["postprocessors"] = [
                     {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
@@ -4549,7 +4680,6 @@ class UpdateDialog(QDialog):
         self.info = update_info or self.engine.check_for_updates()
         self._updating = False
 
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         self.setWindowTitle(
             self.T("تحديثات البرنامج وسجل الإضافات — Scorpion IDM", "Software Updates & What's New — Scorpion IDM")
         )
@@ -4598,8 +4728,13 @@ class UpdateDialog(QDialog):
         self.lbl_notes_body.setAlignment(
             (Qt.AlignmentFlag.AlignRight if self.is_ar else Qt.AlignmentFlag.AlignLeft) | Qt.AlignmentFlag.AlignTop
         )
-        self.lbl_notes_body.setStyleSheet("line-height: 1.5; font-size: 13px;")
-        nl.addWidget(self.lbl_notes_body, 1)
+        self.lbl_notes_body.setStyleSheet("line-height: 1.5; font-size: 13px; background: transparent;")
+        notes_scroll = QScrollArea()
+        notes_scroll.setWidgetResizable(True)
+        notes_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        notes_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        notes_scroll.setWidget(self.lbl_notes_body)
+        nl.addWidget(notes_scroll, 1)
         root.addWidget(notes_card, 1)
 
         # 3) Live Update Progress Card (shown during download/install)
@@ -4654,73 +4789,73 @@ class UpdateDialog(QDialog):
     def _refresh_view(self):
         c = pal()
         has_upd = bool(self.info.get("hasUpdate"))
+        error = (self.info.get("error") or "").strip()
+        if " / " in error:  # friendly errors are stored as "Arabic / English"
+            error = error.split(" / ", 1)[0 if self.is_ar else 1]
         lat_ver = self.info.get("latestVersion") or APP_VERSION
         pub_date = self.info.get("publishedAt") or CHANGELOG_HISTORY[0]["date"]
-        # Nothing to install when already on the latest version (a LAN/local package can still be applied)
+        checked = self.info.get("checkedAt") or ""
+        checked_txt = self.T(f"آخر فحص: {L(checked)}", f"Last checked: {checked}") if checked else ""
+        # "Update Now" only exists when there is something to install
+        self.btn_update_now.setVisible(has_upd)
         if not self._updating:
-            self.btn_update_now.setEnabled(has_upd or bool(self.info.get("localPackage")))
+            self.btn_update_now.setEnabled(has_upd)
 
         if has_upd:
-            self.lbl_headline.setText(
-                self.T(
-                    f"🚀 يتوفر تحديث جديد للبرنامج: الإصدار {L('v' + lat_ver)}",
-                    f"🚀 New Update Available: Version v{lat_ver}",
-                )
+            headline, color = self.T(
+                f"🚀 يتوفر تحديث جديد للبرنامج: الإصدار {L('v' + lat_ver)}",
+                f"🚀 New Update Available: Version v{lat_ver}",
+            ), c["accent"]
+            sub = self.T(
+                f"الإصدار الحالي على جهازك: {L('v' + APP_VERSION)}  •  تاريخ إصدار التحديث: {L(pub_date)}\n"
+                "اضغط «تحديث البرنامج الآن» لتحميل وتثبيت التحديث تلقائياً وإعادة تشغيل البرنامج.",
+                f"Current version: v{APP_VERSION}  •  Released: {pub_date}\n"
+                "Click “Update Now” to download, install, and restart automatically.",
             )
-            self.lbl_headline.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {c['accent']};")
-            self.lbl_sub.setText(
-                self.T(
-                    f"الإصدار الحالي على جهازك: {L('v' + APP_VERSION)}  •  تاريخ إصدار التحديث: {L(pub_date)}\n"
-                    "اضغط «تحديث البرنامج الآن» لتحميل وتثبيت التحديث تلقائياً وإعادة تشغيل البرنامج بدون الحاجة للـ Setup.",
-                    f"Current version: v{APP_VERSION}  •  Released: {pub_date}\n"
-                    "Click “Update Now” to download, install, and restart automatically without running Setup manually.",
-                )
+        elif error:
+            headline, color = self.T("⚠️ تعذر فحص التحديثات", "⚠️ Couldn't check for updates"), c["warn"]
+            sub = self.T(
+                f"الإصدار الحالي: {L('v' + APP_VERSION)}  •  السبب: {error[:160]}\n"
+                "تأكد من الاتصال بالإنترنت ثم اضغط «فحص التحديثات الآن».",
+                f"Current version: v{APP_VERSION}  •  Reason: {error[:160]}\n"
+                "Check your internet connection, then click “Check for Updates”.",
             )
         elif self.just_updated:
-            self.lbl_headline.setText(
-                self.T(
-                    f"🎉 تم تحديث البرنامج بنجاح إلى الإصدار {L('v' + APP_VERSION)}!",
-                    f"🎉 Successfully Updated to Version v{APP_VERSION}!",
-                )
-            )
-            self.lbl_headline.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {c['success']};")
-            self.lbl_sub.setText(
-                self.T(
-                    f"أنت تعمل الآن على أحدث إصدار ({L('v' + APP_VERSION)}) — إليك ملخص كامل للتحديثات والمميزات التي تمت إضافتها:",
-                    f"You are now running the latest version (v{APP_VERSION}) — here is what changed in this update:",
-                )
-            )
+            headline, color = self.T(
+                f"🎉 تم تحديث البرنامج بنجاح إلى الإصدار {L('v' + APP_VERSION)}!",
+                f"🎉 Successfully Updated to Version v{APP_VERSION}!",
+            ), c["success"]
+            sub = self.T("إليك ما الجديد في هذا الإصدار:", "Here is what's new in this version:")
         else:
-            self.lbl_headline.setText(
-                self.T(
-                    f"✅ برنامجك محدث إلى آخر إصدار ({L('v' + APP_VERSION)})",
-                    f"✅ Scorpion IDM is up to date (v{APP_VERSION})",
-                )
-            )
-            self.lbl_headline.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {c['success']};")
-            self.lbl_sub.setText(
-                self.T(
-                    f"الإصدار الحالي: {L('v' + APP_VERSION)} ({L(pub_date)}) — يمكنك فحص التحديثات أو تثبيت تحديث مباشر من رابط أو ملف بضغطة واحدة.",
-                    f"Current version: v{APP_VERSION} ({pub_date}) — you can check for updates or install an update package with one click.",
-                )
-            )
+            headline, color = self.T(
+                f"✅ برنامجك محدث إلى آخر إصدار ({L('v' + APP_VERSION)})",
+                f"✅ Scorpion IDM is up to date (v{APP_VERSION})",
+            ), c["success"]
+            sub = checked_txt or self.T(f"الإصدار الحالي: {L('v' + APP_VERSION)}", f"Current version: v{APP_VERSION}")
+        if checked_txt and sub != checked_txt:
+            sub = f"{sub}\n{checked_txt}"
+        self.lbl_headline.setText(headline)
+        self.lbl_headline.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {color};")
+        self.lbl_sub.setText(sub)
 
-        title_txt = self.info.get("title_ar" if self.is_ar else "title_en") or (
-            CHANGELOG_HISTORY[0]["title_ar" if self.is_ar else "title_en"]
-        )
-        self.lbl_notes_title.setText(
-            self.T(f"📋 ما الجديد في {title_txt}:", f"📋 What's New in {title_txt}:")
-        )
-
-        notes_list = self.info.get("changelog_ar" if self.is_ar else "changelog_en") or (
-            CHANGELOG_HISTORY[0]["ar" if self.is_ar else "en"]
-        )
+        if has_upd:
+            # Notes of the new version, as published on the server
+            title_txt = self.info.get("title_ar" if self.is_ar else "title_en") or self.T(
+                f"الإصدار {lat_ver}", f"Version {lat_ver}"
+            )
+            notes_list = self.info.get("changelog_ar" if self.is_ar else "changelog_en") or []
+            history = []
+        else:
+            # Notes of the installed version, then every earlier version
+            cur = CHANGELOG_HISTORY[0]
+            title_txt = cur["title_ar" if self.is_ar else "title_en"]
+            notes_list = cur["ar" if self.is_ar else "en"]
+            history = CHANGELOG_HISTORY[1:]
+        self.lbl_notes_title.setText(self.T(f"📋 ما الجديد في {title_txt}:", f"📋 What's New in {title_txt}:"))
         lines = [f"•  {line}" for line in notes_list]
-        if len(CHANGELOG_HISTORY) > 1 and not has_upd:
-            prev = CHANGELOG_HISTORY[1]
-            prev_title = prev["title_ar" if self.is_ar else "title_en"]
+        for prev in history:
             lines.append("")
-            lines.append(f"── {prev_title} ({L(prev['date'])}) ──")
+            lines.append(f"── {prev['title_ar' if self.is_ar else 'title_en']} ({L(prev['date'])}) ──")
             for pline in prev["ar" if self.is_ar else "en"]:
                 lines.append(f"•  {pline}")
         self.lbl_notes_body.setText("\n".join(lines))
@@ -4815,6 +4950,10 @@ class UpdateDialog(QDialog):
                     ),
                 )
                 self.finished_sig.emit(ok, msg)
+            except requests.exceptions.RequestException:
+                self.finished_sig.emit(
+                    False, self.T("تعذر تحميل التحديث من خادم التحديثات", "Couldn't download the update from the update server")
+                )
             except Exception as e:
                 self.finished_sig.emit(False, str(e))
 
@@ -4826,7 +4965,7 @@ class UpdateDialog(QDialog):
 
     def _on_finished(self, ok: bool, msg: str):
         self._updating = False
-        self.btn_update_now.setEnabled(bool(self.info.get("hasUpdate") or self.info.get("localPackage")))
+        self.btn_update_now.setEnabled(bool(self.info.get("hasUpdate")))
         self.btn_check.setEnabled(True)
         if ok:
             self.prog_bar.setValue(100)
@@ -5549,6 +5688,8 @@ class ScorpionMainWindow(QMainWindow):
             res = self.engine.check_for_updates()
             if res.get("hasUpdate"):
                 self.engine.signals.update_available.emit(res)
+            elif res.get("tools"):
+                self.engine.ensure_tools(res["tools"])
 
         threading.Thread(target=worker, daemon=True).start()
 
