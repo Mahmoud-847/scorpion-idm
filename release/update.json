@@ -1,11 +1,11 @@
 {
-  "version": "2.1.11",
+  "version": "2.1.12",
   "publishedAt": "2026-11-03",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "6713ff3b231b9df82808369b7c9f3f75c864efaff3b32397ee95e4afd99bb3f7",
+  "sha256": "d1bd49e6580176fb1a8810809f8c7c063e9b235e1b6e9dbe06609eadcf6e3e3f",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.11",
-  "title_en": "Version 2.1.11",
+  "title_ar": "الإصدار 2.1.12",
+  "title_en": "Version 2.1.12",
   "changelog_ar": [
     "تحسينات وإصلاحات عامة."
   ],
