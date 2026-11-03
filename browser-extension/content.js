@@ -426,8 +426,16 @@
       dragOffsetY = e.clientY - r.top;
     });
 
+    const endDrag = () => {
+      isDragging = false;
+    };
     window.addEventListener('mousemove', (e) => {
       if (!isDragging || !panelEl) return;
+      // Button no longer held (release missed, e.g. outside the window): the drag is over
+      if (!(e.buttons & 1)) {
+        endDrag();
+        return;
+      }
       const dx = Math.abs(e.clientX - (panelEl.getBoundingClientRect().left + dragOffsetX));
       const dy = Math.abs(e.clientY - (panelEl.getBoundingClientRect().top + dragOffsetY));
       if (dx > 8 || dy > 8) didMove = true;
@@ -442,9 +450,10 @@
       panelEl.__userDraggedPos = { left: newLeft, top: newTop };
     });
 
-    window.addEventListener('mouseup', () => {
-      isDragging = false;
-    });
+    // Capture phase: the panel stops presses from reaching the page, which must not hide the release from us
+    window.addEventListener('mouseup', endDrag, true);
+    window.addEventListener('pointerup', endDrag, true);
+    window.addEventListener('blur', endDrag);
 
     triggerEl.addEventListener('click', (e) => {
       e.stopPropagation();
