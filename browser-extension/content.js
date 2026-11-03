@@ -161,6 +161,10 @@
   const MANIFEST_RE = /\.(m3u8|mpd)(\?|#|$)/i;
   const VIDEO_RE = /\.(mp4|webm|m4v|mkv|flv|mov)(\?|#|$)/i;
   const AUDIO_RE = /\.(mp3|m4a|aac|ogg|opus|wav|flac|weba)(\?|#|$)/i;
+  // Video streams whose address has no file extension (e.g. LinkedIn: dms.licdn.com/playlist/vid/.../mp4-720p-30fp/...)
+  const VIDEO_HINT_RE = /\/playlist\/vid\/|[\/_-]mp4[-_\/]/i;
+  // Interface sounds hosted as site assets (e.g. LinkedIn's static.licdn.com/aero-v1/sc/h/assets/<id>.m4a)
+  const UI_SOUND_RE = /(^https?:\/\/static\.|\/(assets|sounds?|sfx)\/)/i;
   const IGNORE_STREAM_RE =
     /(widevine|playready|drm|license|spclient\.spotify\.com|telemetry|analytics|beacon|track_event|oauth|token|api-v2\.soundcloud\.com\/(me|announcements|promoted))/i;
   const MUSIC_SITE_RE = /(open\.spotify\.com|soundcloud\.com|anghami\.com|deezer\.com|music\.apple\.com|music\.youtube\.com)/i;
@@ -178,13 +182,16 @@
 
     const isManifest = MANIFEST_RE.test(url);
     const isAudio = !isManifest && AUDIO_RE.test(url);
-    const isVideo = !isManifest && !isAudio && VIDEO_RE.test(url);
+    const isVideo =
+      !isManifest && !isAudio && (VIDEO_RE.test(url) || VIDEO_HINT_RE.test(url) || initiator === 'video');
     if (!isManifest && !isAudio && !isVideo) return;
 
     // Ignore tiny UI notification sounds
     if (isAudio && /(beep|notification|click|ringtone|alert|ping|pop)\.(mp3|wav|ogg)/i.test(url)) return;
+    if (isAudio && initiator !== 'audio' && UI_SOUND_RE.test(url)) return;
 
-    let score = isManifest ? 50 : isAudio ? 45 : 30;
+    // Video above audio: an audio file is never "the video" (it is offered in audio mode instead)
+    let score = isManifest ? 50 : isVideo ? 40 : 30;
     if (/master|playlist|index/i.test(url)) score += 10;
     if (/(chunk|seg|frag|init)[-_]?\d*\./i.test(url)) score -= 40;
     const extTag = isManifest ? 'HLS / M3U8' : isAudio ? detectAudioExt(url) : 'MP4';
@@ -221,8 +228,9 @@
     if (preferAudio) {
       const aud = detectedStreams.find((s) => s.isAudio || s.isManifest);
       if (aud) return aud;
+      return detectedStreams.length > 0 ? detectedStreams[0] : null;
     }
-    return detectedStreams.length > 0 ? detectedStreams[0] : null;
+    return detectedStreams.find((s) => !s.isAudio) || null;
   }
 
   // Embedded players often carry no video id in their address (Dailymotion's own pages load
@@ -241,6 +249,19 @@
           }
         }
         if (id) return `https://www.dailymotion.com/video/${id}`;
+      }
+    } catch (_) {}
+    return url;
+  }
+
+  // The address of the post holding a video on sites that show many videos in one feed (yt-dlp downloads posts)
+  function resolvePostUrlForMedia(media, url) {
+    try {
+      if (/(^|\.)linkedin\.com$/i.test(location.hostname)) {
+        const post = media && media.closest && media.closest('[data-urn*="urn:li:activity:"], [data-urn*="urn:li:ugcPost:"], [data-id*="urn:li:activity:"]');
+        const urn = post && (post.getAttribute('data-urn') || post.getAttribute('data-id'));
+        const m = urn && /urn:li:(activity|ugcPost):\d+/.exec(urn);
+        if (m) return `https://www.linkedin.com/feed/update/${m[0]}/`;
       }
     } catch (_) {}
     return url;
@@ -473,10 +494,10 @@
         : null;
 
     const sniffed = bestStream(activeMode === 'audio');
-    const effectivePageUrl = resolveEmbeddedVideoPage(trackInfo.trackUrl || pageUrl);
+    const effectivePageUrl = resolvePostUrlForMedia(activeMedia, resolveEmbeddedVideoPage(trackInfo.trackUrl || pageUrl));
     const isMusicPlatform = MUSIC_SITE_RE.test(isFramed ? document.referrer || effectivePageUrl : effectivePageUrl);
     const isKnownVideoSite =
-      /youtube\.com|youtu\.be|facebook\.com|instagram\.com|tiktok\.com|twitter\.com|x\.com|vimeo\.com|dailymotion\.com/i.test(
+      /youtube\.com|youtu\.be|facebook\.com|instagram\.com|tiktok\.com|twitter\.com|x\.com|vimeo\.com|dailymotion\.com|linkedin\.com\/(feed\/update|posts)\//i.test(
         isFramed ? document.referrer || effectivePageUrl : effectivePageUrl
       );
 
