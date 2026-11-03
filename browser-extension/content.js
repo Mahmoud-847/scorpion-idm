@@ -271,6 +271,45 @@
     return url;
   }
 
+  // Addresses of a single post or video, on any site (feeds, profiles and timelines show many videos)
+  // An address counts as a single post/video only with an id after the keyword (/videos/123, /status/170...),
+  // so listings such as reddit.com/r/videos/ or a profile's "Videos" tab are not mistaken for one video
+  const PERMALINK_RE =
+    /\/(videos?|reels?|posts?|status(?:es)?|p|tv|shorts|clips?|comments|feed\/update|share\/[vrp]|embed)\/[\w:%.~-]{4,}|[?&](?:v|story_fbid|video_id|fbid)=[\w:%.~-]{4,}/i;
+  const VIDEO_PERMALINK_RE = /\/(videos?|watch|reels?|shorts|clips?|tv|share\/[vr])(?:\/|\?|$)|[?&](?:v|video_id)=/i;
+
+  function siteOf(host) {
+    return String(host || '').toLowerCase().split('.').slice(-2).join('.');
+  }
+
+  // Walk up from the video to the nearest container holding links to a single post/video; on a feed that
+  // is the post around the video, so the links name this video and not the ones in other posts
+  function findPermalinksNearMedia(media) {
+    const found = [];
+    try {
+      if (!media || PERMALINK_RE.test(location.pathname + location.search)) return found;
+      const site = siteOf(location.hostname);
+      let el = media.parentElement;
+      for (let depth = 0; el && el !== document.body && depth < 16 && !found.length; depth++, el = el.parentElement) {
+        const anchors = el.querySelectorAll('a[href]');
+        if (anchors.length > 400) break;
+        for (const a of anchors) {
+          let u;
+          try {
+            u = new URL(a.href, location.href);
+          } catch (_) {
+            continue;
+          }
+          if (!/^https?:$/.test(u.protocol) || siteOf(u.hostname) !== site) continue;
+          if (!PERMALINK_RE.test(u.pathname + u.search) || u.href.split('#')[0] === location.href.split('#')[0]) continue;
+          if (!found.includes(u.href)) found.push(u.href);
+        }
+      }
+    } catch (_) {}
+    // Video addresses first (a post can link to its comments or photos too)
+    return found.sort((a, b) => VIDEO_PERMALINK_RE.test(b) - VIDEO_PERMALINK_RE.test(a)).slice(0, 4);
+  }
+
   // Extract the exact currently playing song title, artist, and track URL from music sites
   function extractPlayingTrackInfo() {
     const host = window.location.hostname.toLowerCase();
@@ -517,7 +556,11 @@
         : null;
 
     const sniffed = bestStream(activeMode === 'audio');
-    const effectivePageUrl = resolvePostUrlForMedia(activeMedia, resolveEmbeddedVideoPage(trackInfo.trackUrl || pageUrl));
+    const permalinks = findPermalinksNearMedia(activeMedia);
+    // A track address from a music site wins; otherwise the post around the video beats the feed's address
+    const trackUrl = trackInfo.trackUrl && trackInfo.trackUrl !== pageUrl ? trackInfo.trackUrl : '';
+    const effectivePageUrl =
+      resolvePostUrlForMedia(activeMedia, resolveEmbeddedVideoPage(trackUrl || permalinks[0] || pageUrl));
     const isMusicPlatform = MUSIC_SITE_RE.test(isFramed ? document.referrer || effectivePageUrl : effectivePageUrl);
     const isKnownVideoSite =
       /youtube\.com|youtu\.be|facebook\.com|instagram\.com|tiktok\.com|twitter\.com|x\.com|vimeo\.com|dailymotion\.com|linkedin\.com\/(feed\/update|posts)\//i.test(
@@ -530,7 +573,13 @@
       else if (sniffed && sniffed.isManifest) targetUrl = sniffed.url;
       else if (sniffed) targetUrl = sniffed.url;
     }
-    return { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl };
+    const candidates = [];
+    const addCandidate = (u) => {
+      if (u && /^https?:\/\//i.test(u) && !candidates.includes(u)) candidates.push(u);
+    };
+    [targetUrl, effectivePageUrl, ...permalinks, pageUrl, directMediaSrc].forEach(addCandidate);
+    detectedStreams.filter((st) => !st.isAudio).slice(0, 3).forEach((st) => addCandidate(st.url));
+    return { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl, candidates };
   }
 
   // Read the qualities as soon as the button shows, so the menu is complete when it opens
@@ -538,7 +587,7 @@
     if (activeMode !== 'video') return;
     try {
       const tgt = computeDownloadTarget();
-      if (!tgt.isMusicPlatform) listQualities(tgt.targetUrl, tgt.pageUrl);
+      if (!tgt.isMusicPlatform) listQualities(tgt.targetUrl, tgt.pageUrl, tgt.candidates);
     } catch (_) {}
   }
 
@@ -546,7 +595,7 @@
     if (!dropdownEl) return;
     dropdownEl.innerHTML = '';
     const tr = t();
-    const { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl } = computeDownloadTarget();
+    const { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl, candidates } = computeDownloadTarget();
 
     const isDirectAudioFile =
       activeMode === 'audio' &&
@@ -614,6 +663,7 @@
           quality: opt.quality,
           type: opt.type || 'video',
           filename: opt.filename || '',
+          candidates,
         });
       });
       return btn;
@@ -628,7 +678,7 @@
       status.textContent = tr.loadingQualities;
       box.appendChild(status);
       dropdownEl.insertBefore(box, dropdownEl.children[1] || null);
-      listQualities(targetUrl, pageUrl).then((res) => {
+      listQualities(targetUrl, pageUrl, candidates).then((res) => {
         const list = (res && res.qualities) || [];
         if (!list.length) {
           status.textContent = tr.noQualities;
@@ -682,13 +732,13 @@
 
   // Qualities per address, cached so reopening the menu is instant (one request per video)
   const qualityCache = new Map();
-  function listQualities(url, referer) {
+  function listQualities(url, referer, candidates) {
     if (!qualityCache.has(url)) {
       qualityCache.set(
         url,
         new Promise((resolve) => {
           try {
-            chrome.runtime.sendMessage({ action: 'SCORPION_LIST_QUALITIES', url, referer }, (res) => {
+            chrome.runtime.sendMessage({ action: 'SCORPION_LIST_QUALITIES', url, referer, candidates: candidates || [] }, (res) => {
               if (chrome.runtime.lastError || !res || !res.ok) qualityCache.delete(url);
               resolve(chrome.runtime.lastError ? null : res);
             });

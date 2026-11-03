@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Scorpion IDM Integration Module",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "Download Manager Integration & Video Helper for Scorpion IDM.",
   "icons": {
     "16": "icon.png",
@@ -12,7 +12,8 @@
     "downloads",
     "activeTab",
     "storage",
-    "contextMenus"
+    "contextMenus",
+    "cookies"
   ],
   "background": {
     "service_worker": "background.js"
@@ -24,11 +25,22 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ]
 }

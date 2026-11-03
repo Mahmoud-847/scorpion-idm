@@ -177,6 +177,24 @@ def find_tool(name: str) -> str:
     return ""
 
 
+def needs_login(err) -> bool:
+    text = str(err).lower()
+    return any(k in text for k in ("registered users", "login required", "log in", "sign in", "cookies", "private video",
+                                   "rate-limit reached or login", "requires authentication"))
+
+
+def friendly_video_error(err) -> str:
+    """Why a video failed, in words the user can act on (same rules for every site)."""
+    text = str(err).replace("ERROR:", "").strip()
+    if needs_login(text):
+        return ("الفيديو ده محتاج تسجيل دخول في الموقع. افتح الموقع في Chrome وسجّل دخول، "
+                "وبعدين اضغط زر التحميل اللي فوق الفيديو تاني.")
+    if "unsupported url" in text.lower():
+        return ("العنوان ده مش لفيديو واحد (زي صفحة بروفايل أو فيد). شغّل الفيديو نفسه واضغط زر التحميل اللي فوقه، "
+                "أو افتح المنشور لوحده وانسخ عنوانه.")
+    return text
+
+
 def video_format_for(quality: str, has_ffmpeg: bool = True) -> str:
     """yt-dlp format selector for a quality picked by the user: "best", "audio" or a height like "1080p"."""
     import re
@@ -2052,8 +2070,19 @@ class ScorpionNativeEngine:
                 if not self._is_trusted_client():
                     self._reject()
                     return
+                if parsed.path == "/formats":
+                    length = min(int(self.headers.get("Content-Length") or 0), 2 * 1024 * 1024)
+                    try:
+                        req = json.loads(self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else "{}")
+                        res = engine_ref.list_video_qualities(req.get("url", ""), req.get("referer", ""), req.get("tab", ""),
+                                                              req.get("candidates") or [], req.get("cookies") or [])
+                    except Exception:
+                        res = {"ok": False, "qualities": []}
+                    self._send_cors(200)
+                    self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+                    return
                 if parsed.path == "/capture":
-                    length = min(int(self.headers.get("Content-Length") or 0), 1024 * 1024)
+                    length = min(int(self.headers.get("Content-Length") or 0), 2 * 1024 * 1024)
                     raw = self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else "{}"
                     try:
                         payload = json.loads(raw)
@@ -2292,11 +2321,15 @@ class ScorpionNativeEngine:
             "referer": (opts.get("referer") or "").strip(),
             # Page the user was on when the download came from an embedded player (iframe)
             "tabUrl": (opts.get("tabUrl") or "").strip(),
+            # Other addresses that may identify the video (post links near it, streams the player loaded)
+            "candidates": [c for c in (opts.get("candidates") or []) if isinstance(c, str)][:10],
             "checksumSha256": None,
             "checksumMd5": None,
         }
         with self.lock:
             self.downloads[dl_id] = item
+        if opts.get("cookies"):
+            self.__dict__.setdefault("_site_cookies", {})[dl_id] = opts["cookies"]
         if opts.get("startImmediately", True):
             self.save_state()
             self.start_download(dl_id)
@@ -2345,7 +2378,7 @@ class ScorpionNativeEngine:
         if item.get("isVideo"):
             ctrl = {"aborted": False, "last_bytes": item["downloadedBytes"], "last_time": time.time(), "file_lock": threading.Lock()}
             self.controllers[dl_id] = ctrl
-            threading.Thread(target=self._run_video_worker, args=(item, ctrl), daemon=True).start()
+            threading.Thread(target=self._run_video_worker_with_cookies, args=(item, ctrl), daemon=True).start()
             return
 
         os.makedirs(item["saveDir"], exist_ok=True)
@@ -2712,15 +2745,24 @@ class ScorpionNativeEngine:
                 found_info = _extract_via_audio_search()
                 if found_info:
                     return found_info
-            # An embedded player's address may not identify the video; the page around it usually does
-            tab_url = (item.get("tabUrl") or "").strip()
-            if tab_url.lower().startswith(("http://", "https://")) and tab_url != item["url"]:
+            # The first address may not identify the video (a feed, a profile, an embedded player): try the
+            # others the browser saw (post links near the video, the tab, streams the player loaded) in order
+            tried = {item["url"]}
+            for alt in [item.get("tabUrl") or ""] + list(item.get("candidates") or []):
+                alt = (alt or "").strip()
+                if not alt.lower().startswith(("http://", "https://")) or alt in tried:
+                    continue
+                tried.add(alt)
                 try:
-                    info = _unwrap_info(ydl.extract_info(tab_url, download=False))
-                    item["url"] = tab_url
-                    return info
-                except Exception:
-                    pass
+                    info = _unwrap_info(ydl.extract_info(alt, download=False))
+                    if info and (info.get("formats") or info.get("url")):
+                        item["url"] = alt
+                        return info
+                except Exception as alt_err:
+                    if needs_login(alt_err):
+                        first_err = alt_err  # the most useful reason to show
+            if needs_login(first_err):
+                raise first_err
             if not item["url"].lower().split("?")[0].endswith((".html", ".htm", "/")) and "unsupported url" not in str(first_err).lower():
                 raise
             for cand in self._scrape_media_urls(item["url"], item.get("referer") or item["url"]):
@@ -2731,8 +2773,8 @@ class ScorpionNativeEngine:
                 except Exception:
                     continue
             raise RuntimeError(
-                "الموقع ده بيخفي رابط الفيديو. شغّل الفيديو الأول لثواني ثم اضغط زر التحميل تاني "
-                "علشان الإضافة تلتقط الرابط المباشر من المشغل."
+                "ما قدرناش نلاقي الفيديو في الصفحة دي. لو الموقع بيطلب تسجيل دخول، سجّل دخول في Chrome. "
+                "ولو الصفحة فيها فيديوهات كتير، شغّل الفيديو نفسه لثواني واضغط زر التحميل اللي فوقه."
             ) from first_err
 
     def _has_video_stream(self, path: str):
@@ -2753,6 +2795,44 @@ class ScorpionNativeEngine:
             return False if ("invalid data" in err or "moov atom not found" in err) else None
         return "video" in out.stdout
 
+    def _write_cookiefile(self, cookies: list, key: str) -> str:
+        """The browser's cookies for the video's site, so sign-in-only videos download like in the browser."""
+        if not cookies:
+            return ""
+        path = os.path.join(self.temp_root, f"cookies_{key}.txt")
+        try:
+            os.makedirs(self.temp_root, exist_ok=True)
+            lines = ["# Netscape HTTP Cookie File"]
+            for c in cookies:
+                domain = str(c.get("domain") or "")
+                if not domain or not c.get("name"):
+                    continue
+                include_sub = "FALSE" if c.get("hostOnly") else "TRUE"
+                if include_sub == "TRUE" and not domain.startswith("."):
+                    domain = "." + domain
+                lines.append("\t".join([
+                    domain, include_sub, str(c.get("path") or "/"), "TRUE" if c.get("secure") else "FALSE",
+                    str(int(c.get("expirationDate") or 0)), str(c["name"]), str(c.get("value") or ""),
+                ]))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+            return path
+        except Exception:
+            return ""
+
+    def _run_video_worker_with_cookies(self, item: dict, ctrl: dict):
+        cookies = self.__dict__.get("_site_cookies", {}).get(item["id"])
+        item["_cookiefile"] = self._write_cookiefile(cookies, item["id"]) if cookies else ""
+        try:
+            self._run_video_worker(item, ctrl)
+        finally:
+            cf = item.pop("_cookiefile", "")
+            if cf:
+                try:
+                    os.remove(cf)
+                except OSError:
+                    pass
+
     def _js_runtime_opts(self) -> dict:
         """YouTube needs a JavaScript runtime: the bundled QuickJS, or deno if this PC has it (about 3x faster)."""
         qjs_bundled = os.path.join(TOOLS_DIR, "qjs.exe")
@@ -2772,7 +2852,7 @@ class ScorpionNativeEngine:
             opts["remote_components"] = ["ejs:github"]
         return opts
 
-    def list_video_qualities(self, url: str, referer: str = "", tab_url: str = "") -> dict:
+    def list_video_qualities(self, url: str, referer: str = "", tab_url: str = "", candidates=None, cookies=None) -> dict:
         """
         Every video quality a page offers (as yt-dlp sees it), for the quality pickers in the browser
         button and the Add Download dialog. Cached for a few minutes per address.
@@ -2797,9 +2877,20 @@ class ScorpionNativeEngine:
         if referer:
             pr = urllib.parse.urlparse(referer)
             opts["http_headers"] = {"Referer": referer, "Origin": f"{pr.scheme}://{pr.netloc}", "User-Agent": BROWSER_UA}
-        item = {"url": url, "referer": referer, "tabUrl": tab_url, "videoQuality": "best", "category": ""}
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = self._extract_with_fallback(ydl, item)
+        item = {"url": url, "referer": referer, "tabUrl": tab_url, "candidates": list(candidates or []),
+                "videoQuality": "best", "category": ""}
+        cookiefile = self._write_cookiefile(cookies, f"q{uuid.uuid4().hex[:8]}") if cookies else ""
+        if cookiefile:
+            opts["cookiefile"] = cookiefile
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = self._extract_with_fallback(ydl, item)
+        finally:
+            if cookiefile:
+                try:
+                    os.remove(cookiefile)
+                except OSError:
+                    pass
         info = info or {}
         best_audio = max(
             (f for f in info.get("formats") or [] if f.get("vcodec") == "none" and f.get("acodec") not in (None, "none")),
@@ -3315,6 +3406,8 @@ class ScorpionNativeEngine:
             "concurrent_fragment_downloads": n_ports,
             "logger": QuietYtdlpLogger(),
         }
+        if item.get("_cookiefile"):
+            ydl_opts["cookiefile"] = item["_cookiefile"]
         if item.get("referer"):
             ref = item["referer"]
             pr = urllib.parse.urlparse(ref)
@@ -3430,7 +3523,7 @@ class ScorpionNativeEngine:
             item["useRangeVideoEngine"] = False
             self.controllers.pop(item["id"], None)
             if not ctrl["aborted"]:
-                msg = str(err).replace("ERROR:", "").strip()
+                msg = friendly_video_error(err)
                 item["status"] = "error"
                 item["errorMsg"] = msg[:160]
                 item["speed"] = 0
@@ -6383,6 +6476,8 @@ class ScorpionMainWindow(QMainWindow):
                 "filename": filename,
                 "referer": (payload.get("referer") or payload.get("pageUrl") or "").strip(),
                 "tabUrl": (payload.get("tabUrl") or "").strip(),
+                "candidates": payload.get("candidates") or [],
+                "cookies": payload.get("cookies") or [],
                 "category": cat,
                 "totalSize": int(payload.get("totalSize") or 0),
                 "connections": 32,

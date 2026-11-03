@@ -178,6 +178,26 @@ async function checkScorpionAlive() {
 checkScorpionAlive();
 setInterval(checkScorpionAlive, 2500);
 
+// The user's cookies for the video's site, so the app can download what the browser can see (videos that
+// need a sign-in: Facebook, Instagram, X, private posts...). Sent only to the local app, only for these sites;
+// the app keeps them in memory and in a temporary file deleted after the download.
+async function siteCookies(urls) {
+  if (!chrome.cookies) return [];
+  const seen = new Map();
+  for (const u of urls) {
+    if (!u || !/^https?:\/\//i.test(u)) continue;
+    try {
+      for (const c of await chrome.cookies.getAll({ url: u })) {
+        seen.set(`${c.domain}|${c.path}|${c.name}`, {
+          domain: c.domain, path: c.path, secure: c.secure, hostOnly: c.hostOnly,
+          expirationDate: c.expirationDate || 0, name: c.name, value: c.value,
+        });
+      }
+    } catch (_) {}
+  }
+  return Array.from(seen.values());
+}
+
 async function sendToScorpion(payload) {
   try {
     const res = await fetch(`${SCORPION_SERVER}/capture`, {
@@ -198,7 +218,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // address doesn't identify the video
     if (sender && sender.tab && sender.frameId && sender.tab.url) payload.tabUrl = sender.tab.url;
     const generic = !payload.title || /^(scorpion_video|video|embed|player)$/i.test(String(payload.title).trim());
-    const finish = () => sendToScorpion(payload).then((ok) => sendResponse({ ok }));
+    const finish = async () => {
+      if (msg.action === 'SCORPION_DOWNLOAD_VIDEO') {
+        const tabUrl = sender && sender.tab && sender.tab.url;
+        payload.cookies = await siteCookies([payload.url, payload.pageUrl, tabUrl, ...(payload.candidates || [])]);
+      }
+      sendResponse({ ok: await sendToScorpion(payload) });
+    };
     if (generic && sender && sender.tab && sender.frameId) {
       chrome.tabs.sendMessage(sender.tab.id, { action: 'SCORPION_GET_TITLE' }, { frameId: 0 }, (res) => {
         if (!chrome.runtime.lastError && res && res.title) payload.title = res.title;
@@ -215,11 +241,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.action === 'SCORPION_LIST_QUALITIES') {
     // Reading a video's qualities can take several seconds (the app asks yt-dlp)
-    const params = new URLSearchParams({ url: msg.url || '', referer: msg.referer || '' });
-    if (sender && sender.tab && sender.frameId && sender.tab.url) params.set('tab', sender.tab.url);
+    const tabUrl = (sender && sender.tab && sender.tab.url) || '';
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 60000);
-    fetch(`${SCORPION_SERVER}/formats?${params}`, { headers: SCORPION_HEADERS, signal: ctrl.signal })
+    siteCookies([msg.url, tabUrl, ...(msg.candidates || [])])
+      .then((cookies) =>
+        fetch(`${SCORPION_SERVER}/formats`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
+          body: JSON.stringify({ url: msg.url || '', referer: msg.referer || '', tab: tabUrl, candidates: msg.candidates || [], cookies }),
+          signal: ctrl.signal,
+        })
+      )
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => sendResponse(data || { ok: false }))
       .catch(() => sendResponse({ ok: false }))
