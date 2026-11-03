@@ -2674,6 +2674,24 @@ class ScorpionNativeEngine:
                 "علشان الإضافة تلتقط الرابط المباشر من المشغل."
             ) from first_err
 
+    def _has_video_stream(self, path: str):
+        """True/False from ffprobe; None when it can't tell (no ffprobe, unreadable file)."""
+        ffprobe = find_tool("ffprobe")
+        if not ffprobe:
+            return None
+        try:
+            out = subprocess.run(
+                [ffprobe, "-v", "error", "-select_streams", "v", "-show_entries", "stream=codec_type", "-of", "csv=p=0", path],
+                capture_output=True, text=True, timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            return None
+        if out.returncode != 0:
+            # Not a playable media file at all (e.g. a fragment of a site's interface sound) also has no video
+            err = (out.stderr or "").lower()
+            return False if ("invalid data" in err or "moov atom not found" in err) else None
+        return "video" in out.stdout
+
     def _js_runtime_opts(self) -> dict:
         """YouTube needs a JavaScript runtime: the bundled QuickJS, or deno if this PC has it (about 3x faster)."""
         qjs_bundled = os.path.join(TOOLS_DIR, "qjs.exe")
@@ -3319,6 +3337,18 @@ class ScorpionNativeEngine:
                         item["filename"] = os.path.basename(final_dest)
                         item["totalSize"] = os.path.getsize(final_dest)
                         item["downloadedBytes"] = item["totalSize"]
+
+            # A "video" with no picture means the page handed over the wrong file (e.g. an interface sound)
+            fp = item.get("filePath") or ""
+            if q != "audio" and os.path.isfile(fp) and self._has_video_stream(fp) is False:
+                try:
+                    os.remove(fp)
+                except OSError:
+                    pass
+                raise RuntimeError(
+                    "الملف اللي وصل من الصفحة مفيهوش فيديو (غالبًا صوت من واجهة الموقع). "
+                    "شغّل الفيديو واضغط زر التحميل اللي فوقه، أو انسخ رابط المنشور نفسه."
+                )
 
             self._cleanup_item_temp(item)
             for s in item.get("segments") or []:
