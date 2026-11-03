@@ -52,10 +52,11 @@ try:
 except ImportError:
     HAS_YTDLP = False
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSize, QRectF, QPointF, QTime
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSize, QRectF, QPointF, QTime, QByteArray, QPoint, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QIcon, QFont, QColor, QPainter, QPen, QLinearGradient, QAction, QClipboard, QPainterPath, QPolygonF, QShortcut, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
+    QGraphicsDropShadowEffect,
     QSizePolicy,
     QScrollArea,
     QMainWindow,
@@ -739,8 +740,8 @@ class IDMProgressDialog(QDialog):
         if parent is not None and not parent.windowIcon().isNull():
             self.setWindowIcon(parent.windowIcon())
         self.setWindowTitle("Scorpion")
-        self.resize(740, 700)
-        self.setMinimumWidth(620)
+        self.resize(640, 440)
+        self.setMinimumWidth(560)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if self.is_ar else Qt.LayoutDirection.LeftToRight)
 
         root = QVBoxLayout(self)
@@ -883,6 +884,8 @@ class IDMProgressDialog(QDialog):
         cl.addStretch()
         self.tabs.addTab(chk_tab, T("التحقق من الملف", "Checksum"))
         root.addWidget(self.tabs, 1)
+        # Compact by default (the tabs are for the curious); the choice is remembered
+        self.tabs.setVisible(bool(self.engine.settings.get("progressDetailsOpen", False)))
 
         # ---- Buttons ----
         btns = QHBoxLayout()
@@ -905,10 +908,14 @@ class IDMProgressDialog(QDialog):
         self.btn_open_folder = QPushButton(T("فتح المجلد", "Open folder"))
         self.btn_open_folder.clicked.connect(self.open_folder)
         btns.addWidget(self.btn_open_folder)
+        self.btn_details = QPushButton()
+        self.btn_details.clicked.connect(self.toggle_details)
+        btns.addWidget(self.btn_details)
         self.btn_hide = QPushButton(T("إخفاء", "Hide"))
         self.btn_hide.clicked.connect(self.close)
         btns.addWidget(self.btn_hide)
         root.addLayout(btns)
+        self._update_details_button()
 
         self._apply_icons()
         self.anim_timer = QTimer(self)
@@ -916,6 +923,24 @@ class IDMProgressDialog(QDialog):
         self.data_timer = QTimer(self)
         self.data_timer.timeout.connect(self.refresh_ui)
         self.refresh_ui()
+
+    def _update_details_button(self):
+        opened = not self.tabs.isHidden()
+        self.btn_details.setText(self.T("▴ إخفاء التفاصيل", "▴ Less") if opened else self.T("▾ التفاصيل", "▾ Details"))
+
+    def toggle_details(self):
+        opened = self.tabs.isHidden()
+        self.tabs.setVisible(opened)
+        self.engine.settings["progressDetailsOpen"] = opened
+        self.engine.save_state()
+        self._update_details_button()
+        avail = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        if opened:
+            self.resize(max(self.width(), 700), min(700, avail.height() - 40))
+        else:
+            width = max(640, self.width())
+            self.adjustSize()
+            self.resize(width, self.minimumSizeHint().height())
 
     def _apply_icons(self):
         c = pal()
@@ -4834,6 +4859,14 @@ class SettingsDialog(QDialog):
         self.chk_assoc = QCheckBox(T("فتح ملفات التورنت وروابط ماجنت بالبرنامج","Open .torrent files and Magnet links with Scorpion"))
         self.chk_assoc.setChecked(bool(s.get("associateTorrents", True)))
         g2.addWidget(self.chk_assoc, 4, 0, 1, 3)
+        g2.addWidget(QLabel(T("عند بدء أي تحميل يظهر:", "When a download starts, show:")), 5, 0)
+        self.cmb_on_start = QComboBox()
+        for text, val in ((T("كارت صغير في ركن الشاشة", "A small card in the screen corner"), "card"),
+                          (T("نافذة التقدم الكاملة", "The full progress window"), "window"),
+                          (T("لا شيء", "Nothing"), "none")):
+            self.cmb_on_start.addItem(text, val)
+        self.cmb_on_start.setCurrentIndex(max(0, self.cmb_on_start.findData(s.get("onStartShow", "card"))))
+        g2.addWidget(self.cmb_on_start, 5, 1, 1, 2)
 
         # --- Scheduler ---
         g3 = card(T("الجدولة", "Scheduler"))
@@ -4883,6 +4916,7 @@ class SettingsDialog(QDialog):
         s["autoStartFromBrowser"] = self.chk_auto.isChecked()
         s["startWithWindows"] = self.chk_startup.isChecked()
         s["associateTorrents"] = self.chk_assoc.isChecked()
+        s["onStartShow"] = self.cmb_on_start.currentData() or "card"
         s["schedEnabled"] = self.chk_sched.isChecked()
         new_time = self.time_sched.time().toString("HH:mm")
         if new_time != s.get("schedTime"):
@@ -5514,6 +5548,325 @@ def item_status_text(it: dict, is_ar: bool) -> str:
         "active": ("جاري التحميل", "Downloading"),
     }[m][0 if is_ar else 1]
 
+class DownloadCard(QWidget):
+    """Small card in the screen corner for one download: live progress, then Open / Show in folder."""
+
+    action = pyqtSignal(str, str)  # download id, action
+
+    W, H = 384, 132
+
+    def __init__(self, dl_id: str, is_ar: bool):
+        super().__init__(
+            None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.dl_id, self.is_ar = dl_id, is_ar
+        self.T = (lambda ar, en: ar) if is_ar else (lambda ar, en: en)
+        self.hovered = False
+        self.dismiss_at = None
+        self.state = None
+        self.setFixedSize(self.W, self.H)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if is_ar else Qt.LayoutDirection.LeftToRight)
+        c = pal()
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        self.body = QFrame()
+        self.body.setObjectName("ToastCard")
+        self.body.setStyleSheet(
+            f"#ToastCard {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 12px; }}"
+            f"#ToastCard QLabel {{ background: transparent; }}"
+        )
+        shadow = QGraphicsDropShadowEffect(self.body)
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(0, 0, 0, 70))
+        self.body.setGraphicsEffect(shadow)
+        outer.addWidget(self.body)
+
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(12, 9, 10, 9)
+        lay.setSpacing(5)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        self.icon = QLabel()
+        self.icon.setFixedSize(22, 22)
+        top.addWidget(self.icon)
+        self.name = QLabel()
+        self.name.setStyleSheet("font-weight: 600;")
+        top.addWidget(self.name, 1)
+        self.btn_close = QPushButton()
+        self.btn_close.setObjectName("ToolBtn")
+        self.btn_close.setFixedSize(24, 24)
+        self.btn_close.setIcon(glyph_icon(ICONS["close"], c["muted"], 12))
+        self.btn_close.setToolTip(self.T("إغلاق", "Close"))
+        self.btn_close.clicked.connect(lambda: self.action.emit(self.dl_id, "close"))
+        top.addWidget(self.btn_close)
+        lay.addLayout(top)
+
+        self.status = QLabel()
+        self.status.setObjectName("Muted")
+        lay.addWidget(self.status)
+        self.bar = SlimProgressBar()
+        self.bar.setFixedHeight(6)
+        lay.addWidget(self.bar)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(6)
+        btns.addStretch()
+        self.btn_b = QPushButton()
+        self.btn_a = QPushButton()
+        for b in (self.btn_b, self.btn_a):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFixedHeight(30)
+            b.setStyleSheet("padding: 2px 14px;")
+            btns.addWidget(b)
+        self.btn_a.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_a.property("act")))
+        self.btn_b.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_b.property("act")))
+        lay.addLayout(btns)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _set_buttons(self, a: tuple, b: tuple, primary_a: bool = False):
+        for btn, (text, act) in ((self.btn_a, a), (self.btn_b, b)):
+            btn.setText(text)
+            btn.setProperty("act", act)
+        self.btn_a.setObjectName("PrimaryBtn" if primary_a else "")
+        self.btn_a.style().unpolish(self.btn_a)
+        self.btn_a.style().polish(self.btn_a)
+
+    def update_from(self, item: dict):
+        T = self.T
+        c = pal()
+        mode = item_mode(item)
+        pct = 100.0 if item.get("status") == "completed" else float(item.get("progress") or 0)
+        name = item.get("filename") or ""
+        if getattr(self, "_full_name", None) != name:
+            self._full_name = name
+            self._elide_name()
+            self.icon.setPixmap(file_type_icon(name).pixmap(22, 22))
+        if mode == "done":
+            size = item.get("totalSize") or item.get("downloadedBytes") or 0
+            text = T("✓ اكتمل التحميل", "✓ Download complete") + (f"  •  {L(format_bytes(size))}" if size else "")
+        elif mode == "error":
+            reason = item.get("errorMsg") or T("سبب غير معروف", "Unknown reason")
+            # An English reason inside an Arabic line keeps its own direction
+            if self.is_ar and not re.search(r"[؀-ۿ]", reason):
+                reason = "⁦" + reason + "⁩"  # LRI ... PDI: isolated left-to-right run
+            text = T("فشل: ", "Failed: ") + reason
+        elif mode == "active":
+            parts = [L(f"{pct:.0f}%"), L(format_speed(item.get("speed", 0)))]
+            if item.get("timeLeft"):
+                parts.append(T("متبقي ", "") + L(format_eta(item.get("timeLeft"))) + T("", " left"))
+            text = "  •  ".join(parts)
+        else:
+            text = item_status_text(item, self.is_ar)
+        _set_elided(self.status, text)
+        color = {"done": c["success"], "error": c["danger"]}.get(mode, c["muted"])
+        self.status.setStyleSheet(f"color: {color};")
+        self.bar.set_state(pct, mode)
+        self.bar.tick()
+
+        if mode != self.state:
+            self.state = mode
+            if mode == "done":
+                self._set_buttons((T("تشغيل", "Open"), "open"), (T("فتح المجلد", "Show in folder"), "folder"), True)
+                self.dismiss_at = time.time() + 6
+            elif mode == "error":
+                self._set_buttons((T("إعادة المحاولة", "Retry"), "retry"), (T("التفاصيل", "Details"), "details"), True)
+                self.dismiss_at = time.time() + 15
+            elif mode == "paused":
+                self._set_buttons((T("استئناف", "Resume"), "resume"), (T("التفاصيل", "Details"), "details"))
+                self.dismiss_at = None
+            else:
+                self._set_buttons((T("إيقاف مؤقت", "Pause"), "pause"), (T("التفاصيل", "Details"), "details"))
+                self.dismiss_at = None
+
+    def _elide_name(self):
+        # Shortened to the label's width, which is only known once the card is laid out
+        if self.name.width() > 20:
+            _set_elided(self.name, self._full_name)
+        else:
+            self.name.setText(self._full_name)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._elide_name)
+
+    def due(self) -> bool:
+        return bool(self.dismiss_at) and not self.hovered and time.time() >= self.dismiss_at
+
+    def enterEvent(self, event):
+        self.hovered = True
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hovered = False
+        if self.dismiss_at:
+            self.dismiss_at = max(self.dismiss_at, time.time() + 3)
+        super().leaveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.action.emit(self.dl_id, "details")
+        super().mouseReleaseEvent(event)
+
+
+class DownloadCardManager(QObject):
+    """Stacks download cards above the tray (newest at the bottom, at most 3) with slide and fade."""
+
+    MAX = 3
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.win = window
+        self.cards = {}  # download id -> card, in creation order
+        self._anims = []
+
+    def show_for(self, dl_id: str):
+        item = self.win.engine.downloads.get(dl_id)
+        if not item:
+            return
+        card = self.cards.get(dl_id)
+        if card is None:
+            card = DownloadCard(dl_id, self.win.lang == "ar")
+            card.action.connect(self._on_action)
+            self.cards[dl_id] = card
+            card.update_from(item)
+            self._layout(new=card)
+        else:
+            card.update_from(item)
+
+    def remove(self, dl_id: str):
+        card = self.cards.pop(dl_id, None)
+        if card is None:
+            return
+        anim = QPropertyAnimation(card, b"windowOpacity", self)
+        anim.setDuration(180)
+        anim.setStartValue(card.windowOpacity())
+        anim.setEndValue(0.0)
+        anim.finished.connect(card.close)
+        anim.finished.connect(card.deleteLater)
+        self._keep(anim)
+        self._layout()
+
+    def clear(self):
+        for dl_id in list(self.cards):
+            self.remove(dl_id)
+
+    def refresh(self):
+        for dl_id, card in list(self.cards.items()):
+            item = self.win.engine.downloads.get(dl_id)
+            if not item:
+                self.remove(dl_id)
+                continue
+            card.update_from(item)
+            if card.due():
+                self.remove(dl_id)
+
+    def _keep(self, anim):
+        self._anims = [a for a in self._anims if a.state() == QPropertyAnimation.State.Running] + [anim]
+        anim.start()
+
+    def _layout(self, new=None):
+        avail = QApplication.primaryScreen().availableGeometry()
+        visible = list(self.cards.values())[-self.MAX:]
+        for card in list(self.cards.values())[: -self.MAX] if len(self.cards) > self.MAX else []:
+            card.hide()
+        for i, card in enumerate(reversed(visible)):
+            target = QPoint(avail.right() - card.W - 6, avail.bottom() - (i + 1) * (card.H - 6) - 2)
+            if card is new:
+                card.setWindowOpacity(0.0)
+                card.move(target + QPoint(0, 18))
+                card.show()
+                fade = QPropertyAnimation(card, b"windowOpacity", self)
+                fade.setDuration(200)
+                fade.setStartValue(0.0)
+                fade.setEndValue(1.0)
+                self._keep(fade)
+            elif not card.isVisible():
+                card.setWindowOpacity(1.0)
+                card.move(target)
+                card.show()
+            slide = QPropertyAnimation(card, b"pos", self)
+            slide.setDuration(240)
+            slide.setStartValue(card.pos())
+            slide.setEndValue(target)
+            slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._keep(slide)
+
+    def _on_action(self, dl_id: str, act: str):
+        eng = self.win.engine
+        item = eng.downloads.get(dl_id) or {}
+        path = item.get("filePath") or ""
+        if act == "close":
+            self.remove(dl_id)
+        elif act == "details":
+            self.remove(dl_id)
+            self.win.open_progress_window(dl_id)
+        elif act == "pause":
+            eng.pause_download(dl_id)
+        elif act in ("resume", "retry"):
+            if item.get("status") == "error":
+                item["status"] = "paused"
+            eng.start_download(dl_id)
+        elif act == "open" and os.path.exists(path):
+            os.startfile(path)
+            self.remove(dl_id)
+        elif act == "folder" and os.path.exists(path):
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+            self.remove(dl_id)
+
+
+class TaskbarProgress:
+    """Progress on the app's taskbar button (ITaskbarList3), like Windows shows while copying files."""
+
+    NOPROGRESS, INDETERMINATE, NORMAL, ERROR, PAUSED = 0, 1, 2, 4, 8
+
+    def __init__(self):
+        self._tbl = None
+        self._last = None
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class GUID(ctypes.Structure):
+                _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD), ("Data3", wintypes.WORD),
+                            ("Data4", wintypes.BYTE * 8)]
+
+                def __init__(self, d1, d2, d3, d4):
+                    super().__init__(d1, d2, d3, (wintypes.BYTE * 8)(*d4))
+
+            clsid = GUID(0x56FDF344, 0xFD6D, 0x11D0, [0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90])
+            iid = GUID(0xEA1AFB91, 0x9E28, 0x4B86, [0x90, 0xE9, 0x9E, 0x9F, 0x8A, 0x5E, 0xEF, 0xAF])
+            ptr = ctypes.c_void_p()
+            if ctypes.windll.ole32.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid), ctypes.byref(ptr)) != 0:
+                return
+            vtbl = ctypes.cast(ctypes.cast(ptr, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+            ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p)(vtbl[3])(ptr)  # HrInit
+            self._set_value = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, wintypes.HWND, ctypes.c_ulonglong, ctypes.c_ulonglong)(vtbl[9])
+            self._set_state = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, wintypes.HWND, ctypes.c_int)(vtbl[10])
+            self._tbl = ptr
+        except Exception:
+            self._tbl = None
+
+    def update(self, hwnd: int, state: int, done: int = 0, total: int = 0):
+        if not self._tbl or not hwnd:
+            return
+        key = (hwnd, state, done * 1000 // total if total else 0)
+        if key == self._last:
+            return
+        self._last = key
+        try:
+            self._set_state(self._tbl, hwnd, state)
+            if state in (self.NORMAL, self.PAUSED, self.ERROR) and total:
+                self._set_value(self._tbl, hwnd, int(done), int(total))
+        except Exception:
+            pass
+
+
 # ==============================================================================
 # MAIN NATIVE DESKTOP APPLICATION WINDOW (SCORPION IDM)
 # ==============================================================================
@@ -5527,16 +5880,22 @@ class ScorpionMainWindow(QMainWindow):
         self.filter_state = "all"
         self.filter_cat = "ALL"
         self.open_progress_dialogs = {}
+        self.cards = DownloadCardManager(self)
+        self.taskbar = TaskbarProgress()
+        self._seen_status = {}
+        self._tray_badge_count = None
 
         icon_path = os.path.join(RESOURCE_ROOT, "build", "icon.ico")
         self.app_icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
         if not self.app_icon.isNull():
             self.setWindowIcon(self.app_icon)
 
-        self.resize(1180, 720)
+        avail = QApplication.primaryScreen().availableGeometry()
+        self.resize(min(1180, avail.width() - 40), min(720, avail.height() - 40))
         self.setup_ui()
         self.setup_tray()
         self.apply_theme_and_lang()
+        self._restore_window_geometry()
 
         # Clipboard monitoring for direct links
         self.clipboard = QApplication.clipboard()
@@ -5618,12 +5977,19 @@ class ScorpionMainWindow(QMainWindow):
         # 1. Toolbar: one primary action, the rest are calm flat tool buttons
         toolbar = QFrame()
         toolbar.setObjectName("ToolbarFrame")
+        # The toolbar never sets the window's minimum width: _apply_layout_mode fits it to the width instead
+        toolbar.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        toolbar.setMinimumWidth(0)
+        self._toolbar_frame = toolbar
         tb = QHBoxLayout(toolbar)
         tb.setContentsMargins(14, 10, 14, 10)
         tb.setSpacing(4)
 
+        self._toolbar_buttons = []
+
         def tool(name, slot, primary=False):
             b = QPushButton()
+            self._toolbar_buttons.append(b)
             b.setObjectName("PrimaryBtn" if primary else "ToolBtn")
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setIconSize(QSize(16, 16))
@@ -5788,8 +6154,10 @@ class ScorpionMainWindow(QMainWindow):
             (self.btn_lang, "English" if is_ar else "العربية", "lang", None),
         ]
         for btn, text, icon, color in labels:
+            btn.setProperty("fullText", text)
             btn.setText(text)
             btn.setIcon(glyph_icon(ICONS[icon], color or c["text"]))
+        self._apply_layout_mode(force=True)
         self.txt_search.setPlaceholderText(T("🔍 بحث في التحميلات (Ctrl+F)", "🔍 Search downloads (Ctrl+F)"))
 
         self.tree.clear()
@@ -5839,17 +6207,25 @@ class ScorpionMainWindow(QMainWindow):
         self._row_ids = []
         self.refresh_all()
 
+    def _restyle_cards(self):
+        # Cards are drawn with the current theme and language; reopen them in the new style
+        for dl_id in list(self.cards.cards):
+            self.cards.cards.pop(dl_id).close()
+            self.cards.show_for(dl_id)
+
     def toggle_theme(self):
         self.theme = "dark" if self.theme == "light" else "light"
         self.engine.settings["theme"] = self.theme
         self.engine.save_state()
         self.apply_theme_and_lang()
+        self._restyle_cards()
 
     def toggle_lang(self):
         self.lang = "en" if self.lang == "ar" else "ar"
         self.engine.settings["lang"] = self.lang
         self.engine.save_state()
         self.apply_theme_and_lang()
+        self._restyle_cards()
 
     def _on_remote_lang_changed(self, new_lang: str):
         if new_lang in ("ar", "en") and self.lang != new_lang:
@@ -5994,7 +6370,7 @@ class ScorpionMainWindow(QMainWindow):
                 ),
             }
             item = self.engine.add_download(opts)
-            self.open_progress_window(item["id"])
+            self.show_download_started(item["id"])
         else:
             self.open_add_dialog(url, is_video and quality != "direct", is_torrent)
 
@@ -6003,7 +6379,14 @@ class ScorpionMainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_opts:
             item = self.engine.add_download(dlg.result_opts)
             if dlg.result_opts.get("startImmediately"):
-                self.open_progress_window(item["id"])
+                self.show_download_started(item["id"])
+
+    def show_download_started(self, dl_id: str):
+        mode = self.engine.settings.get("onStartShow", "card")
+        if mode == "window":
+            self.open_progress_window(dl_id)
+        elif mode == "card":
+            self.cards.show_for(dl_id)
 
     def open_progress_window(self, dl_id: str):
         w = self.open_progress_dialogs.get(dl_id)
@@ -6031,7 +6414,7 @@ class ScorpionMainWindow(QMainWindow):
         dl_id = self.get_selected_id()
         if dl_id:
             self.engine.start_download(dl_id)
-            self.open_progress_window(dl_id)
+            self.show_download_started(dl_id)
 
     def pause_selected(self):
         dl_id = self.get_selected_id()
@@ -6072,32 +6455,139 @@ class ScorpionMainWindow(QMainWindow):
             self.open_add_dialog(text, False, is_tor)
 
     def on_download_completed(self, dl_id: str):
-        item = self.engine.downloads.get(dl_id)
-        if not item:
+        if not self.engine.downloads.get(dl_id):
             return
         dlg = self.open_progress_dialogs.get(dl_id)
         if dlg is not None and dlg.isVisible():
             # The progress window itself switches to the "complete" state
             return
-        msg = QMessageBox(self if self.isVisible() else None)
-        msg.setWindowFlags(msg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        msg.setWindowTitle("اكتمل التحميل - Scorpion IDM" if self.lang == "ar" else "Download Complete - Scorpion IDM")
-        msg.setText(
-            f"✅ اكتمل تحميل الملف بنجاح:\n{item['filename']}\n\nالمسار:\n{item['filePath']}"
-            if self.lang == "ar"
-            else f"✅ File downloaded successfully:\n{item['filename']}\n\nSaved to:\n{item['filePath']}"
-        )
-        btn_open = msg.addButton("تشغيل الملف" if self.lang == "ar" else "Open File", QMessageBox.ButtonRole.AcceptRole)
-        btn_folder = msg.addButton("فتح المجلد" if self.lang == "ar" else "Open Folder", QMessageBox.ButtonRole.ActionRole)
-        msg.addButton("إغلاق" if self.lang == "ar" else "Close", QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
+        self.cards.show_for(dl_id)
 
-        if msg.clickedButton() == btn_open and os.path.exists(item["filePath"]):
-            os.startfile(item["filePath"])
-        elif msg.clickedButton() == btn_folder and os.path.exists(item["filePath"]):
-            subprocess.Popen(["explorer", "/select,", os.path.normpath(item["filePath"])])
+    def _update_status_surfaces(self, items: list):
+        """Corner card on errors, progress on the taskbar button, number of active downloads on the tray icon."""
+        for it in items:
+            st, prev = it.get("status"), self._seen_status.get(it["id"])
+            if st == "error" and prev not in (None, "error"):
+                dlg = self.open_progress_dialogs.get(it["id"])
+                if not (dlg is not None and dlg.isVisible()):
+                    self.cards.show_for(it["id"])
+            self._seen_status[it["id"]] = st
+        self.cards.refresh()
+
+        active = [it for it in items if it.get("status") == "downloading"]
+        total = sum(int(it.get("totalSize") or 0) for it in active)
+        done = sum(int(it.get("downloadedBytes") or 0) for it in active)
+        if active:
+            state = TaskbarProgress.NORMAL if total else TaskbarProgress.INDETERMINATE
+        elif any(it.get("status") == "error" and self._seen_status.get(it["id"]) == "error"
+                 and time.time() - (it.get("createdAt", 0) / 1000) < 600 for it in items[:1]):
+            state = TaskbarProgress.ERROR
+        else:
+            state = TaskbarProgress.NOPROGRESS
+        if self.isVisible():
+            self.taskbar.update(int(self.winId()), state, done, total or 1)
+
+        n = len(active)
+        if getattr(self, "tray_icon", None) is not None and n != self._tray_badge_count:
+            self._tray_badge_count = n
+            self.tray_icon.setIcon(self._tray_icon_with_badge(n))
+            self.tray_icon.setToolTip(
+                f"Scorpion Download Manager v{APP_VERSION}"
+                + ((f" — {n} تحميل شغال" if self.lang == "ar" else f" — {n} downloading") if n else "")
+            )
+
+    def _tray_icon_with_badge(self, n: int) -> QIcon:
+        if not n:
+            return self.app_icon
+        pm = self.app_icon.pixmap(64, 64)
+        if pm.isNull():
+            return self.app_icon
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(pal()["accent"]))
+        p.drawEllipse(QRectF(30, 30, 34, 34))
+        p.setPen(QColor("#ffffff"))
+        f = QFont()
+        f.setPixelSize(22)
+        f.setBold(True)
+        p.setFont(f)
+        p.drawText(QRectF(30, 30, 34, 34), Qt.AlignmentFlag.AlignCenter, str(n) if n < 10 else "9+")
+        p.end()
+        return QIcon(pm)
+
+    def _apply_layout_mode(self, force: bool = False):
+        """
+        Fits any screen, down to half of a laptop screen: toolbar buttons become icons (their text moves
+        to the tooltip), the sidebar narrows and less important columns shrink or hide.
+        """
+        def set_texts(m):
+            # Narrowest layout: tighter gaps and a smaller search box so every button still fits
+            self._toolbar_frame.layout().setSpacing(1 if m == "tiny" else 4)
+            self.txt_search.setMinimumWidth(80 if m == "tiny" else 130)
+            self.txt_search.setMaximumWidth(150 if m == "tiny" else 240)
+            for btn in self._toolbar_buttons:
+                full = btn.property("fullText") or ""
+                keep_text = m == "full" or (btn is self.btn_add and m == "compact")
+                btn.setText(full if keep_text else "")
+                btn.setToolTip("" if keep_text else full)
+
+        # Width each layout needs, measured for the current language (Arabic labels are longer)
+        key = (self.lang, tuple(b.property("fullText") or "" for b in self._toolbar_buttons))
+        if force or getattr(self, "_mode_widths_key", None) != key:
+            self._mode_widths = {}
+            for m in ("full", "compact", "tiny"):
+                set_texts(m)
+                self._mode_widths[m] = self._toolbar_frame.layout().sizeHint().width()
+            self._mode_widths_key = key
+            self._layout_mode = None
+        w = self.width()
+        mode = "full" if self._mode_widths["full"] <= w else ("compact" if self._mode_widths["compact"] <= w else "tiny")
+        if mode == getattr(self, "_layout_mode", None):
+            return
+        self._layout_mode = mode
+        set_texts(mode)
+        self.tree.setFixedWidth({"full": 230, "compact": 190, "tiny": 150}[mode])
+        widths = {
+            "full": (110, 190, 110, 110, 120),
+            "compact": (95, 150, 95, 90, 105),
+            "tiny": (85, 120, 85, 0, 95),
+        }[mode]
+        hh = self.table.horizontalHeader()
+        for col, width in zip((1, 2, 3, 4, 5), widths):
+            self.table.setColumnHidden(col, width == 0)
+            if width:
+                hh.resizeSection(col, width)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "tree"):
+            self._apply_layout_mode()
+
+    def _restore_window_geometry(self):
+        raw = self.engine.settings.get("windowGeometry") or ""
+        if raw:
+            try:
+                self.restoreGeometry(QByteArray.fromBase64(raw.encode("ascii")))
+            except Exception:
+                pass
+        # Never larger than the screen or off it (e.g. saved on a bigger monitor that is now gone)
+        avail = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        w, h = min(self.width(), avail.width()), min(self.height(), avail.height())
+        x = min(max(self.x(), avail.left()), avail.right() - w + 1)
+        y = min(max(self.y(), avail.top()), avail.bottom() - h + 1)
+        self.setGeometry(x, y, w, h)
+        self._apply_layout_mode(force=True)
+
+    def _save_window_geometry(self):
+        try:
+            self.engine.settings["windowGeometry"] = bytes(self.saveGeometry().toBase64()).decode("ascii")
+            self.engine.save_state()
+        except Exception:
+            pass
 
     def closeEvent(self, event):
+        self._save_window_geometry()
         # Like IDM: closing the main window keeps Scorpion running in the tray to catch browser downloads
         if getattr(self, "tray_icon", None) is not None and not getattr(self, "_really_quit", False):
             event.ignore()
@@ -6117,6 +6607,8 @@ class ScorpionMainWindow(QMainWindow):
         self.app.quit()
 
     def quit_app(self):
+        if self.isVisible():
+            self._save_window_geometry()
         self._really_quit = True
         self.engine.pause_all()
         self.app.quit()
@@ -6125,6 +6617,7 @@ class ScorpionMainWindow(QMainWindow):
         is_ar = self.lang == "ar"
         c = pal()
         items = sorted(self.engine.downloads.values(), key=lambda x: x.get("createdAt", 0), reverse=True)
+        self._update_status_surfaces(items)
 
         # sidebar counts
         counts = {k: 0 for k in self.nav_items}

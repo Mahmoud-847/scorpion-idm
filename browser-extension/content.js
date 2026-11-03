@@ -39,6 +39,8 @@
       langToggle: 'EN',
       langTitle: 'Switch to English',
       closeTitle: 'إغلاق الشريط',
+      quickTitle: 'اضغط للتحميل بأفضل جودة — أو ▼ لاختيار الجودة',
+      menuTitle: 'اختيار الجودة',
     },
     en: {
       dir: 'ltr',
@@ -59,6 +61,8 @@
       langToggle: 'ع',
       langTitle: 'التحويل إلى العربية',
       closeTitle: 'Close bar',
+      quickTitle: 'Click to download in the best quality — or ▼ to pick a quality',
+      menuTitle: 'Pick a quality',
     },
   };
 
@@ -370,6 +374,8 @@
       <span class="scorpion-idm-badge">▼</span>
     `;
     labelEl = triggerEl.querySelector('.scorpion-btn-text');
+    triggerEl.title = tr.quickTitle;
+    triggerEl.querySelector('.scorpion-idm-badge').title = tr.menuTitle;
 
     langBtnEl = document.createElement('button');
     langBtnEl.type = 'button';
@@ -424,7 +430,7 @@
       if (!isDragging || !panelEl) return;
       const dx = Math.abs(e.clientX - (panelEl.getBoundingClientRect().left + dragOffsetX));
       const dy = Math.abs(e.clientY - (panelEl.getBoundingClientRect().top + dragOffsetY));
-      if (dx > 4 || dy > 4) didMove = true;
+      if (dx > 8 || dy > 8) didMove = true;
       if (!didMove) return;
       const panelW = panelEl.offsetWidth || 310;
       const newLeft = Math.max(8, Math.min(window.innerWidth - panelW - 8, e.clientX - dragOffsetX));
@@ -448,6 +454,14 @@
         return;
       }
       renderDropdownOptions();
+      if (!(e.target.closest && e.target.closest('.scorpion-idm-badge'))) {
+        // Quick download: the first option is "best quality" (or best audio in audio mode)
+        const first = dropdownEl.querySelector('.scorpion-idm-option');
+        if (first) {
+          first.click();
+          return;
+        }
+      }
       if (panelEl && dropdownEl) {
         const pRect = panelEl.getBoundingClientRect();
         if (window.innerHeight - pRect.bottom < 220) {
@@ -469,17 +483,17 @@
       scheduleHide();
     });
 
+    ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'dblclick'].forEach((type) => {
+      panelEl.addEventListener(type, (e) => e.stopPropagation());
+    });
+
     panelEl.appendChild(mainBtn);
     panelEl.appendChild(dropdownEl);
     document.documentElement.appendChild(panelEl);
     return panelEl;
   }
 
-  function renderDropdownOptions() {
-    if (!dropdownEl) return;
-    dropdownEl.innerHTML = '';
-    const tr = t();
-
+  function computeDownloadTarget() {
     const pageUrl = window.location.href;
     const isFramed = window.top !== window.self;
     const trackInfo = extractPlayingTrackInfo();
@@ -507,6 +521,23 @@
       else if (sniffed && sniffed.isManifest) targetUrl = sniffed.url;
       else if (sniffed) targetUrl = sniffed.url;
     }
+    return { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl };
+  }
+
+  // Read the qualities as soon as the button shows, so the menu is complete when it opens
+  function prefetchQualities() {
+    if (activeMode !== 'video') return;
+    try {
+      const tgt = computeDownloadTarget();
+      if (!tgt.isMusicPlatform) listQualities(tgt.targetUrl, tgt.pageUrl);
+    } catch (_) {}
+  }
+
+  function renderDropdownOptions() {
+    if (!dropdownEl) return;
+    dropdownEl.innerHTML = '';
+    const tr = t();
+    const { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl } = computeDownloadTarget();
 
     const isDirectAudioFile =
       activeMode === 'audio' &&
@@ -763,6 +794,7 @@
   function scheduleHide(delayMs = 3800) {
     if (hideTimeout) clearTimeout(hideTimeout);
     hideTimeout = setTimeout(() => {
+      if (dropdownEl && dropdownEl.classList.contains('open')) return;
       if (!isHoveringPanel && panelEl) {
         dropdownEl.classList.remove('open');
         panelEl.style.display = 'none';
@@ -784,7 +816,30 @@
     activeMode = isAud ? 'audio' : 'video';
     positionPanelOverMedia(media);
     scheduleHide(isAud ? 7500 : 3800);
+    if (media.__scorpionPrefetchedFor !== window.location.href) {
+      media.__scorpionPrefetchedFor = window.location.href;
+      setTimeout(prefetchQualities, 600);
+    }
   }
+
+  let lastPointerCheck = 0;
+  document.addEventListener(
+    'mousemove',
+    (e) => {
+      const now = Date.now();
+      if (now - lastPointerCheck < 250) return;
+      lastPointerCheck = now;
+      for (const media of document.querySelectorAll('video')) {
+        if (!media.__scorpionBoundV4 || isDismissed(media)) continue;
+        const r = media.getBoundingClientRect();
+        if (r.width > 80 && r.height > 60 && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+          activateMediaElement(media);
+          break;
+        }
+      }
+    },
+    { capture: true, passive: true }
+  );
 
   function bindMediaElement(media) {
     if (media.__scorpionBoundV4) return;
