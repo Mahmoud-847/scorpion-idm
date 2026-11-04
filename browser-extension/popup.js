@@ -17,7 +17,8 @@ document.addEventListener('DOMContentLoaded', () => {
       offline: 'افتح برنامج Scorpion 🔴',
       intercept: 'المسؤول الرئيسي لكل التحميلات:',
       videoBtn: 'إظهار زر التحميل فوق الفيديوهات:',
-      grabBtn: '🎬 سحب فيديو الصفحة الحالية الآن',
+      grabBtn: '🎬 تحميل الفيديو المحدد الآن',
+      noVideo: 'قف على الفيديو المطلوب أو مرّر الصفحة إليه، ثم استخدم الزر فوقه.',
       toggleBtn: 'EN',
     },
     en: {
@@ -26,7 +27,8 @@ document.addEventListener('DOMContentLoaded', () => {
       offline: 'Open Scorpion App 🔴',
       intercept: 'Intercept all browser downloads:',
       videoBtn: 'Show floating download bar on videos:',
-      grabBtn: '🎬 Grab Current Page Video Now',
+      grabBtn: '🎬 Download the selected video',
+      noVideo: 'Point to the video or scroll to it, then use the button above it.',
       toggleBtn: 'عربي',
     },
   };
@@ -84,26 +86,14 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs && tabs[0];
       if (!tab || !tab.url) return;
-      if (new URL(tab.url).hostname === 'web.telegram.org') {
-        chrome.tabs.sendMessage(tab.id, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' }, () => {
-          if (chrome.runtime.lastError) return;
-          window.close();
-        });
-        return;
-      }
-      chrome.runtime.sendMessage(
-        {
-          action: 'SCORPION_DOWNLOAD_VIDEO',
-          payload: {
-            url: tab.url,
-            pageUrl: tab.url,
-            title: tab.title || 'Video_Download',
-            quality: 'best',
-            type: 'video',
-          },
-        },
-        () => window.close()
-      );
+      chrome.tabs.sendMessage(tab.id, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' }, (res) => {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          statusBadge.textContent = (I18N[currentLang] || I18N.ar).noVideo;
+          statusBadge.className = 'status';
+          return;
+        }
+        window.close();
+      });
     });
   });
 });

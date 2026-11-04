@@ -178,3 +178,11 @@
   color: #22d3ee !important;
   flex-shrink: 0 !important;
 }
+
+.scorpion-idm-hint {
+  padding: 8px 10px !important;
+  color: #cbd5e1 !important;
+  font-size: 12px !important;
+  line-height: 1.6 !important;
+  max-width: 300px !important;
+}

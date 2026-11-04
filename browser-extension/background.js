@@ -70,8 +70,8 @@ if (chrome.tabs) {
 }
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (tab && ScorpionMedia.isTelegram(tab.url) &&
-      ['scorpion-download-media', 'scorpion-download-page-video'].includes(info.menuItemId)) {
+  if (tab && (info.menuItemId === 'scorpion-download-page-video' ||
+      ScorpionMedia.isTelegram(tab.url) && info.menuItemId === 'scorpion-download-media')) {
     chrome.tabs.sendMessage(tab.id, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA', src: info.srcUrl || '' },
       { frameId: info.frameId || 0 }, () => void chrome.runtime.lastError);
     return;
@@ -306,7 +306,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         fetch(`${SCORPION_SERVER}/formats`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
-          body: JSON.stringify({ url: msg.url || '', referer: msg.referer || '', tab: tabUrl, candidates: msg.candidates || [], cookies }),
+          body: JSON.stringify({ url: msg.url || '', referer: msg.referer || '', tab: tabUrl, candidates: msg.candidates || [], cookies,
+            strictTarget: Boolean(msg.strictTarget) }),
           signal: ctrl.signal,
         })
       )

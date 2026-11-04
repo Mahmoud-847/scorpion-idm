@@ -124,6 +124,52 @@ class MediaRegressionTests(unittest.TestCase):
         self.assertEqual(info["url"], "https://cdn.test/full.mp4")
         self.assertEqual(extractor.extract_info.call_count, 2)
 
+    def test_strict_target_never_falls_back_to_parent_tab_or_page_scrape(self):
+        extractor = Mock()
+        extractor.extract_info.side_effect = [RuntimeError("unsupported URL"), {"url": "https://cdn.test/other-video.mp4"}]
+        item = {"url": "https://player.test/selected", "tabUrl": "https://site.test/feed", "strictTarget": True}
+        with patch.object(self.engine, "_scrape_media_urls", return_value=["https://cdn.test/other-video.mp4"]) as scrape:
+            with self.assertRaisesRegex(RuntimeError, "الفيديو المحدد"):
+                self.engine._extract_with_fallback(extractor, item)
+        extractor.extract_info.assert_called_once_with(item["url"], download=False)
+        scrape.assert_not_called()
+
+    def test_strict_target_uses_only_explicit_candidates_and_never_audio_search(self):
+        extractor = Mock()
+        extractor.extract_info.side_effect = [RuntimeError("unsupported URL"), {"url": "https://cdn.test/selected.mp4"}]
+        item = {"url": "https://soundcloud.com/artist/selected", "videoQuality": "audio", "strictTarget": True,
+                "tabUrl": "https://site.test/feed", "candidates": ["https://cdn.test/selected.mp4"]}
+        with patch.object(self.engine, "_build_audio_search_query") as search:
+            info = self.engine._extract_with_fallback(extractor, item)
+        search.assert_not_called()
+        self.assertEqual(info["url"], "https://cdn.test/selected.mp4")
+        self.assertEqual([call.args[0] for call in extractor.extract_info.call_args_list],
+                         ["https://soundcloud.com/artist/selected", "https://cdn.test/selected.mp4"])
+
+    def test_strict_target_does_not_choose_first_video_of_a_playlist(self):
+        extractor = Mock()
+        extractor.extract_info.return_value = {"entries": [{"url": "https://cdn.test/first.mp4"},
+                                                           {"url": "https://cdn.test/second.mp4"}]}
+        with self.assertRaisesRegex(RuntimeError, "الفيديو المحدد"):
+            self.engine._extract_with_fallback(extractor, {"url": "https://site.test/feed", "strictTarget": True})
+
+    def test_strict_target_is_saved_in_download_and_defaults_to_legacy_behavior(self):
+        strict = self.engine.add_download({"url": "https://cdn.test/selected.mp4", "isVideo": True,
+                                           "startImmediately": False, "strictTarget": True})
+        legacy = self.engine.add_download({"url": "https://cdn.test/manual.mp4", "isVideo": True,
+                                           "startImmediately": False})
+        self.assertIs(strict["strictTarget"], True)
+        self.assertIs(legacy["strictTarget"], False)
+
+    def test_strict_quality_request_does_not_reuse_general_fallback_cache(self):
+        url = "https://player.test/selected"
+        self.engine._quality_cache = {url: (sq.time.time(), {"ok": True, "title": "Another video", "qualities": []})}
+        with patch.object(self.engine, "_extract_with_fallback", return_value={"title": "Selected video", "url": url}) as extract, \
+             patch.object(self.engine, "_js_runtime_opts", return_value={}), patch.object(sq.yt_dlp, "YoutubeDL"):
+            result = self.engine.list_video_qualities(url, tab_url="https://site.test/feed", strict_target=True)
+        self.assertEqual(result["title"], "Selected video")
+        self.assertIs(extract.call_args.args[1]["strictTarget"], True)
+
     def test_three_second_preview_cannot_complete_long_video(self):
         with self.assertRaises(RuntimeError):
             validate_media(str(self.video), sq.find_tool("ffprobe"), 120)

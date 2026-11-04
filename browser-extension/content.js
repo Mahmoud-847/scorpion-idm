@@ -20,6 +20,65 @@
   let dismissedForUrl = '';
   let panelDragging = false;
   let transferInProgress = false;
+  let activeSource = '';
+  let mediaGeneration = 0;
+  let menuGeneration = 0;
+  let pointerPosition = null;
+  let selectionReason = 'viewport';
+  let activePage = '';
+  let viewportRefreshPending = false;
+
+  function sourceOf(media) {
+    return media && (media.currentSrc || media.src) || '';
+  }
+
+  function visibleArea(media) {
+    if (!media || !media.isConnected || typeof media.getBoundingClientRect !== 'function') return 0;
+    const rect = media.getBoundingClientRect();
+    const isVideo = media.tagName === 'VIDEO';
+    if (rect.width < (isVideo ? 160 : 120) || rect.height < (isVideo ? 100 : 20)) return 0;
+    return Math.max(0, Math.min(window.innerWidth, rect.right) - Math.max(0, rect.left)) *
+      Math.max(0, Math.min(window.innerHeight, rect.bottom) - Math.max(0, rect.top));
+  }
+
+  function isSelectableMedia(media) {
+    if (!media || !sourceOf(media) || !visibleArea(media)) return false;
+    const rect = media.getBoundingClientRect();
+    return Math.min(window.innerHeight - 8, rect.bottom) - Math.max(8, rect.top + 10) >= 38;
+  }
+
+  function mediaSession() {
+    return { media: activeMedia, source: sourceOf(activeMedia), page: location.href, generation: mediaGeneration,
+      duration: ScorpionMedia.mediaDuration(activeMedia) };
+  }
+
+  function sessionIsCurrent(session) {
+    if (!window.document) return false;
+    return Boolean(session && session.media === activeMedia && session.source === sourceOf(activeMedia) &&
+      session.page === location.href && session.generation === mediaGeneration && isSelectableMedia(activeMedia));
+  }
+
+  function hidePanel() {
+    if (panelEl) panelEl.style.display = 'none';
+    if (dropdownEl) dropdownEl.classList.remove('open');
+    isHoveringPanel = false;
+  }
+
+  function chooseVisibleMedia() {
+    const candidates = Array.from(document.querySelectorAll('video, audio'))
+      .filter((media) => isSelectableMedia(media) && !isDismissed(media));
+    const score = (media) => {
+      const rect = media.getBoundingClientRect();
+      const underPointer = pointerPosition && pointerPosition.x >= rect.left && pointerPosition.x <= rect.right &&
+        pointerPosition.y >= rect.top && pointerPosition.y <= rect.bottom;
+      const visibleCenter = (Math.max(0, rect.top) + Math.min(window.innerHeight, rect.bottom)) / 2;
+      return { underPointer: Boolean(underPointer), distance: Math.abs(visibleCenter - window.innerHeight / 2) };
+    };
+    return candidates.sort((a, b) => {
+      const sa = score(a), sb = score(b);
+      return Number(sb.underPointer) - Number(sa.underPointer) || sa.distance - sb.distance || visibleArea(b) - visibleArea(a);
+    })[0] || null;
+  }
 
   const I18N = {
     ar: {
@@ -214,9 +273,7 @@
     if (streamMap.size > 128) streamMap.delete(streamMap.keys().next().value);
     detectedStreams = Array.from(streamMap.values()).sort((a, b) => b.score - a.score || b.t - a.t);
 
-    if (isAudio && (!activeMedia || activeMode === 'audio') && window.top === window.self) {
-      showForAudioStream();
-    }
+    // A network request alone never makes an overlay: it may belong to another player or a UI sound.
   }
 
   function scanPerformance() {
@@ -310,10 +367,12 @@
   function findPermalinksNearMedia(media) {
     const found = [];
     try {
-      if (!media || PERMALINK_RE.test(location.pathname + location.search)) return found;
+      if (!media) return found;
       const site = siteOf(location.hostname);
       let el = media.parentElement;
       for (let depth = 0; el && el !== document.body && depth < 16 && !found.length; depth++, el = el.parentElement) {
+        // Once a container holds several players, its links no longer identify this one safely.
+        if (el.querySelectorAll('video, audio').length > 1) break;
         const anchors = el.querySelectorAll('a[href]');
         if (anchors.length > 400) break;
         for (const a of anchors) {
@@ -329,8 +388,14 @@
         }
       }
     } catch (_) {}
-    // Video addresses first (a post can link to its comments or photos too)
-    return found.sort((a, b) => VIDEO_PERMALINK_RE.test(b) - VIDEO_PERMALINK_RE.test(a)).slice(0, 4);
+    const postIdentity = (url) => {
+      const parsed = new URL(url);
+      return parsed.origin + parsed.pathname.replace(/\/$/, '') +
+        ['v', 'story_fbid', 'video_id', 'fbid'].map((key) => `|${key}=${parsed.searchParams.get(key) || ''}`).join('');
+    };
+    // Several different posts near one player are ambiguous. Never guess the first link.
+    if (new Set(found.map(postIdentity)).size > 1) return [];
+    return found.slice(0, 1);
   }
 
   // Extract the exact currently playing song title, artist, and track URL from music sites
@@ -412,13 +477,17 @@
           const info = extractPlayingTrackInfo();
           sendResponse({ title: info.title });
         }
-        if (msg && msg.action === 'SCORPION_DOWNLOAD_CURRENT_MEDIA' && ScorpionMedia.isTelegram(location.href)) {
-          const media = msg.src ? Array.from(document.querySelectorAll('video')).find((el) => (el.currentSrc || el.src) === msg.src) : activeMedia;
-          if (!media) { sendResponse({ ok: false }); return; }
-          activateMediaElement(media);
+        if (msg && msg.action === 'SCORPION_DOWNLOAD_CURRENT_MEDIA') {
+          const media = msg.src ? Array.from(document.querySelectorAll('video')).find((el) => sourceOf(el) === msg.src) :
+            (isSelectableMedia(activeMedia) ? activeMedia : chooseVisibleMedia());
+          if (!isSelectableMedia(media)) { sendResponse({ ok: false }); return; }
+          dismissedForUrl = '';
+          media.__scorpionDismissed = '';
+          activateMediaElement(media, 'explicit');
           const target = computeDownloadTarget();
-          triggerVideoDownload({ url: target.targetUrl, title: target.pageTitle, quality: 'best', type: 'video' });
-          sendResponse({ ok: true });
+          const ok = triggerVideoDownload({ url: target.targetUrl, pageUrl: target.effectivePageUrl, referer: location.href,
+            candidates: target.candidates, strictTarget: true, title: target.pageTitle, quality: 'best', type: 'video' }, mediaSession());
+          sendResponse({ ok });
         }
       });
     } catch (_) {}
@@ -591,10 +660,13 @@
         ? activeMedia.currentSrc || activeMedia.src
         : null;
 
-    const sniffed = bestStream(activeMode === 'audio');
+    // Requests are frame-wide, so only the actual element's source is a proven stream for this player.
+    const sources = new Set([sourceOf(activeMedia), ...(activeMedia ? Array.from(activeMedia.querySelectorAll('source')).map((s) => s.src) : [])]);
+    const scopedStreams = detectedStreams.filter((stream) => sources.has(stream.url));
+    const sniffed = scopedStreams.find((stream) => stream.isManifest) || scopedStreams[0];
     const permalinks = findPermalinksNearMedia(activeMedia);
     // A track address from a music site wins; otherwise the post around the video beats the feed's address
-    const trackUrl = trackInfo.trackUrl && trackInfo.trackUrl !== pageUrl ? trackInfo.trackUrl : '';
+    const trackUrl = activeMedia && activeMedia.tagName === 'AUDIO' && trackInfo.trackUrl && trackInfo.trackUrl !== pageUrl ? trackInfo.trackUrl : '';
     const effectivePageUrl =
       resolvePostUrlForMedia(activeMedia, resolveEmbeddedVideoPage(trackUrl || permalinks[0] || pageUrl));
     const isMusicPlatform = MUSIC_SITE_RE.test(isFramed ? document.referrer || effectivePageUrl : effectivePageUrl);
@@ -604,7 +676,11 @@
       );
 
     let targetUrl = effectivePageUrl;
-    if (!isKnownVideoSite && !isMusicPlatform) {
+    const multipleMedia = document.querySelectorAll('video, audio').length > 1;
+    const scopedPost = permalinks.length > 0 || resolvePostUrlForMedia(activeMedia, pageUrl) !== pageUrl ||
+      !multipleMedia && (effectivePageUrl !== pageUrl || PERMALINK_RE.test(location.pathname + location.search));
+    const ambiguous = multipleMedia && !scopedPost && !directMediaSrc && !ScorpionMedia.isTelegram(pageUrl);
+    if ((!isKnownVideoSite && !isMusicPlatform) || multipleMedia && directMediaSrc) {
       if (directMediaSrc) targetUrl = directMediaSrc;
       else if (sniffed && sniffed.isManifest) targetUrl = sniffed.url;
       // A page extractor is safer than an unrelated short MP4 loaded by an ad or background animation.
@@ -613,9 +689,9 @@
     const addCandidate = (u) => {
       if (u && /^https?:\/\//i.test(u) && !candidates.includes(u)) candidates.push(u);
     };
-    [targetUrl, effectivePageUrl, ...permalinks, pageUrl, directMediaSrc].forEach(addCandidate);
-    detectedStreams.filter((st) => !st.isAudio && Date.now() - st.t < 30000).slice(0, 3).forEach((st) => addCandidate(st.url));
-    return { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl, candidates };
+    [targetUrl, ...permalinks, directMediaSrc, ...(!multipleMedia ? [effectivePageUrl] : [])].forEach(addCandidate);
+    scopedStreams.forEach((stream) => addCandidate(stream.url));
+    return { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl, candidates, scopedStreams, ambiguous };
   }
 
   // Read the qualities as soon as the button shows, so the menu is complete when it opens
@@ -624,15 +700,25 @@
     if (ScorpionMedia.isTelegram(location.href)) return;
     try {
       const tgt = computeDownloadTarget();
-      if (!tgt.isMusicPlatform) listQualities(tgt.targetUrl, tgt.pageUrl, tgt.candidates);
+      if (!tgt.isMusicPlatform && !tgt.ambiguous) listQualities(tgt.targetUrl, tgt.pageUrl, tgt.candidates);
     } catch (_) {}
   }
 
   function renderDropdownOptions() {
     if (!dropdownEl) return;
+    const session = mediaSession();
+    const renderedMenu = ++menuGeneration;
     dropdownEl.innerHTML = '';
     const tr = t();
-    const { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl, candidates } = computeDownloadTarget();
+    const { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl, candidates, scopedStreams, ambiguous } = computeDownloadTarget();
+    if (ambiguous) {
+      const message = document.createElement('div');
+      message.className = 'scorpion-idm-hint';
+      message.textContent = currentLang === 'ar' ? 'افتح منشور الفيديو نفسه لتحديده بدقة، ثم شغّله.' :
+        'Open this video’s own post and play it to identify its source.';
+      dropdownEl.appendChild(message);
+      return;
+    }
 
     const isDirectAudioFile =
       activeMode === 'audio' &&
@@ -701,7 +787,8 @@
           type: opt.type || 'video',
           filename: opt.filename || '',
           candidates,
-        });
+          strictTarget: true,
+        }, session);
       });
       return btn;
     };
@@ -716,6 +803,7 @@
       box.appendChild(status);
       dropdownEl.insertBefore(box, dropdownEl.children[1] || null);
       listQualities(targetUrl, pageUrl, candidates).then((res) => {
+        if (!sessionIsCurrent(session) || renderedMenu !== menuGeneration || !box.isConnected) return;
         const list = (res && res.qualities) || [];
         if (!list.length) {
           status.textContent = tr.noQualities;
@@ -732,14 +820,14 @@
     }
 
     // Only list raw network streams when not on a DRM music site (where raw URLs require DRM keys)
-    if (!isMusicPlatform && detectedStreams.length > 0) {
+    if (!isMusicPlatform && scopedStreams.length > 0) {
       const sep = document.createElement('div');
       sep.style.cssText =
         'border-top:1px solid #1e293b;margin:4px 0;padding-top:4px;font-size:10px;color:#94a3b8;padding-inline:8px;';
       sep.textContent = tr.directHeader;
       dropdownEl.appendChild(sep);
 
-      detectedStreams.slice(0, 4).forEach((st, idx) => {
+      scopedStreams.slice(0, 4).forEach((st, idx) => {
         const tag = st.extTag || (st.isManifest ? 'HLS / M3U8' : st.isAudio ? 'MP3' : 'MP4');
         const btn = document.createElement('button');
         btn.className = 'scorpion-idm-option';
@@ -760,7 +848,9 @@
             quality: st.isManifest ? (activeMode === 'audio' ? 'audio' : 'best') : 'direct',
             type: st.isAudio ? 'audio' : st.isManifest ? 'video' : 'file',
             filename: st.isManifest ? '' : `${pageTitle}.${ext}`,
-          });
+            candidates,
+            strictTarget: true,
+          }, session);
         });
         dropdownEl.appendChild(btn);
       });
@@ -775,7 +865,7 @@
         url,
         new Promise((resolve) => {
           try {
-            chrome.runtime.sendMessage({ action: 'SCORPION_LIST_QUALITIES', url, referer, candidates: candidates || [] }, (res) => {
+            chrome.runtime.sendMessage({ action: 'SCORPION_LIST_QUALITIES', url, referer, candidates: candidates || [], strictTarget: true }, (res) => {
               if (chrome.runtime.lastError || !res || !res.ok) qualityCache.delete(url);
               resolve(chrome.runtime.lastError ? null : res);
             });
@@ -789,9 +879,10 @@
     return qualityCache.get(url);
   }
 
-  function triggerVideoDownload(payload) {
-    if (transferInProgress) return;
-    payload.expectedDuration = ScorpionMedia.mediaDuration(activeMedia);
+  function triggerVideoDownload(payload, session = mediaSession()) {
+    if (transferInProgress || !sessionIsCurrent(session)) return false;
+    if (computeDownloadTarget().ambiguous) return false;
+    payload.expectedDuration = session.duration;
     const tr = t();
     dropdownEl.classList.remove('open');
     if (labelEl) {
@@ -799,12 +890,13 @@
     }
 
     const onDone = (ok, error = '') => {
+      if (!sessionIsCurrent(session)) return;
       if (labelEl) {
         labelEl.textContent = ok ? tr.sentOk : error || tr.sentErr;
         labelEl.title = error;
       }
       setTimeout(() => {
-        if (labelEl) {
+        if (labelEl && sessionIsCurrent(session)) {
           labelEl.textContent = currentMainLabel();
         }
       }, 2200);
@@ -814,7 +906,7 @@
 
     if (ScorpionMedia.isTelegram(location.href)) {
       // Use only THIS player's source, never another document found in the page's request history.
-      const src = activeMedia && (activeMedia.currentSrc || activeMedia.src);
+      const src = session.source;
       if (!src || !ScorpionMedia.isBrowserLocal(src) || /^blob:/i.test(src)) {
         onDone(false, currentLang === 'ar' ? 'افتح الفيديو وشغّله، ثم أعد المحاولة. يمكنك استخدام تنزيل تليجرام الأصلي.' :
           'Open and play this video, then retry. Telegram’s own download button is also available.');
@@ -836,10 +928,10 @@
         filename: payload.filename || `${payload.title || 'Telegram_Video'}.mp4`,
         pageUrl: location.href, expectedDuration: payload.expectedDuration,
       }, request, fetch, (done, total) => {
-        if (labelEl) labelEl.textContent = `${currentLang === 'ar' ? 'جارٍ التنزيل' : 'Downloading'} ${Math.min(99, Math.floor(done / total * 100))}%`;
+        if (labelEl && sessionIsCurrent(session)) labelEl.textContent = `${currentLang === 'ar' ? 'جارٍ التنزيل' : 'Downloading'} ${Math.min(99, Math.floor(done / total * 100))}%`;
       }, readTelegramPageRange).then(() => onDone(true)).catch((err) => onDone(false, err.message))
         .finally(() => { transferInProgress = false; });
-      return;
+      return true;
     }
 
     try {
@@ -859,6 +951,7 @@
     } catch (_) {
       directFallback();
     }
+    return true;
   }
 
   function readTelegramPageRange(url, offset, total) {
@@ -898,12 +991,14 @@
   }
 
   function positionPanelOverMedia(media) {
-    if (!floatingBtnEnabled || isDismissed(media)) return;
-    const isAudioEl = !media || media.tagName === 'AUDIO' || activeMode === 'audio' || MUSIC_SITE_RE.test(window.location.hostname);
-    const rect =
-      media && media.getBoundingClientRect ? media.getBoundingClientRect() : { width: 0, height: 0, top: 0, right: 0 };
-
-    if (!isAudioEl && (rect.width < 160 || rect.height < 100)) return;
+    if (!floatingBtnEnabled || isDismissed(media) || !isSelectableMedia(media)) {
+      hidePanel();
+      return;
+    }
+    const rect = media.getBoundingClientRect();
+    const visibleTop = Math.max(8, rect.top + 10);
+    const visibleBottom = Math.min(window.innerHeight - 8, rect.bottom);
+    if (visibleBottom - visibleTop < 38) { hidePanel(); return; }
 
     createFloatingPanel();
     if (labelEl && !transferInProgress && labelEl.textContent !== currentMainLabel()) labelEl.textContent = currentMainLabel();
@@ -913,7 +1008,6 @@
       hostEl.appendChild(panelEl);
     }
 
-    panelEl.style.display = 'block';
     const panelW = Math.max(290, panelEl.offsetWidth || 320);
 
     if (panelEl.__userDraggedPos) {
@@ -923,96 +1017,92 @@
       panelEl.style.left = `${clampedLeft}px`;
       panelEl.style.bottom = 'auto';
       panelEl.style.right = 'auto';
+      panelEl.style.display = 'block';
       return;
     }
 
-    if (!MUSIC_SITE_RE.test(window.location.hostname) && rect.width >= 140 && rect.height >= 24 && rect.top >= -20 && rect.top < window.innerHeight - 20) {
-      const top = isAudioEl ? Math.max(10, Math.min(window.innerHeight - 180, rect.top - 42)) : Math.max(10, rect.top + 12);
-      const left = Math.max(10, Math.min(window.innerWidth - panelW - 12, rect.right - panelW - 12));
-      panelEl.style.top = `${top}px`;
-      panelEl.style.left = `${left}px`;
-      panelEl.style.bottom = 'auto';
-      panelEl.style.right = 'auto';
-    } else if (isAudioEl) {
-      const top = 64;
-      const left = Math.max(12, window.innerWidth - panelW - 24);
-      panelEl.style.top = `${top}px`;
-      panelEl.style.left = `${left}px`;
-      panelEl.style.bottom = 'auto';
-      panelEl.style.right = 'auto';
-    }
+    // Every path assigns viewport coordinates BEFORE showing the element. A partly scrolled video
+    // must not leave a fixed element at the document's static position near the bottom of the page.
+    panelEl.style.top = `${Math.min(visibleTop, visibleBottom - 38)}px`;
+    panelEl.style.left = `${Math.max(8, Math.min(window.innerWidth - panelW - 8, rect.right - panelW - 10))}px`;
+    panelEl.style.bottom = 'auto';
+    panelEl.style.right = 'auto';
+    panelEl.style.display = 'block';
   }
 
-  function showForAudioStream() {
-    if (!floatingBtnEnabled || isDismissed(null)) return;
-    activeMode = 'audio';
-    positionPanelOverMedia(activeMedia);
-  }
-
-  function scheduleHide(delayMs = 3800) {
-    if (hideTimeout) clearTimeout(hideTimeout);
-    hideTimeout = setTimeout(() => {
-      if (dropdownEl && dropdownEl.classList.contains('open')) return;
-      if (!isHoveringPanel && panelEl) {
-        dropdownEl.classList.remove('open');
-        panelEl.style.display = 'none';
-      }
-    }, delayMs);
-  }
-
-  function activateMediaElement(media) {
-    if (!media) return;
-    if (panelDragging || isHoveringPanel || dropdownEl && dropdownEl.classList.contains('open')) return;
-    if (media.tagName === 'VIDEO') {
-      const rect = media.getBoundingClientRect();
-      if (!media.isConnected || rect.width < 160 || rect.height < 100 || rect.bottom < 0 || rect.top >= window.innerHeight) return;
-    }
+  function activateMediaElement(media, reason = 'scan') {
+    if (!isSelectableMedia(media)) return false;
+    // Playback in another feed item is not a selection. Hover, scroll, or an explicit command is.
+    if (['play', 'scan'].includes(reason) && media !== activeMedia && isSelectableMedia(activeMedia)) return false;
     if (dismissedForUrl && dismissedForUrl !== window.location.href) {
       dismissedForUrl = '';
     }
-    if (isDismissed(media)) return;
+    if (isDismissed(media)) return false;
+    const changed = media !== activeMedia || sourceOf(media) !== activeSource || activePage !== location.href;
+    if (changed) {
+      mediaGeneration++;
+      menuGeneration++;
+      if (dropdownEl) { dropdownEl.classList.remove('open'); dropdownEl.innerHTML = ''; }
+      if (panelEl) delete panelEl.__userDraggedPos;
+      panelDragging = false;
+      isHoveringPanel = false;
+    }
+    if (panelDragging && !changed) return false;
     const isAud = media.tagName === 'AUDIO' || MUSIC_SITE_RE.test(window.location.hostname);
     if (media.currentSrc || media.src) {
       considerUrl(media.currentSrc || media.src, isAud ? 'audio' : 'video');
     }
     activeMedia = media;
+    activeSource = sourceOf(media);
+    activePage = location.href;
+    selectionReason = reason;
     activeMode = isAud ? 'audio' : 'video';
     positionPanelOverMedia(media);
-    if (media.__scorpionPrefetchedFor !== window.location.href) {
-      media.__scorpionPrefetchedFor = window.location.href;
-      setTimeout(prefetchQualities, 600);
+    const session = mediaSession();
+    const prefetchKey = `${location.href}|${activeSource}`;
+    if (media.__scorpionPrefetchedFor !== prefetchKey) {
+      media.__scorpionPrefetchedFor = prefetchKey;
+      setTimeout(() => { if (sessionIsCurrent(session)) prefetchQualities(); }, 600);
     }
+    return true;
   }
 
   function bindMediaElement(media) {
     if (media.__scorpionBoundV4) return;
     media.__scorpionBoundV4 = true;
 
-    const showForThis = () => activateMediaElement(media);
-
-    media.addEventListener('play', showForThis);
-    media.addEventListener('playing', showForThis);
-    media.addEventListener('loadeddata', showForThis);
-    media.addEventListener('pointerenter', showForThis);
-
-    if (!media.paused || (media.tagName === 'VIDEO' && media.readyState >= 2)) {
-      showForThis();
-    }
+    media.addEventListener('play', () => activateMediaElement(media, 'play'));
+    media.addEventListener('playing', () => activateMediaElement(media, 'play'));
+    media.addEventListener('pointerenter', () => activateMediaElement(media, 'hover'));
+    media.addEventListener('mouseenter', () => activateMediaElement(media, 'hover'));
+    media.addEventListener('loadeddata', () => refreshMediaSelection());
+    // Pause/end do not invalidate an explicitly selected video; source/removal/visibility do.
+    for (const event of ['pause', 'ended', 'emptied', 'error']) media.addEventListener(event, () => refreshMediaSelection());
   }
 
   function scanForMedia() {
+    if (!window.document) return;
     document.querySelectorAll('video, audio').forEach(bindMediaElement);
-    // On music streaming sites (Spotify, SoundCloud, Anghami, Deezer), check if mediaSession is active
-    if (MUSIC_SITE_RE.test(window.location.hostname) && window.top === window.self) {
-      try {
-        if (
-          (navigator.mediaSession && navigator.mediaSession.metadata && navigator.mediaSession.metadata.title) ||
-          document.querySelector('.playing, [data-testid="control-button-playpause"][aria-label*="Pause"], .playControl.playing')
-        ) {
-          showForAudioStream();
-        }
-      } catch (_) {}
+    refreshMediaSelection();
+  }
+
+  function refreshMediaSelection(reason = 'scan') {
+    if (!window.document) return;
+    if (reason === 'viewport' && !panelDragging) {
+      const selected = chooseVisibleMedia();
+      if (selected) { activateMediaElement(selected, 'viewport'); return; }
     }
+    if (isSelectableMedia(activeMedia) && !isDismissed(activeMedia)) {
+      if (sourceOf(activeMedia) !== activeSource || activePage !== location.href) activateMediaElement(activeMedia, selectionReason);
+      else if (!panelDragging && !isHoveringPanel) positionPanelOverMedia(activeMedia);
+      return;
+    }
+    if (activeMedia) { mediaGeneration++; menuGeneration++; }
+    activeMedia = null;
+    activeSource = '';
+    hidePanel();
+    const next = chooseVisibleMedia();
+    if (next) activateMediaElement(next, 'viewport');
   }
 
   document.addEventListener(
@@ -1021,7 +1111,7 @@
       const tEl = e.target;
       if (tEl && (tEl.tagName === 'VIDEO' || tEl.tagName === 'AUDIO')) {
         bindMediaElement(tEl);
-        activateMediaElement(tEl);
+        activateMediaElement(tEl, 'play');
       }
     },
     true
@@ -1032,23 +1122,52 @@
   const observer = new MutationObserver((changes) => {
     // Do not observe our own label/menu changes or rescan an entire feed for every text mutation.
     const relevant = changes.some((change) => (!panelEl || !panelEl.contains(change.target)) &&
-      Array.from(change.addedNodes).some((node) => node.nodeType === 1 &&
-        (node.matches('video, audio') || node.querySelector('video, audio'))));
+      (change.type === 'attributes' && change.target.matches('video, audio, source') ||
+      [...change.addedNodes, ...change.removedNodes].some((node) => node.nodeType === 1 &&
+        (node.matches('video, audio') || node.querySelector('video, audio')))));
     if (!relevant || mediaScanPending) return;
     mediaScanPending = true;
     requestAnimationFrame(() => { mediaScanPending = false; scanForMedia(); });
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+
+  function scheduleViewportRefresh() {
+    if (viewportRefreshPending) return;
+    viewportRefreshPending = true;
+    requestAnimationFrame(() => { viewportRefreshPending = false; refreshMediaSelection('viewport'); });
+  }
 
   window.addEventListener(
     'scroll',
-    () => {
-      if (!panelDragging && !isHoveringPanel && panelEl && panelEl.style.display !== 'none' && !isDismissed(activeMedia)) {
-        positionPanelOverMedia(activeMedia);
-      }
+    (event) => {
+      if (panelEl && event.target && event.target.nodeType && panelEl.contains(event.target)) return;
+      scheduleViewportRefresh();
     },
-    { passive: true }
+    { passive: true, capture: true }
   );
+  window.addEventListener('resize', scheduleViewportRefresh, { passive: true });
+  window.addEventListener('hashchange', scheduleViewportRefresh);
+  window.addEventListener('popstate', scheduleViewportRefresh);
+  document.addEventListener('fullscreenchange', scheduleViewportRefresh);
+  document.addEventListener('pointermove', (event) => {
+    if (!panelEl || !panelEl.contains(event.target)) pointerPosition = { x: event.clientX, y: event.clientY };
+  }, { passive: true });
+  document.addEventListener('pointerover', (event) => {
+    if (panelEl && panelEl.contains(event.target)) return;
+    pointerPosition = { x: event.clientX, y: event.clientY };
+    // Poster images and player controls often cover the <video>. Resolve only their nearest
+    // single-player container and verify the pointer is inside that player's actual rectangle.
+    let target = event.target;
+    for (let depth = 0; target && target !== document.body && target.nodeType === 1 && depth < 10; depth++, target = target.parentElement) {
+      const players = target.matches('video, audio') ? [target] : Array.from(target.querySelectorAll('video, audio'));
+      if (players.length > 1) break;
+      if (!players.length) continue;
+      const rect = players[0].getBoundingClientRect();
+      if (event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom)
+        activateMediaElement(players[0], 'hover');
+      break;
+    }
+  }, { passive: true });
 
   // Intercept Magnet links & direct .torrent links so Scorpion IDM handles them automatically
   document.addEventListener(

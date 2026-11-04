@@ -1,20 +1,22 @@
 {
-  "version": "2.1.14",
+  "version": "2.1.15",
   "publishedAt": "2026-11-04",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "48e4207a3299a87ec2be9fb9570e41e6f84ec324cc9bc95bee0c84a0746b7acd",
+  "sha256": "da3843ed310af39190d36aa6c60eb486ae61e38ec8883e5f2e1f29c2cd830af2",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "إصلاح ظهور البرنامج وثبات شريط التحميل",
-  "title_en": "Desktop startup and stable browser download bar",
+  "title_ar": "تحميل الفيديو المحدد بالمؤشر أو أثناء التمرير",
+  "title_en": "Download the video selected by pointer or scroll focus",
   "changelog_ar": [
-    "إصلاح تشغيل البرنامج بدون نافذة بعد استخدام الناشر التلقائي، والتحقق من ظهور الواجهة قبل النشر.",
-    "إزالة إخفاء شريط التحميل التلقائي وتكرار تحريكه، مع مقبض سحب مستقل وإغلاق يستمر حتى تغيير الصفحة.",
-    "منع إعادة فحص الصفحة بسبب تحديثات الشريط نفسه، وإضافة اختبارات تفاعل الإغلاق والسحب."
+    "اختيار الفيديو الذي تشير إليه أو تركز عليه أثناء التمرير، حتى لو كان متوقفًا، مع نقل العلامة فوقه.",
+    "منع تشغيل فيديو آخر في الخلفية من تغيير الاختيار، وإخفاء العلامة عندما لا يبقى فيديو مناسب ظاهرًا.",
+    "ربط المصدر والمدة وقائمة الجودة بالفيديو المحدد، ومنع استخدام روابط منشورات أخرى كبدائل تلقائية.",
+    "إصلاح موضع العلامة عند ظهور الفيديو جزئيًا من أعلى الشاشة، ومنع خيارات الجودة القديمة من تنزيل مقطع مختلف."
   ],
   "changelog_en": [
-    "Keep the publisher's headless Qt setting out of the desktop app; verify visible Windows startup before publishing.",
-    "Keep the download bar stable, use a dedicated drag handle, and preserve dismissal across player events.",
-    "Ignore the bar's own DOM mutations and cover close/drag interactions with DOM tests."
+    "Select the visible video under the pointer or in scroll focus, including paused videos, and anchor the bar to it.",
+    "Background playback cannot steal selection; hide the bar when no suitable visible player remains.",
+    "Bind source, duration, and quality choices to the selected video; reject ambiguous post fallbacks.",
+    "Fix placement above clipped videos and invalidate stale quality menus after the target changes."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",

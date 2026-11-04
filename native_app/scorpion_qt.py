@@ -157,7 +157,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.14"
+APP_VERSION = "2.1.15"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -225,6 +225,24 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.15",
+        "date": "2026-11-04",
+        "title_ar": "تحميل الفيديو المحدد بالمؤشر أو أثناء التمرير",
+        "title_en": "Download the video selected by pointer or scroll focus",
+        "ar": [
+            "اختيار الفيديو الذي تشير إليه أو تركز عليه أثناء التمرير، حتى لو كان متوقفًا، مع نقل العلامة فوقه.",
+            "منع تشغيل فيديو آخر في الخلفية من تغيير الاختيار، وإخفاء العلامة عندما لا يبقى فيديو مناسب ظاهرًا.",
+            "ربط المصدر والمدة وقائمة الجودة بالفيديو المحدد، ومنع استخدام روابط منشورات أخرى كبدائل تلقائية.",
+            "إصلاح موضع العلامة عند ظهور الفيديو جزئيًا من أعلى الشاشة، ومنع خيارات الجودة القديمة من تنزيل مقطع مختلف.",
+        ],
+        "en": [
+            "Select the visible video under the pointer or in scroll focus, including paused videos, and anchor the bar to it.",
+            "Background playback cannot steal selection; hide the bar when no suitable visible player remains.",
+            "Bind source, duration, and quality choices to the selected video; reject ambiguous post fallbacks.",
+            "Fix placement above clipped videos and invalidate stale quality menus after the target changes.",
+        ],
+    },
     {
         "version": "2.1.14",
         "date": "2026-11-04",
@@ -2102,7 +2120,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     qs = urllib.parse.parse_qs(parsed.query)
                     arg = lambda k: (qs.get(k) or [""])[0]
                     try:
-                        res = engine_ref.list_video_qualities(arg("url"), arg("referer"), arg("tab"))
+                        res = engine_ref.list_video_qualities(arg("url"), arg("referer"), arg("tab"),
+                                                             strict_target=arg("strictTarget").lower() in ("1", "true"))
                     except Exception:
                         res = {"ok": False, "qualities": []}
                     self._send_cors(200)
@@ -2146,7 +2165,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     try:
                         req = json.loads(self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else "{}")
                         res = engine_ref.list_video_qualities(req.get("url", ""), req.get("referer", ""), req.get("tab", ""),
-                                                              req.get("candidates") or [], req.get("cookies") or [])
+                                                              req.get("candidates") or [], req.get("cookies") or [],
+                                                              strict_target=bool(req.get("strictTarget", False)))
                     except Exception:
                         res = {"ok": False, "qualities": []}
                     self._send_cors(200)
@@ -2397,6 +2417,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "tabUrl": (opts.get("tabUrl") or "").strip(),
             # Other addresses that may identify the video (post links near it, streams the player loaded)
             "candidates": [c for c in (opts.get("candidates") or []) if isinstance(c, str)][:10],
+            "strictTarget": bool(opts.get("strictTarget", False)),
             "checksumSha256": None,
             "checksumMd5": None,
         }
@@ -2783,9 +2804,16 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             raise RuntimeError("فيديو تليجرام مرتبط بجلسة المتصفح. حدّث الإضافة وافتح الفيديو ثم اضغط زر التنزيل فوقه.")
         u_clean = u_low.split("?")[0].rstrip("/")
         is_audio = item.get("videoQuality") == "audio" or item.get("category") == "Music"
+        strict_target = bool(item.get("strictTarget", False))
 
         def _unwrap_info(info_obj):
             if isinstance(info_obj, dict) and info_obj.get("entries"):
+                if strict_target:
+                    entries = (entry for entry in info_obj["entries"] if entry)
+                    first = next(entries, None)
+                    if next(entries, None) is not None:
+                        raise RuntimeError("العنوان يحتوي على عدة فيديوهات. افتح الفيديو المطلوب وحده ثم أعد المحاولة.")
+                    return first
                 entries = [e for e in info_obj["entries"] if e]
                 if entries:
                     return entries[0]
@@ -2807,6 +2835,32 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             finally:
                 ydl.params["http_headers"] = saved_hdrs
             return None
+
+        if strict_target:
+            # These addresses were identified for one particular media element. A feed, parent tab,
+            # general page scrape, or audio search can resolve to a different video and is unsafe here.
+            tried = set()
+            first_err = None
+            for target in [item.get("url") or ""] + list(item.get("candidates") or []):
+                if not isinstance(target, str):
+                    continue
+                target = target.strip()
+                if not target.lower().startswith(("http://", "https://")) or target in tried:
+                    continue
+                tried.add(target)
+                if fragment_url(target) or browser_local_url(target) or urllib.parse.urlparse(target).hostname == "web.telegram.org":
+                    continue
+                try:
+                    info = _unwrap_info(ydl.extract_info(target, download=False))
+                    if isinstance(info, dict) and (info.get("formats") or info.get("url")):
+                        item["url"] = target
+                        return info
+                except Exception as err:
+                    if first_err is None or needs_login(err):
+                        first_err = err
+            if first_err is not None and needs_login(first_err):
+                raise first_err
+            raise RuntimeError("تعذر تنزيل الفيديو المحدد. أعد فتح الفيديو واضغط زر التنزيل فوقه.") from first_err
 
         drm_music_domains = ("spotify.com", "anghami.com", "deezer.com", "music.apple.com", "widevine-license")
         sc_generic_paths = (
@@ -2955,7 +3009,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             opts["remote_components"] = ["ejs:github"]
         return opts
 
-    def list_video_qualities(self, url: str, referer: str = "", tab_url: str = "", candidates=None, cookies=None) -> dict:
+    def list_video_qualities(self, url: str, referer: str = "", tab_url: str = "", candidates=None, cookies=None,
+                             strict_target: bool = False) -> dict:
         """
         Every video quality a page offers (as yt-dlp sees it), for the quality pickers in the browser
         button and the Add Download dialog. Cached for a few minutes per address.
@@ -2964,7 +3019,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         if not url.lower().startswith(("http://", "https://")) or not HAS_YTDLP:
             return {"ok": False, "qualities": []}
         cache = self.__dict__.setdefault("_quality_cache", {})
-        hit = cache.get(url)
+        candidate_urls = [candidate for candidate in (candidates or []) if isinstance(candidate, str)][:10]
+        cache_key = (url, True, tuple(candidate_urls)) if strict_target else url
+        hit = cache.get(cache_key)
         if hit and time.time() - hit[0] < 600:
             return hit[1]
 
@@ -2980,7 +3037,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         if referer:
             pr = urllib.parse.urlparse(referer)
             opts["http_headers"] = {"Referer": referer, "Origin": f"{pr.scheme}://{pr.netloc}", "User-Agent": BROWSER_UA}
-        item = {"url": url, "referer": referer, "tabUrl": tab_url, "candidates": list(candidates or []),
+        item = {"url": url, "referer": referer, "tabUrl": tab_url, "candidates": candidate_urls, "strictTarget": bool(strict_target),
                 "videoQuality": "best", "category": ""}
         cookiefile = self._write_cookiefile(cookies, f"q{uuid.uuid4().hex[:8]}") if cookies else ""
         if cookiefile:
@@ -3026,7 +3083,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "qualities": qualities,
             "hasAudio": bool(best_audio) or any(f.get("acodec") not in (None, "none") for f in info.get("formats") or []),
         }
-        cache[url] = (time.time(), res)
+        cache[cache_key] = (time.time(), res)
         return res
 
     def get_item_temp_dir(self, dl_id: str) -> str:
@@ -6598,6 +6655,7 @@ class ScorpionMainWindow(QMainWindow):
                 "referer": (payload.get("referer") or payload.get("pageUrl") or "").strip(),
                 "tabUrl": (payload.get("tabUrl") or "").strip(),
                 "candidates": payload.get("candidates") or [],
+                "strictTarget": bool(payload.get("strictTarget", False)),
                 "cookies": payload.get("cookies") or [],
                 "expectedDuration": payload.get("expectedDuration") or 0,
                 "category": cat,
@@ -6618,6 +6676,7 @@ class ScorpionMainWindow(QMainWindow):
                 dlg.result_opts.update({
                     "referer": ref_url, "tabUrl": payload.get("tabUrl") or "",
                     "candidates": payload.get("candidates") or [], "cookies": payload.get("cookies") or [],
+                    "strictTarget": bool(payload.get("strictTarget", False)),
                     "expectedDuration": payload.get("expectedDuration") or 0,
                 })
                 item = self.engine.add_download(dlg.result_opts)
