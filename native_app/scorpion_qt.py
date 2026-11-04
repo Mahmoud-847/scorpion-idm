@@ -235,12 +235,16 @@ CHANGELOG_HISTORY = [
             "إصلاح فشل حفظ فيديو تيليجرام عندما يكون مجلد التنزيل على قرص غير C.",
             "زر «إلغاء» لتنزيلات تيليجرام بدل الإيقاف المؤقت، وحذف الملفات المؤقتة عند فشل التنزيل أو إلغائه.",
             "البرنامج يلتقط الآن ملفات كان المتصفح ينزّلها بنفسه بالخطأ (مثل ملفات ‎.ts).",
+            "زر التنزيل يظهر الآن فوق مشغلات كانت تخفي الفيديو داخلها (مثل OK و VK)، ومع تغيير سيرفر المشاهدة.",
+            "إصلاح فشل تنزيل الفيديو من مشغلات المواقع المضمّنة التي لا تعمل إلا داخل صفحة الموقع.",
         ],
         "en": [
             "Telegram video downloads are faster.",
             "Fix Telegram videos failing to save when the download folder is on a drive other than C.",
             "Telegram downloads get a Cancel button instead of Pause, and leftover temporary files are removed on failure or cancel.",
             "Some files the browser used to download by itself (such as .ts files) are now caught by Scorpion.",
+            "The download button now appears on players that hide their video inside them (such as OK and VK), including after switching servers.",
+            "Fix downloads failing from embedded site players that only work inside the site's own page.",
         ],
     },
     {
@@ -2720,6 +2724,33 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         uniq.sort(key=lambda u: (0 if ".m3u8" in u.lower() else 1, 0 if "master" in u.lower() else 1))
         return uniq[:6]
 
+    def _extract_from_player_frame(self, ydl, item: dict, unwrap):
+        """Yields (stream, info) for the stream in the player config of the iframe the video plays in."""
+        frame_page = (item.get("url") or "").strip()
+        tab_url = (item.get("tabUrl") or "").strip()
+        if not frame_page.lower().startswith(("http://", "https://")) or not tab_url.lower().startswith(("http://", "https://")):
+            return
+        same = lambda a, b: a.split("#")[0] == b.split("#")[0]
+        # Only the frame document itself (the extension sends a frame's own address as referer, and the tab
+        # only for frames). A post link found in a feed is not a frame and may list other videos.
+        if not same(frame_page, item.get("referer") or "") or same(frame_page, tab_url):
+            return
+        tab = urllib.parse.urlparse(tab_url)
+        referers = [tab_url] + ([f"{tab.scheme}://{tab.netloc}/"] if f"{tab.scheme}://{tab.netloc}/" != tab_url else [])
+        for ref in referers:
+            streams = [u for u in self._scrape_media_urls(frame_page, ref)
+                       if not fragment_url(u) and not browser_local_url(u)]
+            for stream in streams:
+                try:
+                    info = unwrap(ydl.extract_info(stream, download=False))
+                except Exception:
+                    continue
+                if isinstance(info, dict) and (info.get("formats") or info.get("url")):
+                    yield stream, info
+                    return
+            if streams:
+                return  # the page answered with a player; another Referer will not change its streams
+
     def _build_audio_search_query(self, item: dict) -> str:
         """Build a clean track search query from filename, title, or page metadata for audio fallback."""
         import html as html_mod
@@ -2862,6 +2893,12 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         first_err = err
             if first_err is not None and needs_login(first_err):
                 raise first_err
+            # An embedded player's own page (the iframe) holds only that player, so the stream named in its
+            # player config is the selected video. Such pages usually refuse to load without the parent
+            # page as Referer ("embeds disabled"), exactly as the browser loaded them.
+            for frame_page, info in self._extract_from_player_frame(ydl, item, _unwrap_info):
+                item["url"] = frame_page
+                return info
             raise RuntimeError("تعذر تنزيل الفيديو المحدد. أعد فتح الفيديو واضغط زر التنزيل فوقه.") from first_err
 
         drm_music_domains = ("spotify.com", "anghami.com", "deezer.com", "music.apple.com", "widevine-license")

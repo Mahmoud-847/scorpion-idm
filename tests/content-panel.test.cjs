@@ -412,3 +412,76 @@ test('one blob player with two different reel links in its own article does not 
     assert.ok(p.panel.querySelector('.scorpion-idm-dropdown').classList.contains('open'));
   } finally { p.dom.window.close(); }
 });
+
+test('a lone blob player in an embed frame sends the manifest its frame loaded', () => {
+  const manifest = 'https://cdn.test/hls2/01/abc/master.m3u8?t=1';
+  const p = page('https://player.test/embed-abc.html', {
+    videos: [{ src: 'blob:https://player.test/mse', duration: 1808 }],
+    performanceEntries: [{ name: manifest, initiatorType: 'xmlhttprequest' }],
+  });
+  try {
+    fire(p, p.video, 'pointerenter');
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    const sent = downloads(p).at(-1);
+    assert.ok(sent, 'a download was sent');
+    const payload = sent.payload || sent;
+    assert.ok([payload.url, ...(payload.candidates || [])].includes(manifest));
+  } finally { p.dom.window.close(); }
+});
+
+test('a frame manifest is not attached when the document has several players', () => {
+  const manifest = 'https://cdn.test/hls2/01/other/master.m3u8';
+  const p = page('https://player.test/feed', {
+    videos: [{ src: 'blob:https://player.test/one', duration: 30 }, { src: 'blob:https://player.test/two', duration: 40 }],
+    performanceEntries: [{ name: manifest, initiatorType: 'xmlhttprequest' }],
+  });
+  try {
+    fire(p, p.videos[1], 'pointerenter');
+    const trigger = p.panel && p.panel.querySelector('.scorpion-idm-trigger');
+    if (trigger) trigger.click();
+    for (const sent of downloads(p)) {
+      const payload = sent.payload || sent;
+      assert.ok(![payload.url, ...(payload.candidates || [])].includes(manifest));
+    }
+  } finally { p.dom.window.close(); }
+});
+
+test('a player whose video lives inside a shadow root gets the download bar', () => {
+  const p = page('https://ok.test/videoembed/123', {
+    videos: [{ src: 'blob:https://ok.test/mse', duration: 1810 }],
+    beforeScripts: ({ window, videos }) => {
+      const host = window.document.createElement('div');
+      const root = host.attachShadow({ mode: 'open' });
+      root.appendChild(videos[0]);
+      window.document.body.appendChild(host);
+    },
+  });
+  try {
+    assert.equal(p.window.document.querySelectorAll('video').length, 0, 'the video is not in the light DOM');
+    fire(p, p.video, 'play');
+    assert.equal(hidden(p), false);
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    assert.equal(downloads(p).length, 1);
+  } finally { p.dom.window.close(); }
+});
+
+test('a shadow player added after load is found when the pointer moves over it', () => {
+  const p = page('https://ok.test/videoembed/456', { videos: [] });
+  try {
+    const { window } = p;
+    const host = window.document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    window.document.body.appendChild(host);
+    const video = window.document.createElement('video');
+    video.src = 'blob:https://ok.test/late';
+    for (const [key, value] of Object.entries({ paused: false, ended: false, readyState: 4, duration: 600 }))
+      Object.defineProperty(video, key, { configurable: true, get: () => value });
+    Object.defineProperty(video, 'currentSrc', { configurable: true, get: () => video.src });
+    video.getBoundingClientRect = () => ({ left: 100, top: 100, right: 740, bottom: 460, width: 640, height: 360 });
+    const controls = window.document.createElement('div');
+    controls.getBoundingClientRect = video.getBoundingClientRect;
+    root.append(video, controls);
+    controls.dispatchEvent(new window.MouseEvent('pointerover', { bubbles: true, composed: true, clientX: 300, clientY: 200 }));
+    assert.equal(hidden(p), false);
+  } finally { p.dom.window.close(); }
+});

@@ -146,6 +146,37 @@ class MediaRegressionTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in extractor.extract_info.call_args_list],
                          ["https://soundcloud.com/artist/selected", "https://cdn.test/selected.mp4"])
 
+    def test_strict_embedded_player_uses_its_frame_with_parent_referer(self):
+        engine = engine_at(Path(tempfile.mkdtemp()))
+        frame = "https://player.test/embed-abc.html"
+        item = {"url": frame, "referer": frame, "tabUrl": "https://site.test/play.php?vid=1",
+                "candidates": [frame], "strictTarget": True, "videoQuality": "best"}
+        stream = "https://cdn.test/hls/master.m3u8"
+        seen = []
+
+        def scrape(page, referer=""):
+            seen.append((page, referer))
+            return [stream] if referer.startswith("https://site.test") else []
+
+        ydl = Mock()
+        ydl.extract_info.side_effect = lambda url, download=False: (
+            {"url": url, "formats": [{"url": url}], "duration": 60} if url == stream else (_ for _ in ()).throw(Exception("Unsupported URL")))
+        with patch.object(engine, "_scrape_media_urls", side_effect=scrape):
+            engine._extract_with_fallback(ydl, item)
+        self.assertEqual(item["url"], stream)
+        self.assertEqual(seen[0], (frame, "https://site.test/play.php?vid=1"))
+
+    def test_strict_page_that_is_not_a_frame_is_never_scraped(self):
+        engine = engine_at(Path(tempfile.mkdtemp()))
+        page = "https://site.test/feed"
+        item = {"url": page, "referer": page, "tabUrl": page, "candidates": [], "strictTarget": True, "videoQuality": "best"}
+        ydl = Mock()
+        ydl.extract_info.side_effect = Exception("Unsupported URL")
+        with patch.object(engine, "_scrape_media_urls", return_value=["https://cdn.test/other.m3u8"]) as scrape:
+            with self.assertRaises(RuntimeError):
+                engine._extract_with_fallback(ydl, item)
+        scrape.assert_not_called()
+
     def test_strict_target_does_not_choose_first_video_of_a_playlist(self):
         extractor = Mock()
         extractor.extract_info.return_value = {"entries": [{"url": "https://cdn.test/first.mp4"},

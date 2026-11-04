@@ -33,6 +33,35 @@
     return media && (media.currentSrc || media.src) || '';
   }
 
+  // Players built as web components keep their <video> inside an open shadow root, which
+  // querySelectorAll on the page cannot see. Remember those roots and search them as well.
+  const shadowRoots = new Set();
+  const OBSERVE_OPTS = { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] };
+  let mediaObserver = null;
+  let shadowScanAt = 0;
+  function addShadowRoot(root) {
+    if (!root || shadowRoots.has(root)) return;
+    shadowRoots.add(root);
+    if (mediaObserver) mediaObserver.observe(root, OBSERVE_OPTS);
+    for (const el of root.querySelectorAll('*')) if (el.shadowRoot) addShadowRoot(el.shadowRoot);
+  }
+  function discoverShadowRoots() {
+    // A full walk is cheap but not free on huge feeds: at most every 2 seconds
+    if (Date.now() - shadowScanAt < 2000) return;
+    shadowScanAt = Date.now();
+    const all = document.getElementsByTagName('*');
+    for (let i = 0; i < all.length; i++) if (all[i].shadowRoot) addShadowRoot(all[i].shadowRoot);
+  }
+  // Media (or another selector) under root, including inside the shadow roots of hosts within it
+  function queryMedia(root = document, selector = 'video, audio') {
+    const found = Array.from(root.querySelectorAll(selector));
+    for (const sr of shadowRoots) {
+      if (!sr.host || !sr.host.isConnected) { shadowRoots.delete(sr); continue; }
+      if (root === document || root === sr.host || root.contains(sr.host)) found.push(...sr.querySelectorAll(selector));
+    }
+    return found;
+  }
+
   function visibleArea(media) {
     if (!media || !media.isConnected || typeof media.getBoundingClientRect !== 'function') return 0;
     const rect = media.getBoundingClientRect();
@@ -66,7 +95,7 @@
   }
 
   function chooseVisibleMedia() {
-    const candidates = Array.from(document.querySelectorAll('video, audio'))
+    const candidates = queryMedia()
       .filter((media) => isSelectableMedia(media) && !isDismissed(media));
     const score = (media) => {
       const rect = media.getBoundingClientRect();
@@ -281,10 +310,10 @@
     try {
       performance.getEntriesByType('resource').forEach((e) => considerUrl(e.name, e.initiatorType));
     } catch (_) {}
-    document.querySelectorAll('video, video source').forEach((el) => {
+    queryMedia(document, 'video, video source').forEach((el) => {
       considerUrl(el.currentSrc || el.src, 'video');
     });
-    document.querySelectorAll('audio, audio source').forEach((el) => {
+    queryMedia(document, 'audio, audio source').forEach((el) => {
       considerUrl(el.currentSrc || el.src, 'audio');
     });
     if (Date.now() - lastNetworkScan > 1500) {
@@ -373,7 +402,7 @@
       let el = media.parentElement;
       for (let depth = 0; el && el !== document.body && depth < 16 && !found.length; depth++, el = el.parentElement) {
         // Once a container holds several players, its links no longer identify this one safely.
-        if (el.querySelectorAll('video, audio').length > 1) break;
+        if (queryMedia(el).length > 1) break;
         const anchors = el.querySelectorAll('a[href]');
         if (anchors.length > 400) break;
         for (const a of anchors) {
@@ -479,7 +508,7 @@
           sendResponse({ title: info.title });
         }
         if (msg && msg.action === 'SCORPION_DOWNLOAD_CURRENT_MEDIA') {
-          const media = msg.src ? Array.from(document.querySelectorAll('video')).find((el) => sourceOf(el) === msg.src) :
+          const media = msg.src ? queryMedia(document, 'video').find((el) => sourceOf(el) === msg.src) :
             (isSelectableMedia(activeMedia) ? activeMedia : chooseVisibleMedia());
           if (!isSelectableMedia(media)) { sendResponse({ ok: false }); return; }
           dismissedForUrl = '';
@@ -664,6 +693,14 @@
     // Requests are frame-wide, so only the actual element's source is a proven stream for this player.
     const sources = new Set([sourceOf(activeMedia), ...(activeMedia ? Array.from(activeMedia.querySelectorAll('source')).map((s) => s.src) : [])]);
     const scopedStreams = detectedStreams.filter((stream) => sources.has(stream.url));
+    // A lone player fed through MSE (blob:) has no address of its own. When it is the only media element
+    // in this document (typically an embedded player's iframe), the manifests this frame loaded are its
+    // stream. Read them from the full map: the player fetched its manifest when playback began, which
+    // may be long before the button is pressed.
+    if (activeMedia && /^blob:/i.test(sourceOf(activeMedia)) && queryMedia().length === 1) {
+      Array.from(streamMap.values()).filter((s) => s.isManifest && !scopedStreams.includes(s))
+        .sort((a, b) => b.score - a.score || b.t - a.t).forEach((s) => scopedStreams.push(s));
+    }
     const sniffed = scopedStreams.find((stream) => stream.isManifest) || scopedStreams[0];
     const permalinks = findPermalinksNearMedia(activeMedia);
     // A track address from a music site wins; otherwise the post around the video beats the feed's address
@@ -677,7 +714,7 @@
       );
 
     let targetUrl = effectivePageUrl;
-    const multipleMedia = document.querySelectorAll('video, audio').length > 1;
+    const multipleMedia = queryMedia().length > 1;
     const scopedPost = permalinks.length > 0 || resolvePostUrlForMedia(activeMedia, pageUrl) !== pageUrl ||
       !multipleMedia && (effectivePageUrl !== pageUrl || PERMALINK_RE.test(location.pathname + location.search));
     const ambiguous = multipleMedia && !scopedPost && !directMediaSrc && !ScorpionMedia.isTelegram(pageUrl);
@@ -1082,7 +1119,8 @@
 
   function scanForMedia() {
     if (!window.document) return;
-    document.querySelectorAll('video, audio').forEach(bindMediaElement);
+    discoverShadowRoots();
+    queryMedia().forEach(bindMediaElement);
     refreshMediaSelection();
   }
 
@@ -1122,14 +1160,16 @@
   const observer = new MutationObserver((changes) => {
     // Do not observe our own label/menu changes or rescan an entire feed for every text mutation.
     const relevant = changes.some((change) => (!panelEl || !panelEl.contains(change.target)) &&
-      (change.type === 'attributes' && change.target.matches('video, audio, source') ||
+      (change.type === 'attributes' && change.target.matches && change.target.matches('video, audio, source') ||
       [...change.addedNodes, ...change.removedNodes].some((node) => node.nodeType === 1 &&
-        (node.matches('video, audio') || node.querySelector('video, audio')))));
+        (node.matches('video, audio') || node.shadowRoot || node.querySelector('video, audio')))));
     if (!relevant || mediaScanPending) return;
     mediaScanPending = true;
     requestAnimationFrame(() => { mediaScanPending = false; scanForMedia(); });
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+  observer.observe(document.documentElement, OBSERVE_OPTS);
+  mediaObserver = observer;
+  for (const root of shadowRoots) observer.observe(root, OBSERVE_OPTS);
 
   function scheduleViewportRefresh() {
     if (viewportRefreshPending) return;
@@ -1155,11 +1195,16 @@
   document.addEventListener('pointerover', (event) => {
     if (panelEl && panelEl.contains(event.target)) return;
     pointerPosition = { x: event.clientX, y: event.clientY };
+    // The event path crosses into shadow trees: register a player's shadow root as soon as the pointer is on it
+    const path = event.composedPath ? event.composedPath() : [];
+    const before = shadowRoots.size;
+    for (const node of path) if (node instanceof ShadowRoot) addShadowRoot(node);
+    if (shadowRoots.size !== before) scanForMedia();
     // Poster images and player controls often cover the <video>. Resolve only their nearest
     // single-player container and verify the pointer is inside that player's actual rectangle.
     let target = event.target;
     for (let depth = 0; target && target !== document.body && target.nodeType === 1 && depth < 10; depth++, target = target.parentElement) {
-      const players = target.matches('video, audio') ? [target] : Array.from(target.querySelectorAll('video, audio'));
+      const players = target.matches('video, audio') ? [target] : queryMedia(target);
       if (players.length > 1) break;
       if (!players.length) continue;
       const rect = players[0].getBoundingClientRect();
