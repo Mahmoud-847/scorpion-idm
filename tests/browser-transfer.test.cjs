@@ -14,6 +14,13 @@ test('signed full media survives, individual fragments do not', () => {
   assert.equal(media.isTelegram('https://web.telegram.org.evil.test/'), false);
 });
 
+test('user-started downloads are never skipped just because the name looks like a stream part', () => {
+  const background = fs.readFileSync(path.join(__dirname, '../browser-extension/background.js'), 'utf8');
+  const handler = background.slice(background.indexOf('chrome.downloads.onCreated'), background.indexOf('async function sendToScorpion'));
+  assert.ok(handler.includes('isBrowserLocal'));
+  assert.ok(!handler.includes('isFragment'));
+});
+
 test('rejects HTML, ignored ranges, wrong offsets, changed totals and truncated bodies', async () => {
   const cases = [
     new Response('<html>login</html>', { status: 200 }),
@@ -49,6 +56,30 @@ test('transfers every byte even when the service worker returns smaller ranges',
   await transfer('https://web.telegram.org/a/progressive/123', {}, request, fetcher);
   assert.deepEqual(Buffer.concat(received), source);
   assert.equal(operations.at(-1), 'finish');
+});
+
+test('reads the next part while the current one is still being sent', async () => {
+  const source = Buffer.alloc(CHUNK_SIZE * 3);
+  const events = [];
+  const fetcher = async (url, opts) => {
+    const [, from, requestedEnd] = /bytes=(\d+)-(\d+)/.exec(opts.headers.Range);
+    const start = Number(from), end = Math.min(Number(requestedEnd), source.length - 1);
+    events.push(`read:${start}`);
+    return new Response(source.subarray(start, end + 1), { status: 206,
+      headers: { 'Content-Range': `bytes ${start}-${end}/${source.length}`, 'Content-Type': 'video/mp4' } });
+  };
+  const request = async (op, payload) => {
+    if (op === 'start') return { ok: true, transferId: 'test' };
+    if (op === 'chunk') {
+      events.push(`send:${payload.offset}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      events.push(`sent:${payload.offset}`);
+    }
+    return { ok: true };
+  };
+  await transfer('https://web.telegram.org/a/progressive/123', {}, request, fetcher);
+  // The second part is requested before the first send has finished
+  assert.ok(events.indexOf(`read:${CHUNK_SIZE}`) < events.indexOf('sent:0'));
 });
 
 test('stops and aborts when the desktop rejects a chunk', async () => {

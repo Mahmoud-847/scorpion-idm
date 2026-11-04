@@ -226,65 +226,67 @@ BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "ex
 
 CHANGELOG_HISTORY = [
     {
-        "version": "2.1.15",
+        "version": "2.1.16",
         "date": "2026-11-04",
-        "title_ar": "تحميل الفيديو المحدد بالمؤشر أو أثناء التمرير",
-        "title_en": "Download the video selected by pointer or scroll focus",
+        "title_ar": "تنزيل أسرع وأوثق لفيديوهات تيليجرام",
+        "title_en": "Faster, more reliable Telegram downloads",
         "ar": [
-            "اختيار الفيديو الذي تشير إليه أو تركز عليه أثناء التمرير، حتى لو كان متوقفًا، مع نقل العلامة فوقه.",
-            "منع تشغيل فيديو آخر في الخلفية من تغيير الاختيار، وإخفاء العلامة عندما لا يبقى فيديو مناسب ظاهرًا.",
-            "ربط المصدر والمدة وقائمة الجودة بالفيديو المحدد، ومنع استخدام روابط منشورات أخرى كبدائل تلقائية.",
-            "إصلاح موضع العلامة عند ظهور الفيديو جزئيًا من أعلى الشاشة، ومنع خيارات الجودة القديمة من تنزيل مقطع مختلف.",
+            "تنزيل فيديوهات تيليجرام أصبح أسرع.",
+            "إصلاح فشل حفظ فيديو تيليجرام عندما يكون مجلد التنزيل على قرص غير C.",
+            "زر «إلغاء» لتنزيلات تيليجرام بدل الإيقاف المؤقت، وحذف الملفات المؤقتة عند فشل التنزيل أو إلغائه.",
+            "البرنامج يلتقط الآن ملفات كان المتصفح ينزّلها بنفسه بالخطأ (مثل ملفات ‎.ts).",
         ],
         "en": [
-            "Select the visible video under the pointer or in scroll focus, including paused videos, and anchor the bar to it.",
-            "Background playback cannot steal selection; hide the bar when no suitable visible player remains.",
-            "Bind source, duration, and quality choices to the selected video; reject ambiguous post fallbacks.",
-            "Fix placement above clipped videos and invalidate stale quality menus after the target changes.",
+            "Telegram video downloads are faster.",
+            "Fix Telegram videos failing to save when the download folder is on a drive other than C.",
+            "Telegram downloads get a Cancel button instead of Pause, and leftover temporary files are removed on failure or cancel.",
+            "Some files the browser used to download by itself (such as .ts files) are now caught by Scorpion.",
+        ],
+    },
+    {
+        "version": "2.1.15",
+        "date": "2026-11-04",
+        "title_ar": "تنزيل الفيديو الذي تختاره بالضبط",
+        "title_en": "Download exactly the video you pick",
+        "ar": [
+            "تنزيل الفيديو الذي يقف عليه المؤشر أو الظاهر أمامك أثناء التمرير، حتى لو كان متوقفًا.",
+            "فيديو يعمل في الخلفية لم يعد يغيّر الفيديو المختار.",
+            "قائمة الجودات تخص الفيديو المختار دائمًا، فلا يُنزَّل مقطع آخر بالخطأ.",
+        ],
+        "en": [
+            "Download the video under the pointer or in view while scrolling, even when it is paused.",
+            "A video playing in the background no longer changes your selection.",
+            "The quality list always belongs to the selected video, so a different clip is never downloaded by mistake.",
         ],
     },
     {
         "version": "2.1.14",
         "date": "2026-11-04",
-        "title_ar": "إصلاح ظهور البرنامج وثبات شريط التحميل",
-        "title_en": "Desktop startup and stable browser download bar",
+        "title_ar": "ظهور البرنامج وثبات شريط التحميل",
+        "title_en": "App startup and a steadier download bar",
         "ar": [
-            "إصلاح تشغيل البرنامج بدون نافذة بعد استخدام الناشر التلقائي، والتحقق من ظهور الواجهة قبل النشر.",
-            "إزالة إخفاء شريط التحميل التلقائي وتكرار تحريكه، مع مقبض سحب مستقل وإغلاق يستمر حتى تغيير الصفحة.",
-            "منع إعادة فحص الصفحة بسبب تحديثات الشريط نفسه، وإضافة اختبارات تفاعل الإغلاق والسحب.",
+            "إصلاح تشغيل البرنامج بعد التحديث دون أن تظهر نافذته.",
+            "شريط التحميل فوق الفيديو أصبح ثابتًا، يُسحب من مقبض واضح، ويظل مغلقًا حتى تنتقل لصفحة أخرى.",
         ],
         "en": [
-            "Keep the publisher's headless Qt setting out of the desktop app; verify visible Windows startup before publishing.",
-            "Keep the download bar stable, use a dedicated drag handle, and preserve dismissal across player events.",
-            "Ignore the bar's own DOM mutations and cover close/drag interactions with DOM tests.",
+            "Fix the app starting without showing its window after an update.",
+            "The download bar over videos stays put, drags from a clear handle, and stays closed until you leave the page.",
         ],
     },
     {
         "version": "2.1.13",
         "date": "2026-11-04",
-        "title_ar": "إصلاح تنزيل الفيديو والتحقق من اكتماله",
-        "title_en": "Browser-owned media transfers and video integrity checks",
+        "title_ar": "تنزيل فيديوهات تيليجرام وضمان اكتمال الفيديو",
+        "title_en": "Telegram videos and complete-download checks",
         "ar": [
-            "مسار تنزيل مخصص لفيديو تليجرام عبر جلسة المتصفح مع التحقق من كل جزء والحجم الكامل.",
-            "فحص مدة الفيديو ومساراته قبل اعتماد اكتمال التنزيل، وإيقاف التحميل عند فقد أي جزء من البث.",
-            "تحسين اكتشاف روابط الفيديو ومنع اختيار أجزاء البث والروابط التابعة لفيديوهات سابقة.",
+            "تنزيل فيديوهات تيليجرام ويب من زر التنزيل فوق الفيديو.",
+            "الفيديو الناقص أو الأقصر من الأصلي لم يعد يظهر كتحميل مكتمل.",
+            "التعرف على الفيديوهات في المواقع أصبح أدق.",
         ],
         "en": [
-            "Transfer Telegram Web media through the active browser session with strict range and size checks.",
-            "Validate duration and media tracks before completion; fail on missing streaming fragments.",
-            "Improve media detection and reject fragment URLs and stale video candidates.",
-        ],
-    },
-    {
-        "version": "2.1.12",
-        "date": "2026-11-03",
-        "title_ar": "الإصدار 2.1.12",
-        "title_en": "Version 2.1.12",
-        "ar": [
-            "تحسينات وإصلاحات عامة.",
-        ],
-        "en": [
-            "General improvements and fixes.",
+            "Download Telegram Web videos from the button on the video.",
+            "A video that is incomplete or shorter than the original is no longer shown as complete.",
+            "More accurate video detection on websites.",
         ],
     },
     {
@@ -4096,6 +4098,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         self.signals.completed.emit(item["id"])
 
     def pause_download(self, dl_id: str):
+        # A transfer fed by a browser tab cannot be resumed from here: pausing it cancels it cleanly
+        if self.cancel_browser_transfer(dl_id, "تم إلغاء التنزيل. اضغط زر التنزيل على الفيديو في المتصفح للبدء من جديد."):
+            return
         ctrl = self.controllers.pop(dl_id, None)
         if ctrl:
             ctrl["aborted"] = True
@@ -5959,7 +5964,15 @@ class DownloadCard(QWidget):
 
         if mode != self.state:
             self.state = mode
-            if mode == "done":
+            browser_owned = item.get("browserTransfer")
+            if browser_owned and mode == "error":
+                # Only the browser tab can restart it, so no Retry here
+                self._set_buttons((T("التفاصيل", "Details"), "details"), (T("إغلاق", "Close"), "close"))
+                self.dismiss_at = time.time() + 15
+            elif browser_owned and mode != "done":
+                self._set_buttons((T("إلغاء", "Cancel"), "pause"), (T("التفاصيل", "Details"), "details"))
+                self.dismiss_at = None
+            elif mode == "done":
                 self._set_buttons((T("تشغيل", "Open"), "open"), (T("فتح المجلد", "Show in folder"), "folder"), True)
                 self.dismiss_at = time.time() + 6
             elif mode == "error":

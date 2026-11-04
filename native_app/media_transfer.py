@@ -1,9 +1,11 @@
 """Integrity checks and bounded, authenticated uploads from browser-owned media."""
 import base64
+import contextlib
 import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -106,6 +108,10 @@ class BrowserTransferMixin:
         if not record:
             raise ValueError("جلسة التنزيل انتهت. أعد المحاولة من المتصفح.")
         item, ctrl = record
+        if operation == "abort":
+            # Always honoured, even after a pause/cancel, so the session and its temp file never linger
+            self.fail_browser_transfer(token, "التنزيل من المتصفح انقطع. افتح الفيديو وأعد المحاولة.")
+            return {"ok": True}
         with ctrl["file_lock"]:
             ctrl["last_activity"] = time.time()
             if ctrl["aborted"] or item.get("status") != "downloading":
@@ -135,9 +141,6 @@ class BrowserTransferMixin:
                 seg["currentByte"] = item["downloadedBytes"]
                 item["progress"] = min(99.9, item["downloadedBytes"] / item["totalSize"] * 100)
                 return {"ok": True, "offset": item["downloadedBytes"]}
-            if operation == "abort":
-                self.fail_browser_transfer(token, "التنزيل من المتصفح انقطع. افتح الفيديو وأعد المحاولة.")
-                return {"ok": True}
             if operation != "finish":
                 raise ValueError("عملية تنزيل غير صالحة.")
             try:
@@ -151,7 +154,8 @@ class BrowserTransferMixin:
                 if ctrl["aborted"]:
                     raise ValueError("التنزيل اتوقف أثناء فحص الفيديو. أعد المحاولة من المتصفح.")
                 destination = self._available_media_path(item["filePath"], item["id"])
-                os.rename(item["tempFilePath"], destination)
+                # The temp folder and the download folder may be on different drives
+                shutil.move(item["tempFilePath"], destination)
                 item["filePath"] = destination
                 item["filename"] = os.path.basename(destination)
                 item.update(status="completed", progress=100.0, speed=0, timeLeft=0, phase="done", finishedAt=time.time())
@@ -175,11 +179,25 @@ class BrowserTransferMixin:
             ctrl["aborted"] = True
             ctrl["file"].close()
             self.controllers.pop(item["id"], None)
-            if item.get("status") == "downloading":
+            # A browser session cannot be resumed from the app, so its partial file is useless
+            temp_path = item.get("tempFilePath")
+            if temp_path and item.get("status") != "completed":
+                with contextlib.suppress(OSError):
+                    os.remove(temp_path)
+            if item.get("status") in ("downloading", "paused"):
                 item.update(status="error", speed=0, errorMsg=message)
+                item["downloadedBytes"] = 0
+                item["progress"] = 0.0
                 for seg in item["segments"]:
                     seg["status"] = "error"
                 self.save_state()
+
+    def cancel_browser_transfer(self, dl_id, message):
+        for token, (item, _) in list(self.__dict__.get("_browser_transfers", {}).items()):
+            if item.get("id") == dl_id:
+                self.fail_browser_transfer(token, message)
+                return True
+        return False
 
     def expire_browser_transfers(self):
         for token, (_, ctrl) in list(self.__dict__.get("_browser_transfers", {}).items()):

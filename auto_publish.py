@@ -79,8 +79,9 @@ def validate_release_sources(log):
     ]
     node = shutil.which("node")
     if not node:
-        raise RuntimeError("Node.js is required to validate the browser extension before publishing")
-    if not os.path.isdir(os.path.join(PROJECT_ROOT, "tests", "node_modules", "jsdom")):
+        # The Python checks still guard the app; only the extension's checks need Node.js
+        log("⚠ Node.js غير مثبت على هذا الجهاز: تم تخطي اختبارات إضافة المتصفح (اختبارات البرنامج تعمل).")
+    elif not os.path.isdir(os.path.join(PROJECT_ROOT, "tests", "node_modules", "jsdom")):
         npm = shutil.which("npm.cmd") or shutil.which("npm")
         if not npm:
             raise RuntimeError("npm is required to install the extension UI test dependencies")
@@ -89,10 +90,11 @@ def validate_release_sources(log):
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if installed.returncode:
             raise RuntimeError("Could not install the extension UI test dependencies")
-    commands.extend([[node, "--check", f"browser-extension/{name}"] for name in
-                     ("background.js", "content.js", "popup.js", "media.js", "browser-transfer.js", "telegram-reader.js")])
-    commands.append([node, "--test", "tests/browser-transfer.test.cjs"])
-    commands.append([node, "--test", "tests/content-panel.test.cjs"])
+    if node:
+        commands.extend([[node, "--check", f"browser-extension/{name}"] for name in
+                         ("background.js", "content.js", "popup.js", "media.js", "browser-transfer.js", "telegram-reader.js")])
+        commands.append([node, "--test", "tests/browser-transfer.test.cjs"])
+        commands.append([node, "--test", "tests/content-panel.test.cjs"])
     for command in commands:
         log("==> Checking: " + " ".join(command[1:]))
         result = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True,
@@ -159,11 +161,13 @@ def update_version_in_source(new_ver: str, note_ar: str, note_en: str):
     # Several notes can be typed on one line, separated by "|"
     notes_ar = [n.strip() for n in re.split(r"[\n|]", note_ar) if n.strip()]
     notes_en = [n.strip() for n in re.split(r"[\n|]", note_en or note_ar) if n.strip()]
-    if not notes_ar:
+    top = re.search(r'CHANGELOG_HISTORY\s*=\s*\[\s*\{\s*"version":\s*"([^"]+)"', content)
+    prewritten = bool(top and top.group(1) == new_ver)
+    # A release whose notes were already written keeps them as they are; never pad them with a generic line
+    if not notes_ar and not prewritten:
         notes_ar, notes_en = ["تحسينات وإصلاحات عامة."], ["General improvements and fixes."]
 
-    top = re.search(r'CHANGELOG_HISTORY\s*=\s*\[\s*\{\s*"version":\s*"([^"]+)"', content)
-    if top and top.group(1) == new_ver:
+    if prewritten:
         # Same version published again (no bump): add the new notes to its existing entry
         for key, notes in (("ar", notes_ar), ("en", notes_en)):
             new_lines = "".join(f"            {_py_str(n)},\n" for n in notes if _py_str(n) not in content)
@@ -597,12 +601,15 @@ class AutoPublisherWindow(QMainWindow):
                 for args in (
                     # Stage only tracked files + release artifacts (never stray/secret files); never rewrite remote history
                     ("add", "-u"),
-                    ("add", "--", "release/update.json", "release/Scorpion-Update-Payload.zip", "release/Scorpion-Browser-Extension.zip",
-                     "native_app/media_transfer.py", "browser-extension/media.js", "browser-extension/browser-transfer.js",
-                     "browser-extension/telegram-reader.js",
-                     "VIDEO_DOWNLOADS.md",
-                     "tests/test_media_transfer.py", "tests/browser-transfer.test.cjs", "tests/test_publisher_startup.py",
-                     "tests/content-panel.test.cjs", "tests/package.json", "tests/package-lock.json"),
+                    # Only files that exist: a renamed or removed doc/test must not block a release
+                    ("add", "--", *[p for p in (
+                        "release/update.json", "release/Scorpion-Update-Payload.zip", "release/Scorpion-Browser-Extension.zip",
+                        "native_app/media_transfer.py", "browser-extension/media.js", "browser-extension/browser-transfer.js",
+                        "browser-extension/telegram-reader.js",
+                        "VIDEO_DOWNLOADS.md",
+                        "tests/test_media_transfer.py", "tests/browser-transfer.test.cjs", "tests/test_publisher_startup.py",
+                        "tests/content-panel.test.cjs", "tests/package.json", "tests/package-lock.json",
+                    ) if os.path.exists(os.path.join(PROJECT_ROOT, p))]),
                     ("commit", "-m", f"Release Scorpion IDM v{new_ver}", "--allow-empty"),
                     ("push", "-u", "origin", "main"),
                 ):

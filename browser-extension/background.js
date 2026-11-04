@@ -109,8 +109,9 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   const targetUrl = downloadItem.finalUrl || downloadItem.url || '';
   if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) return;
   if (targetUrl.startsWith(SCORPION_SERVER)) return;
-  // Telegram's virtual addresses only exist inside the page's service worker.
-  if (ScorpionMedia.isBrowserLocal(targetUrl) || ScorpionMedia.isFragment(targetUrl)) return;
+  // Telegram's virtual addresses only exist inside the page's service worker. (No fragment check here:
+  // a download the user started is a real file even if its name looks like a stream part, e.g. "init.exe" or "*.ts".)
+  if (ScorpionMedia.isBrowserLocal(targetUrl)) return;
 
   const fileSize = downloadItem.fileSize || 0;
   const fname = downloadItem.filename || '';

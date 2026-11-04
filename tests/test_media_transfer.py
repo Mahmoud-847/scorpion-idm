@@ -223,16 +223,33 @@ class MediaRegressionTests(unittest.TestCase):
         self.assertEqual(item["status"], "error")
         self.assertFalse(Path(item["filePath"]).exists())
 
-    def test_pause_closes_browser_transfer_without_generic_resume(self):
+    def test_pause_cancels_browser_transfer_and_removes_temp(self):
         token, item = self.start_transfer()
+        self.send(token, self.data[:100])
         self.engine.pause_download(item["id"])
+        self.assertEqual(item["status"], "error")
+        self.assertFalse(Path(item["tempFilePath"]).exists())
+        self.assertFalse(self.engine.controllers)
         with self.assertRaises(ValueError):
             self.send(token)
-        self.engine.expire_browser_transfers()
-        self.assertEqual(item["status"], "paused")
+        # Resume from the app cannot revive a browser-owned transfer
         self.engine.start_download(item["id"])
         self.assertEqual(item["status"], "error")
-        self.assertFalse(self.engine.controllers)
+
+    def test_failed_transfer_removes_temp_and_abort_after_pause_is_ok(self):
+        token, item = self.start_transfer()
+        self.send(token, self.data[:100])
+        self.assertEqual(self.engine.receive_browser_transfer("abort", {"transferId": token}), {"ok": True})
+        self.assertEqual(item["status"], "error")
+        self.assertFalse(Path(item["tempFilePath"]).exists())
+
+    def test_finish_moves_file_across_drives(self):
+        token, item = self.start_transfer()
+        self.send(token)
+        with patch("os.rename", side_effect=OSError(17, "cross-device")):
+            self.engine.receive_browser_transfer("finish", {"transferId": token})
+        self.assertEqual(item["status"], "completed")
+        self.assertEqual(Path(item["filePath"]).read_bytes(), self.data)
 
     def test_expired_tab_marks_transfer_failed(self):
         token, item = self.start_transfer()

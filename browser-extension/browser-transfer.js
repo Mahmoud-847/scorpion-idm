@@ -54,8 +54,18 @@
       transferId = start.transferId;
       let offset = 0;
       const total = part.total;
+      const readAt = async (from) => {
+        for (let attempt = 0; ; attempt++) {
+          try { return await rangeReader(url, from, total, fetcher); }
+          catch (err) { if (attempt === 2) throw err; }
+        }
+      };
       while (offset < total) {
         const payload = { transferId, offset, data: encode(part.bytes) };
+        // Read the next part while this one is being sent: the two waits overlap instead of adding up.
+        const nextOffset = offset + part.bytes.length;
+        const nextPart = nextOffset < total ? readAt(nextOffset) : null;
+        if (nextPart) nextPart.catch(() => {}); // a failed send must not leave an unhandled rejection
         // An acknowledged chunk can be retried safely: the desktop checks the offset AND its bytes.
         let result;
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -67,14 +77,9 @@
           catch (err) { if (attempt === 2) throw err; }
         }
         if (!result.ok) throw new Error(result.error || 'التنزيل اتوقف. أعد المحاولة من الفيديو.');
-        offset += part.bytes.length;
+        offset = nextOffset;
         progress(offset, total);
-        if (offset < total) {
-          for (let attempt = 0; attempt < 3; attempt++) {
-            try { part = await rangeReader(url, offset, total, fetcher); break; }
-            catch (err) { if (attempt === 2) throw err; }
-          }
-        }
+        if (nextPart) part = await nextPart;
       }
       const done = await request('finish', { transferId });
       if (!done.ok) throw new Error(done.error || 'فشل التحقق من الفيديو.');
