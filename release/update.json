@@ -1,22 +1,26 @@
 {
-  "version": "2.1.15",
+  "version": "2.1.16",
   "publishedAt": "2026-11-04",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "da3843ed310af39190d36aa6c60eb486ae61e38ec8883e5f2e1f29c2cd830af2",
+  "sha256": "7f6c1b00a507816c17cafdfda965ff798373f5908b36564e59be730a74b25806",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "تحميل الفيديو المحدد بالمؤشر أو أثناء التمرير",
-  "title_en": "Download the video selected by pointer or scroll focus",
+  "title_ar": "تنزيل أسرع وأوثق لفيديوهات تيليجرام",
+  "title_en": "Faster, more reliable Telegram downloads",
   "changelog_ar": [
-    "اختيار الفيديو الذي تشير إليه أو تركز عليه أثناء التمرير، حتى لو كان متوقفًا، مع نقل العلامة فوقه.",
-    "منع تشغيل فيديو آخر في الخلفية من تغيير الاختيار، وإخفاء العلامة عندما لا يبقى فيديو مناسب ظاهرًا.",
-    "ربط المصدر والمدة وقائمة الجودة بالفيديو المحدد، ومنع استخدام روابط منشورات أخرى كبدائل تلقائية.",
-    "إصلاح موضع العلامة عند ظهور الفيديو جزئيًا من أعلى الشاشة، ومنع خيارات الجودة القديمة من تنزيل مقطع مختلف."
+    "تنزيل فيديوهات تيليجرام أصبح أسرع.",
+    "إصلاح فشل حفظ فيديو تيليجرام عندما يكون مجلد التنزيل على قرص غير C.",
+    "زر «إلغاء» لتنزيلات تيليجرام بدل الإيقاف المؤقت، وحذف الملفات المؤقتة عند فشل التنزيل أو إلغائه.",
+    "البرنامج يلتقط الآن ملفات كان المتصفح ينزّلها بنفسه بالخطأ (مثل ملفات ‎.ts).",
+    "زر التنزيل يظهر الآن فوق مشغلات كانت تخفي الفيديو داخلها (مثل OK و VK)، ومع تغيير سيرفر المشاهدة.",
+    "إصلاح فشل تنزيل الفيديو من مشغلات المواقع المضمّنة التي لا تعمل إلا داخل صفحة الموقع."
   ],
   "changelog_en": [
-    "Select the visible video under the pointer or in scroll focus, including paused videos, and anchor the bar to it.",
-    "Background playback cannot steal selection; hide the bar when no suitable visible player remains.",
-    "Bind source, duration, and quality choices to the selected video; reject ambiguous post fallbacks.",
-    "Fix placement above clipped videos and invalidate stale quality menus after the target changes."
+    "Telegram video downloads are faster.",
+    "Fix Telegram videos failing to save when the download folder is on a drive other than C.",
+    "Telegram downloads get a Cancel button instead of Pause, and leftover temporary files are removed on failure or cancel.",
+    "Some files the browser used to download by itself (such as .ts files) are now caught by Scorpion.",
+    "The download button now appears on players that hide their video inside them (such as OK and VK), including after switching servers.",
+    "Fix downloads failing from embedded site players that only work inside the site's own page."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",
