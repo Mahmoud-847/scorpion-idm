@@ -22,6 +22,9 @@ if sys.stdout is None:
     sys.stdout = open(os.devnull, "w", encoding="utf-8")
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QIcon, QFont
@@ -46,14 +49,46 @@ REPO_URL = "https://github.com/Mahmoud-847/scorpion-idm.git"
 WATCH_TARGETS = [
     os.path.join(PROJECT_ROOT, "native_app", "scorpion_qt.py"),
     os.path.join(PROJECT_ROOT, "native_app", "sitecustomize.py"),
+    os.path.join(PROJECT_ROOT, "native_app", "media_transfer.py"),
     os.path.join(PROJECT_ROOT, "native_app", "installer", "scorpion_setup.iss"),
     os.path.join(PROJECT_ROOT, "browser-extension", "manifest.json"),
     os.path.join(PROJECT_ROOT, "browser-extension", "background.js"),
     os.path.join(PROJECT_ROOT, "browser-extension", "content.js"),
+    os.path.join(PROJECT_ROOT, "browser-extension", "media.js"),
+    os.path.join(PROJECT_ROOT, "browser-extension", "browser-transfer.js"),
+    os.path.join(PROJECT_ROOT, "browser-extension", "telegram-reader.js"),
     os.path.join(PROJECT_ROOT, "browser-extension", "content.css"),
     os.path.join(PROJECT_ROOT, "browser-extension", "popup.html"),
     os.path.join(PROJECT_ROOT, "browser-extension", "popup.js"),
+    os.path.join(PROJECT_ROOT, "build_installer.ps1"),
+    os.path.join(PROJECT_ROOT, "requirements.txt"),
+    os.path.join(PROJECT_ROOT, "tests", "test_media_transfer.py"),
+    os.path.join(PROJECT_ROOT, "tests", "browser-transfer.test.cjs"),
 ]
+
+
+def validate_release_sources(log):
+    """Never close the user's app or publish a release whose regression checks fail."""
+    commands = [
+        [sys.executable, "-m", "py_compile", "native_app/scorpion_qt.py", "native_app/media_transfer.py", "auto_publish.py"],
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_media_transfer.py", "-v"],
+    ]
+    node = shutil.which("node")
+    if not node:
+        raise RuntimeError("Node.js is required to validate the browser extension before publishing")
+    commands.extend([[node, "--check", f"browser-extension/{name}"] for name in
+                     ("background.js", "content.js", "popup.js", "media.js", "browser-transfer.js", "telegram-reader.js")])
+    commands.append([node, "--test", "tests/browser-transfer.test.cjs"])
+    for command in commands:
+        log("==> Checking: " + " ".join(command[1:]))
+        result = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if result.stdout.strip():
+            log(result.stdout.strip())
+        if result.stderr.strip():
+            log(result.stderr.strip())
+        if result.returncode:
+            raise RuntimeError("Release validation failed; build and publication were stopped")
 
 
 def compute_snapshot() -> dict:
@@ -440,6 +475,8 @@ class AutoPublisherWindow(QMainWindow):
             try:
                 self.signals.progress.emit(7, "جاري التأكد من أن المشروع على فرع main ومحدّث من GitHub...")
                 ensure_on_up_to_date_main()
+                self.signals.progress.emit(9, "جاري اختبار إصلاحات الفيديو والإضافة قبل البناء والنشر...")
+                validate_release_sources(self.signals.log.emit)
                 cur_ver = read_current_version()
                 new_ver = bump_patch_version(cur_ver) if do_bump else cur_ver
                 if do_bump or note_ar:
@@ -457,6 +494,9 @@ class AutoPublisherWindow(QMainWindow):
                 stop_running_scorpion()
 
                 build_script = os.path.join(PROJECT_ROOT, "build_installer.ps1")
+                # Python launched from PowerShell 7 can inherit its Core-only module paths. Let
+                # Windows PowerShell discover its own modules, including Authenticode verification.
+                build_env = {key: value for key, value in os.environ.items() if key.upper() != "PSMODULEPATH"}
                 proc = subprocess.Popen(
                     ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", build_script],
                     cwd=PROJECT_ROOT,
@@ -465,6 +505,7 @@ class AutoPublisherWindow(QMainWindow):
                     text=True,
                     encoding="utf-8",
                     errors="replace",
+                    env=build_env,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 setup_path = tools_version = tools_pack = ""
@@ -501,7 +542,7 @@ class AutoPublisherWindow(QMainWindow):
 
                 exe_p = os.path.join(dst_app, "ScorpionIDM.exe")
                 if os.path.isfile(exe_p):
-                    subprocess.Popen([exe_p], cwd=dst_app)
+                    subprocess.Popen([exe_p], cwd=dst_app, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
                 # Clients refuse packages without a matching checksum, so never publish one that would fail
                 with open(os.path.join(PROJECT_ROOT, "release", "update.json"), "r", encoding="utf-8") as f:
@@ -521,7 +562,11 @@ class AutoPublisherWindow(QMainWindow):
                 for args in (
                     # Stage only tracked files + release artifacts (never stray/secret files); never rewrite remote history
                     ("add", "-u"),
-                    ("add", "--", "release/update.json", "release/Scorpion-Update-Payload.zip"),
+                    ("add", "--", "release/update.json", "release/Scorpion-Update-Payload.zip", "release/Scorpion-Browser-Extension.zip",
+                     "native_app/media_transfer.py", "browser-extension/media.js", "browser-extension/browser-transfer.js",
+                     "browser-extension/telegram-reader.js",
+                     "VIDEO_DOWNLOADS.md",
+                     "tests/test_media_transfer.py", "tests/browser-transfer.test.cjs"),
                     ("commit", "-m", f"Release Scorpion IDM v{new_ver}", "--allow-empty"),
                     ("push", "-u", "origin", "main"),
                 ):
@@ -531,7 +576,7 @@ class AutoPublisherWindow(QMainWindow):
                         self.signals.log.emit(p_git.stdout.strip())
                     if p_git.stderr.strip():
                         self.signals.log.emit(p_git.stderr.strip())
-                    if args[0] in ("commit", "push") and p_git.returncode != 0:
+                    if p_git.returncode != 0:
                         raise RuntimeError(
                             f"تعذر تنفيذ git {args[0]}: {(p_git.stderr or p_git.stdout).strip()[:160]}"
                         )
@@ -623,6 +668,10 @@ _LOCK_SOCK = None
 
 
 if __name__ == "__main__":
+    once = "--once" in sys.argv
+    if once:
+        # A single logged publication is also usable from a terminal or CI without an interactive window.
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     ensure_publisher_shortcut()
     try:
         _LOCK_SOCK = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -631,6 +680,14 @@ if __name__ == "__main__":
     except OSError:
         sys.exit(0)
     app = QApplication(sys.argv)
-    win = AutoPublisherWindow(auto_run_now="--now" in sys.argv)
-    win.show()
+    win = AutoPublisherWindow(auto_run_now="--now" in sys.argv or once)
+    if "--no-bump" in sys.argv:
+        win.chk_bump.setChecked(False)
+    if once:
+        win.chk_watch.setChecked(False)
+        win.signals.log.connect(lambda message: print(message, flush=True))
+        win.signals.progress.connect(lambda percent, message: print(f"[{percent}%] {message}", flush=True))
+        win.signals.finished.connect(lambda ok, message: (print(message, flush=True), app.exit(0 if ok else 1)))
+    else:
+        win.show()
     sys.exit(app.exec())

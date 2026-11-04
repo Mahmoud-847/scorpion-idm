@@ -1,16 +1,20 @@
 {
-  "version": "2.1.12",
-  "publishedAt": "2026-11-03",
+  "version": "2.1.13",
+  "publishedAt": "2026-11-04",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "d1bd49e6580176fb1a8810809f8c7c063e9b235e1b6e9dbe06609eadcf6e3e3f",
+  "sha256": "f5d1bee705b3833182070da78c3c155cc3b330ec320e975a60995160dbaead53",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.12",
-  "title_en": "Version 2.1.12",
+  "title_ar": "إصلاح تنزيل الفيديو والتحقق من اكتماله",
+  "title_en": "Browser-owned media transfers and video integrity checks",
   "changelog_ar": [
-    "تحسينات وإصلاحات عامة."
+    "مسار تنزيل مخصص لفيديو تليجرام عبر جلسة المتصفح مع التحقق من كل جزء والحجم الكامل.",
+    "فحص مدة الفيديو ومساراته قبل اعتماد اكتمال التنزيل، وإيقاف التحميل عند فقد أي جزء من البث.",
+    "تحسين اكتشاف روابط الفيديو ومنع اختيار أجزاء البث والروابط التابعة لفيديوهات سابقة."
   ],
   "changelog_en": [
-    "General improvements and fixes."
+    "Transfer Telegram Web media through the active browser session with strict range and size checks.",
+    "Validate duration and media tracks before completion; fail on missing streaming fragments.",
+    "Improve media detection and reject fragment URLs and stale video candidates."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",

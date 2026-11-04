@@ -84,6 +84,13 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs && tabs[0];
       if (!tab || !tab.url) return;
+      if (new URL(tab.url).hostname === 'web.telegram.org') {
+        chrome.tabs.sendMessage(tab.id, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' }, () => {
+          if (chrome.runtime.lastError) return;
+          window.close();
+        });
+        return;
+      }
       chrome.runtime.sendMessage(
         {
           action: 'SCORPION_DOWNLOAD_VIDEO',

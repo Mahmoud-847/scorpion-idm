@@ -170,9 +170,11 @@
   // Interface sounds hosted as site assets (e.g. LinkedIn's static.licdn.com/aero-v1/sc/h/assets/<id>.m4a)
   const UI_SOUND_RE = /(^https?:\/\/static\.|\/(assets|sounds?|sfx)\/)/i;
   const IGNORE_STREAM_RE =
-    /(widevine|playready|drm|license|spclient\.spotify\.com|telemetry|analytics|beacon|track_event|oauth|token|api-v2\.soundcloud\.com\/(me|announcements|promoted))/i;
+    /(widevine|playready|drm|license|spclient\.spotify\.com|telemetry|analytics|beacon|track_event|oauth|api-v2\.soundcloud\.com\/(me|announcements|promoted))/i;
   const MUSIC_SITE_RE = /(open\.spotify\.com|soundcloud\.com|anghami\.com|deezer\.com|music\.apple\.com|music\.youtube\.com)/i;
   const streamMap = new Map();
+  let streamPage = location.href;
+  let lastNetworkScan = 0;
 
   function detectAudioExt(url) {
     const m = String(url || '').match(/\.(mp3|m4a|aac|ogg|opus|wav|flac|weba)(\?|#|$)/i);
@@ -180,14 +182,20 @@
   }
 
   function considerUrl(url, initiator) {
+    if (streamPage !== location.href) {
+      streamMap.clear();
+      detectedStreams = [];
+      streamPage = location.href;
+    }
     if (!url || !/^https?:\/\//i.test(url) || streamMap.has(url)) return;
     if (url.startsWith('http://127.0.0.1:19615')) return;
     if (IGNORE_STREAM_RE.test(url)) return;
+    if (ScorpionMedia.isFragment(url) || ScorpionMedia.isBrowserLocal(url)) return;
 
-    const isManifest = MANIFEST_RE.test(url);
-    const isAudio = !isManifest && AUDIO_RE.test(url);
+    const isManifest = MANIFEST_RE.test(url) || initiator === 'manifest';
+    const isAudio = !isManifest && (AUDIO_RE.test(url) || initiator === 'network-audio');
     const isVideo =
-      !isManifest && !isAudio && (VIDEO_RE.test(url) || VIDEO_HINT_RE.test(url) || initiator === 'video');
+      !isManifest && !isAudio && (VIDEO_RE.test(url) || VIDEO_HINT_RE.test(url) || initiator === 'video' || initiator === 'network-video');
     if (!isManifest && !isAudio && !isVideo) return;
 
     // Ignore tiny UI notification sounds
@@ -201,6 +209,7 @@
     const extTag = isManifest ? 'HLS / M3U8' : isAudio ? detectAudioExt(url) : 'MP4';
     const entry = { url, isManifest, isAudio, isVideo, extTag, score, initiator: initiator || '', t: Date.now() };
     streamMap.set(url, entry);
+    if (streamMap.size > 128) streamMap.delete(streamMap.keys().next().value);
     detectedStreams = Array.from(streamMap.values()).sort((a, b) => b.score - a.score || b.t - a.t);
 
     if (isAudio && (!activeMedia || activeMode === 'audio') && window.top === window.self) {
@@ -218,6 +227,17 @@
     document.querySelectorAll('audio, audio source').forEach((el) => {
       considerUrl(el.currentSrc || el.src, 'audio');
     });
+    if (Date.now() - lastNetworkScan > 1500) {
+      lastNetworkScan = Date.now();
+      const requestedPage = location.href;
+      try {
+        chrome.runtime.sendMessage({ action: 'SCORPION_GET_TAB_STREAMS' }, (res) => {
+          if (chrome.runtime.lastError || requestedPage !== location.href) return;
+          for (const stream of res && res.streams || []) considerUrl(stream.url,
+            stream.isManifest ? 'manifest' : stream.mime.startsWith('audio/') ? 'network-audio' : 'network-video');
+        });
+      } catch (_) {}
+    }
   }
 
   try {
@@ -229,6 +249,7 @@
 
   function bestStream(preferAudio = false) {
     scanPerformance();
+    detectedStreams = detectedStreams.filter((s) => Date.now() - s.t < 180000);
     if (preferAudio) {
       const aud = detectedStreams.find((s) => s.isAudio || s.isManifest);
       if (aud) return aud;
@@ -388,6 +409,14 @@
         if (msg && msg.action === 'SCORPION_GET_TITLE') {
           const info = extractPlayingTrackInfo();
           sendResponse({ title: info.title });
+        }
+        if (msg && msg.action === 'SCORPION_DOWNLOAD_CURRENT_MEDIA' && ScorpionMedia.isTelegram(location.href)) {
+          const media = msg.src ? Array.from(document.querySelectorAll('video')).find((el) => (el.currentSrc || el.src) === msg.src) : activeMedia;
+          if (!media) { sendResponse({ ok: false }); return; }
+          activateMediaElement(media);
+          const target = computeDownloadTarget();
+          triggerVideoDownload({ url: target.targetUrl, title: target.pageTitle, quality: 'best', type: 'video' });
+          sendResponse({ ok: true });
         }
       });
     } catch (_) {}
@@ -551,6 +580,7 @@
       activeMedia &&
       (activeMedia.currentSrc || activeMedia.src) &&
       /^https?:\/\//i.test(activeMedia.currentSrc || activeMedia.src) &&
+      !ScorpionMedia.isFragment(activeMedia.currentSrc || activeMedia.src) &&
       !IGNORE_STREAM_RE.test(activeMedia.currentSrc || activeMedia.src)
         ? activeMedia.currentSrc || activeMedia.src
         : null;
@@ -571,20 +601,21 @@
     if (!isKnownVideoSite && !isMusicPlatform) {
       if (directMediaSrc) targetUrl = directMediaSrc;
       else if (sniffed && sniffed.isManifest) targetUrl = sniffed.url;
-      else if (sniffed) targetUrl = sniffed.url;
+      // A page extractor is safer than an unrelated short MP4 loaded by an ad or background animation.
     }
     const candidates = [];
     const addCandidate = (u) => {
       if (u && /^https?:\/\//i.test(u) && !candidates.includes(u)) candidates.push(u);
     };
     [targetUrl, effectivePageUrl, ...permalinks, pageUrl, directMediaSrc].forEach(addCandidate);
-    detectedStreams.filter((st) => !st.isAudio).slice(0, 3).forEach((st) => addCandidate(st.url));
+    detectedStreams.filter((st) => !st.isAudio && Date.now() - st.t < 30000).slice(0, 3).forEach((st) => addCandidate(st.url));
     return { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl, candidates };
   }
 
   // Read the qualities as soon as the button shows, so the menu is complete when it opens
   function prefetchQualities() {
     if (activeMode !== 'video') return;
+    if (ScorpionMedia.isTelegram(location.href)) return;
     try {
       const tgt = computeDownloadTarget();
       if (!tgt.isMusicPlatform) listQualities(tgt.targetUrl, tgt.pageUrl, tgt.candidates);
@@ -671,7 +702,7 @@
     presets.forEach((opt) => dropdownEl.appendChild(makeOption(opt)));
 
     // Every quality the video really offers, read by the app (yt-dlp), listed under "best"
-    if (!(activeMode === 'audio' || isMusicPlatform)) {
+    if (!(activeMode === 'audio' || isMusicPlatform || ScorpionMedia.isTelegram(pageUrl))) {
       const box = document.createElement('div');
       const status = document.createElement('div');
       status.style.cssText = 'font-size:11px;color:#94a3b8;padding:6px 10px;';
@@ -753,15 +784,17 @@
   }
 
   function triggerVideoDownload(payload) {
+    payload.expectedDuration = ScorpionMedia.mediaDuration(activeMedia);
     const tr = t();
     dropdownEl.classList.remove('open');
     if (labelEl) {
       labelEl.textContent = tr.sending;
     }
 
-    const onDone = (ok) => {
+    const onDone = (ok, error = '') => {
       if (labelEl) {
-        labelEl.textContent = ok ? tr.sentOk : tr.sentErr;
+        labelEl.textContent = ok ? tr.sentOk : error || tr.sentErr;
+        labelEl.title = error;
       }
       setTimeout(() => {
         if (labelEl) {
@@ -771,6 +804,34 @@
     };
 
     const directFallback = () => onDone(false);
+
+    if (ScorpionMedia.isTelegram(location.href)) {
+      // Use only THIS player's source, never another document found in the page's request history.
+      const src = activeMedia && (activeMedia.currentSrc || activeMedia.src);
+      if (!src || !ScorpionMedia.isBrowserLocal(src) || /^blob:/i.test(src)) {
+        onDone(false, currentLang === 'ar' ? 'افتح الفيديو وشغّله، ثم أعد المحاولة. يمكنك استخدام تنزيل تليجرام الأصلي.' :
+          'Open and play this video, then retry. Telegram’s own download button is also available.');
+        return;
+      }
+      if (payload.quality === 'audio') {
+        onDone(false, currentLang === 'ar' ? 'نزّل فيديو تليجرام كاملًا أولًا؛ تحويل الصوت غير متاح لهذا المسار.' :
+          'Download the full Telegram video first; audio conversion is not supported for this transfer.');
+        return;
+      }
+      const request = (operation, data) => new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({ action: 'SCORPION_BROWSER_TRANSFER', operation, payload: data }, (res) => {
+          if (chrome.runtime.lastError || !res) reject(new Error('الاتصال بالبرنامج انقطع. أعد المحاولة.'));
+          else resolve(res);
+        });
+      });
+      ScorpionTransfer.transfer(src, {
+        filename: payload.filename || `${payload.title || 'Telegram_Video'}.mp4`,
+        pageUrl: location.href, expectedDuration: payload.expectedDuration,
+      }, request, fetch, (done, total) => {
+        if (labelEl) labelEl.textContent = `${currentLang === 'ar' ? 'جارٍ التنزيل' : 'Downloading'} ${Math.min(99, Math.floor(done / total * 100))}%`;
+      }, readTelegramPageRange).then(() => onDone(true)).catch((err) => onDone(false, err.message));
+      return;
+    }
 
     try {
       chrome.runtime.sendMessage(
@@ -789,6 +850,36 @@
     } catch (_) {
       directFallback();
     }
+  }
+
+  function readTelegramPageRange(url, offset, total) {
+    return new Promise((resolve, reject) => {
+      const requestId = crypto.randomUUID();
+      const finish = (error, result) => {
+        clearTimeout(timer);
+        window.removeEventListener('message', listener);
+        if (error) reject(error); else resolve(result);
+      };
+      const listener = (event) => {
+        const msg = event.data;
+        if (event.source !== window || event.origin !== location.origin || !msg ||
+            msg.action !== 'SCORPION_MEDIA_RANGE_RESULT' || msg.requestId !== requestId) return;
+        if (msg.error) return finish(new Error(msg.error));
+        const part = msg.part;
+        if (!part || typeof part.data !== 'string' || part.data.length > 710000 ||
+            !Number.isSafeInteger(part.total) || part.total <= offset || total && part.total !== total)
+          return finish(new Error('بيانات جزء الفيديو غير صالحة.'));
+        try {
+          const binary = atob(part.data);
+          if (!binary.length || binary.length > ScorpionTransfer.CHUNK_SIZE || offset + binary.length > part.total)
+            return finish(new Error('حجم جزء الفيديو غير صالح.'));
+          finish(null, { bytes: Uint8Array.from(binary, (c) => c.charCodeAt(0)), total: part.total, mime: part.mime });
+        } catch (_) { finish(new Error('تعذر قراءة جزء الفيديو.')); }
+      };
+      const timer = setTimeout(() => finish(new Error('تعذر الاتصال بمشغّل تليجرام. حدّث الإضافة وأعد تحميل الصفحة.')), 95000);
+      window.addEventListener('message', listener);
+      window.postMessage({ action: 'SCORPION_READ_MEDIA_RANGE', requestId, url, offset, total }, location.origin);
+    });
   }
 
   function isDismissed(media) {

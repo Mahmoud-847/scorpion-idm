@@ -20,8 +20,14 @@ $work = Join-Path $root "native_app\_build"
 $out  = Join-Path $root "release"
 $repo = "Mahmoud-847/scorpion-idm"
 
+if ([IO.Path]::GetFullPath($work) -ne [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'native_app\_build'))) {
+    throw "Refusing to remove a build directory outside the project workspace"
+}
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $work, $out, "$work\setup_dist" | Out-Null
+
+# Publish the same extension files bundled in the installer, including shared media helpers.
+Compress-Archive -Path "$root\browser-extension\*" -DestinationPath "$out\Scorpion-Browser-Extension.zip" -Force
 
 # 1) Ensure pinned, checksum-verified Python runtime & tools exist
 $runtimeZip = Join-Path $root "build\runtime\python-embed.zip"
@@ -58,7 +64,7 @@ $pthContent = @(
 ) -join "`r`n"
 Set-Content -Path (Join-Path $appDir "python$pyNoDot._pth") -Value $pthContent -Encoding ascii
 
-Copy-Item "$root\native_app\scorpion_qt.py", "$root\native_app\sitecustomize.py" "$appDir\app" -Force
+Copy-Item "$root\native_app\scorpion_qt.py", "$root\native_app\sitecustomize.py", "$root\native_app\media_transfer.py" "$appDir\app" -Force
 Copy-Item "$root\browser-extension" "$appDir\browser-extension" -Recurse -Force
 Copy-Item "$root\build\icon.ico", "$root\build\icon.png", "$root\build\tray.png", "$root\build\aria2c.exe" "$appDir\build" -Force
 

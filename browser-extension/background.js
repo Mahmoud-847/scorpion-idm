@@ -1,3 +1,4 @@
+importScripts('media.js');
 const SCORPION_SERVER = 'http://127.0.0.1:19615';
 // Required by the desktop app for any state-changing call (web pages cannot send it cross-site).
 const SCORPION_HEADERS = { 'X-Scorpion-Client': '1' };
@@ -69,6 +70,12 @@ if (chrome.tabs) {
 }
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (tab && ScorpionMedia.isTelegram(tab.url) &&
+      ['scorpion-download-media', 'scorpion-download-page-video'].includes(info.menuItemId)) {
+    chrome.tabs.sendMessage(tab.id, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA', src: info.srcUrl || '' },
+      { frameId: info.frameId || 0 }, () => void chrome.runtime.lastError);
+    return;
+  }
   if (info.menuItemId === 'scorpion-download-link' && info.linkUrl) {
     await sendToScorpion({
       url: info.linkUrl,
@@ -102,6 +109,8 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   const targetUrl = downloadItem.finalUrl || downloadItem.url || '';
   if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) return;
   if (targetUrl.startsWith(SCORPION_SERVER)) return;
+  // Telegram's virtual addresses only exist inside the page's service worker.
+  if (ScorpionMedia.isBrowserLocal(targetUrl) || ScorpionMedia.isFragment(targetUrl)) return;
 
   const fileSize = downloadItem.fileSize || 0;
   const fname = downloadItem.filename || '';
@@ -123,16 +132,17 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   if (!alive) return;
 
   try {
-    chrome.downloads.cancel(downloadItem.id, () => {
-      chrome.downloads.erase({ id: downloadItem.id });
-    });
-
-    await sendToScorpion({
+    const accepted = await sendToScorpion({
       url: targetUrl,
       filename: downloadItem.filename ? downloadItem.filename.split(/[\\/]/).pop() : '',
       referer: downloadItem.referrer || '',
       totalSize: fileSize > 0 ? fileSize : 0,
-      type: isTorrent ? 'torrent' : 'file',
+      type: isTorrent ? 'torrent' : (mime.startsWith('video/') ? 'video' : 'file'),
+      cookies: await siteCookies([targetUrl, downloadItem.referrer]),
+    });
+    // Leave the original browser download alone if the desktop never accepted it.
+    if (accepted) chrome.downloads.cancel(downloadItem.id, () => {
+      if (!chrome.runtime.lastError) chrome.downloads.erase({ id: downloadItem.id });
     });
   } catch (err) {
     console.error('Scorpion error:', err);
@@ -211,7 +221,52 @@ async function sendToScorpion(payload) {
   }
 }
 
+// Response headers find extensionless manifests/media that performance entries cannot identify.
+// Keep a bounded per-tab cache. Navigation discards streams from the previous page.
+const tabStreams = new Map();
+if (chrome.webRequest) chrome.webRequest.onHeadersReceived.addListener((details) => {
+  if (details.tabId < 0 || ![200, 206].includes(details.statusCode) || ScorpionMedia.isFragment(details.url)) return;
+  const headers = Object.fromEntries((details.responseHeaders || []).map((h) => [h.name.toLowerCase(), h.value || '']));
+  const mime = (headers['content-type'] || '').toLowerCase();
+  const isManifest = /mpegurl|dash\+xml/.test(mime) || ScorpionMedia.isManifest(details.url);
+  if (!isManifest && !/^(video|audio)\//.test(mime)) return;
+  const streams = tabStreams.get(details.tabId) || new Map();
+  streams.delete(details.url);
+  streams.set(details.url, { url: details.url, mime, isManifest, frameId: details.frameId, t: Date.now() });
+  if (streams.size > 80) streams.delete(streams.keys().next().value);
+  tabStreams.set(details.tabId, streams);
+}, { urls: ['http://*/*', 'https://*/*'] }, ['responseHeaders']);
+chrome.tabs.onRemoved.addListener((id) => tabStreams.delete(id));
+chrome.tabs.onUpdated.addListener((id, change) => { if (change.url) tabStreams.delete(id); });
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === 'SCORPION_BROWSER_TRANSFER') {
+    const operation = msg.operation;
+    const payload = msg.payload || {};
+    const owner = `${sender.tab && sender.tab.id}:${sender.frameId || 0}:${sender.documentId || ''}`;
+    if (!sender.tab || !ScorpionMedia.isTelegram(sender.url) ||
+        !['start', 'chunk', 'finish', 'abort'].includes(operation) ||
+        (operation === 'start' && (!ScorpionMedia.isBrowserLocal(payload.url) ||
+          new URL(payload.url).origin !== new URL(sender.url).origin))) {
+      sendResponse({ ok: false, error: 'مصدر التنزيل غير صالح.' });
+      return false;
+    }
+    (async () => {
+      // MV3 suspends the service worker between chunks. Ownership must survive that suspension.
+      const key = `scorpionTransfer:${payload.transferId || ''}`;
+      if (operation !== 'start' && (await chrome.storage.session.get(key))[key] !== owner)
+        return sendResponse({ ok: false, error: 'جلسة التنزيل انتهت. أعد المحاولة من الفيديو.' });
+      const res = await fetch(`${SCORPION_SERVER}/browser-transfer/${operation}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
+        body: JSON.stringify(payload), signal: AbortSignal.timeout(operation === 'finish' ? 65000 : 20000),
+      });
+      const data = await res.json();
+      if (operation === 'start' && data.ok) await chrome.storage.session.set({ [`scorpionTransfer:${data.transferId}`]: owner });
+      if (operation === 'finish' && data.ok || operation === 'abort') await chrome.storage.session.remove(key);
+      sendResponse(data);
+    })().catch(() => sendResponse({ ok: false, retryable: true, error: 'الاتصال بالبرنامج انقطع. تأكد من تشغيله وتحديثه.' }));
+    return true;
+  }
   if (msg.action === 'SCORPION_DOWNLOAD_VIDEO' || msg.action === 'SCORPION_DOWNLOAD_LINK') {
     const payload = { ...(msg.payload || {}) };
     // From an embedded player (iframe): also send the page the user is on, for when the player's own
@@ -236,7 +291,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.action === 'SCORPION_GET_TAB_STREAMS') {
-    sendResponse({ streams: [], config });
+    const streams = tabStreams.get(sender.tab && sender.tab.id);
+    sendResponse({ streams: Array.from(streams ? streams.values() : []).filter((s) =>
+      Date.now() - s.t < 180000 && s.frameId === (sender.frameId || 0)).reverse(), config });
     return true;
   }
   if (msg.action === 'SCORPION_LIST_QUALITIES') {

@@ -31,6 +31,7 @@ import urllib.parse
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from media_transfer import BrowserTransferMixin, browser_local_url, fragment_url, finite_duration, validate_media
 
 # Verify HTTPS with the Windows certificate store (like browsers do), so antivirus or company HTTPS
 # inspection (e.g. Kaspersky) doesn't fail every check while certificates stay verified
@@ -156,7 +157,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.12"
+APP_VERSION = "2.1.13"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -169,6 +170,7 @@ def find_tool(name: str) -> str:
     for cand in (
         os.path.join(TOOLS_DIR, exe),
         os.path.join(RESOURCE_ROOT, "build", exe),
+        os.path.join(RESOURCE_ROOT, "build", "tools", exe),
         shutil.which(name) or "",
         os.path.expandvars(rf"%LOCALAPPDATA%\Microsoft\WinGet\Links\{exe}"),
     ):
@@ -223,6 +225,22 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.13",
+        "date": "2026-11-04",
+        "title_ar": "إصلاح تنزيل الفيديو والتحقق من اكتماله",
+        "title_en": "Browser-owned media transfers and video integrity checks",
+        "ar": [
+            "مسار تنزيل مخصص لفيديو تليجرام عبر جلسة المتصفح مع التحقق من كل جزء والحجم الكامل.",
+            "فحص مدة الفيديو ومساراته قبل اعتماد اكتمال التنزيل، وإيقاف التحميل عند فقد أي جزء من البث.",
+            "تحسين اكتشاف روابط الفيديو ومنع اختيار أجزاء البث والروابط التابعة لفيديوهات سابقة.",
+        ],
+        "en": [
+            "Transfer Telegram Web media through the active browser session with strict range and size checks.",
+            "Validate duration and media tracks before completion; fail on missing streaming fragments.",
+            "Improve media detection and reject fragment URLs and stale video candidates.",
+        ],
+    },
     {
         "version": "2.1.12",
         "date": "2026-11-03",
@@ -1490,11 +1508,14 @@ class EngineSignals(QObject):
     update_available = pyqtSignal(dict)
 
 
-class ScorpionNativeEngine:
+class ScorpionNativeEngine(BrowserTransferMixin):
     REQUIRED_EXT_FILES = (
         "manifest.json",
         "background.js",
         "content.js",
+        "media.js",
+        "browser-transfer.js",
+        "telegram-reader.js",
         "content.css",
         "popup.html",
         "popup.js",
@@ -1897,6 +1918,7 @@ class ScorpionNativeEngine:
         while True:
             time.sleep(1.0)
             try:
+                self.expire_browser_transfers()
                 # Scheduler: at the chosen time (once per day) move scheduled downloads into the queue
                 if self.settings.get("schedEnabled"):
                     now = time.localtime()
@@ -1925,7 +1947,7 @@ class ScorpionNativeEngine:
 
     def sync_and_repair_browser_extensions(self) -> dict:
         """
-        Ensures all 7 browser extension files are present and up to date in:
+        Ensures all browser extension files are present and up to date in:
         1. Primary workspace folder (project_root/browser-extension)
         2. ~/AppData/Local/Programs/ScorpionIDM/browser-extension (so existing Chrome/Edge entries work via Retry without removing/re-adding!)
         3. ~/AppData/Local/ScorpionIDM/browser-extension
@@ -2081,6 +2103,23 @@ class ScorpionNativeEngine:
                 parsed = urllib.parse.urlparse(self.path)
                 if not self._is_trusted_client():
                     self._reject()
+                    return
+                if parsed.path.startswith("/browser-transfer/"):
+                    try:
+                        length = int(self.headers.get("Content-Length") or 0)
+                        if not 0 < length <= 1024 * 1024:
+                            raise ValueError("حجم الطلب غير صالح.")
+                        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                        operation = parsed.path.rsplit("/", 1)[-1]
+                        if operation == "start":
+                            result = engine_ref.begin_browser_transfer(payload)
+                        else:
+                            result = engine_ref.receive_browser_transfer(operation, payload)
+                        code = 200
+                    except Exception as err:
+                        result, code = {"ok": False, "error": str(err)[:240]}, 400
+                    self._send_cors(code)
+                    self.wfile.write(json.dumps(result, ensure_ascii=False).encode("utf-8"))
                     return
                 if parsed.path == "/formats":
                     length = min(int(self.headers.get("Content-Length") or 0), 2 * 1024 * 1024)
@@ -2293,7 +2332,8 @@ class ScorpionNativeEngine:
         base, ext = os.path.splitext(filename)
         final_name = filename
         idx = 1
-        while os.path.exists(os.path.join(save_dir, final_name)):
+        reserved_paths = {os.path.normcase(it.get("filePath") or "") for it in self.downloads.values()}
+        while os.path.exists(os.path.join(save_dir, final_name)) or os.path.normcase(os.path.join(save_dir, final_name)) in reserved_paths:
             final_name = f"{base} ({idx}){ext}"
             idx += 1
 
@@ -2328,6 +2368,8 @@ class ScorpionNativeEngine:
             "speedLimitKbps": 0,
             "createdAt": int(time.time() * 1000),
             "isVideo": is_video,
+            "browserTransfer": bool(opts.get("browserTransfer")),
+            "expectedDuration": finite_duration(opts.get("expectedDuration")),
             "isTorrent": is_torrent,
             "videoQuality": opts.get("videoQuality", "best"),
             "referer": (opts.get("referer") or "").strip(),
@@ -2342,7 +2384,10 @@ class ScorpionNativeEngine:
             self.downloads[dl_id] = item
         if opts.get("cookies"):
             self.__dict__.setdefault("_site_cookies", {})[dl_id] = opts["cookies"]
-        if opts.get("startImmediately", True):
+        if item["browserTransfer"]:
+            item.update(status="downloading", phase="downloading", startedAt=time.time())
+            item["segments"][0]["status"] = "downloading"
+        elif opts.get("startImmediately", True):
             self.save_state()
             self.start_download(dl_id)
         else:
@@ -2354,6 +2399,10 @@ class ScorpionNativeEngine:
     def start_download(self, dl_id: str):
         item = self.downloads.get(dl_id)
         if not item or item["status"] == "completed" or dl_id in self.controllers:
+            return
+        if item.get("browserTransfer"):
+            item.update(status="error", speed=0, errorMsg="الملف مرتبط بجلسة المتصفح. افتح الفيديو واضغط زر التنزيل مرة أخرى.")
+            self.save_state()
             return
         # Download queue: respect the max number of simultaneous downloads
         if self.active_count() >= max(1, int(self.settings.get("maxConcurrent") or 4)):
@@ -2708,6 +2757,10 @@ class ScorpionNativeEngine:
     def _extract_with_fallback(self, ydl, item: dict):
         """Try yt-dlp on the URL; for DRM/music sites or unsupported pages, fall back to audio search or stream scraping."""
         u_low = (item.get("url") or "").lower().strip()
+        # Telegram Web addresses are virtual service-worker routes. Generic extraction can return
+        # the site's three-second animation, which is not the user's video.
+        if urllib.parse.urlparse(u_low).hostname == "web.telegram.org" or browser_local_url(u_low):
+            raise RuntimeError("فيديو تليجرام مرتبط بجلسة المتصفح. حدّث الإضافة وافتح الفيديو ثم اضغط زر التنزيل فوقه.")
         u_clean = u_low.split("?")[0].rstrip("/")
         is_audio = item.get("videoQuality") == "audio" or item.get("category") == "Music"
 
@@ -2751,6 +2804,8 @@ class ScorpionNativeEngine:
                 return found_info
 
         try:
+            if fragment_url(item["url"]):
+                raise RuntimeError("الرابط يخص جزءًا من البث. استخدم رابط الفيديو أو قائمة البث الكاملة.")
             return _unwrap_info(ydl.extract_info(item["url"], download=False))
         except Exception as first_err:
             if is_audio:
@@ -2763,6 +2818,8 @@ class ScorpionNativeEngine:
             for alt in [item.get("tabUrl") or ""] + list(item.get("candidates") or []):
                 alt = (alt or "").strip()
                 if not alt.lower().startswith(("http://", "https://")) or alt in tried:
+                    continue
+                if fragment_url(alt) or browser_local_url(alt) or urllib.parse.urlparse(alt).hostname == "web.telegram.org":
                     continue
                 tried.add(alt)
                 try:
@@ -2788,6 +2845,20 @@ class ScorpionNativeEngine:
                 "ما قدرناش نلاقي الفيديو في الصفحة دي. لو الموقع بيطلب تسجيل دخول، سجّل دخول في Chrome. "
                 "ولو الصفحة فيها فيديوهات كتير، شغّل الفيديو نفسه لثواني واضغط زر التحميل اللي فوقه."
             ) from first_err
+
+    def _available_media_path(self, path: str, dl_id: str) -> str:
+        base, ext = os.path.splitext(path)
+        reserved = {os.path.normcase(it.get("filePath") or "") for it in self.downloads.values() if it.get("id") != dl_id}
+        result, index = path, 1
+        while os.path.exists(result) or os.path.normcase(result) in reserved:
+            result = f"{base} ({index}){ext}"
+            index += 1
+        return result
+
+    def _validate_video_output(self, path: str, item: dict, expected_duration=0, expect_audio=False):
+        return validate_media(path, find_tool("ffprobe"),
+                              max(finite_duration(item.get("expectedDuration")), finite_duration(expected_duration)),
+                              item.get("videoQuality") == "audio", expect_audio)
 
     def _has_video_stream(self, path: str):
         """True/False from ffprobe; None when it can't tell (no ffprobe, unreadable file)."""
@@ -2971,22 +3042,19 @@ class ScorpionNativeEngine:
             except Exception:
                 pass
 
-    def _probe_video_stream_range(self, url: str, headers: dict, fallback_size: int = 0) -> tuple:
+    def _probe_video_stream_range(self, url: str, headers: dict, fallback_size: int = 0, cookies=None) -> tuple:
         """Verify HTTP 206 Range support and return (exact_size, supports_range) for a video stream."""
         try:
             h = dict(headers or {})
             h["Range"] = "bytes=0-0"
-            r = requests.get(url, headers=h, stream=True, timeout=10, allow_redirects=True, verify=False)
+            r = requests.get(url, headers=h, cookies=cookies, stream=True, timeout=10, allow_redirects=True, verify=False)
             status = r.status_code
             cr = r.headers.get("Content-Range", "")
             cl = r.headers.get("Content-Length", "")
             r.close()
-            if status == 206 and "/" in cr:
-                tot_str = cr.split("/")[-1].strip()
-                if tot_str.isdigit() and int(tot_str) > 0:
-                    return int(tot_str), True
-            if status == 206 and fallback_size > 0:
-                return fallback_size, True
+            match = re.fullmatch(r"bytes 0-0/(\d+)", cr.strip())
+            if status == 206 and match and int(match[1]) > 0:
+                return int(match[1]), True
             if status == 200 and cl.isdigit() and int(cl) > 0:
                 return int(cl), False
         except Exception:
@@ -3045,6 +3113,7 @@ class ScorpionNativeEngine:
         ffmpeg_bin: str,
         has_ffmpeg: bool,
         q: str,
+        cookiejar=None,
     ) -> bool:
         """
         Downloads direct HTTP/HTTPS video (and audio) streams using Scorpion's 16-port
@@ -3072,7 +3141,7 @@ class ScorpionNativeEngine:
                 hdrs.update(f["http_headers"])
 
             approx = int(f.get("filesize") or f.get("filesize_approx") or 0)
-            exact_sz, ok_range = self._probe_video_stream_range(s_url, hdrs, approx)
+            exact_sz, ok_range = self._probe_video_stream_range(s_url, hdrs, approx, cookiejar)
             if not ok_range or exact_sz <= 0:
                 return False
 
@@ -3172,10 +3241,12 @@ class ScorpionNativeEngine:
                 hdrs["Range"] = f"bytes={req_start}-{req_end}"
                 try:
                     with requests.get(
-                        sp["url"], headers=hdrs, stream=True, timeout=20, allow_redirects=True, verify=False
+                        sp["url"], headers=hdrs, cookies=cookiejar, stream=True, timeout=20, allow_redirects=True, verify=False
                     ) as resp:
-                        if resp.status_code not in (200, 206):
-                            raise RuntimeError(f"HTTP {resp.status_code}")
+                        content_range = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", resp.headers.get("Content-Range", "").strip())
+                        if resp.status_code != 206 or not content_range or tuple(map(int, content_range.groups())) != (req_start, req_end, sp["size"]):
+                            raise RuntimeError("The server returned the wrong byte range")
+                        before = seg["localCur"]
                         for chunk in resp.iter_content(chunk_size=65536):
                             if ctrl["aborted"]:
                                 return
@@ -3199,6 +3270,8 @@ class ScorpionNativeEngine:
                                 time.sleep(0.05)
                             if seg["localCur"] > req_end:
                                 break
+                    if seg["localCur"] == before:
+                        raise RuntimeError("The server returned an empty video range")
                     retries = 0
                 except Exception as e:
                     if ctrl["aborted"]:
@@ -3251,7 +3324,7 @@ class ScorpionNativeEngine:
         no_win = 0x08000000 if os.name == "nt" else 0
         if len(stream_specs) == 2 and has_ffmpeg:
             final_out = base_no_ext + ".mp4"
-            subprocess.run(
+            merge_result = subprocess.run(
                 [
                     ffmpeg_bin, "-y",
                     "-i", stream_specs[0]["partPath"],
@@ -3264,33 +3337,36 @@ class ScorpionNativeEngine:
                 creationflags=no_win,
                 check=False,
             )
+            if merge_result.returncode != 0:
+                raise RuntimeError("فشل دمج الصوت والصورة. لم يتم اعتماد الفيديو كتحميل مكتمل.")
             for sp in stream_specs:
                 try:
                     os.remove(sp["partPath"])
                 except Exception:
                     pass
             if os.path.exists(final_out):
-                item["filePath"] = final_out
-                item["filename"] = os.path.basename(final_out)
+                item["_videoOutput"] = final_out
                 item["totalSize"] = os.path.getsize(final_out)
                 item["downloadedBytes"] = item["totalSize"]
         else:
             sp0 = stream_specs[0]
             if q == "audio" and has_ffmpeg:
                 final_out = base_no_ext + ".mp3"
-                subprocess.run(
+                conversion_result = subprocess.run(
                     [ffmpeg_bin, "-y", "-i", sp0["partPath"], "-vn", "-ab", "192k", final_out],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     creationflags=no_win,
                     check=False,
                 )
+                if conversion_result.returncode != 0:
+                    raise RuntimeError("فشل تحويل الصوت. لم يتم اعتماد الملف كتحميل مكتمل.")
                 try:
                     os.remove(sp0["partPath"])
                 except Exception:
                     pass
             else:
-                out_ext = ".mp3" if q == "audio" else (".mp4" if sp0["ext"] in ("mp4", "m4a", "webm") else f".{sp0['ext']}")
+                out_ext = f".{sp0['ext']}"
                 final_out = base_no_ext + out_ext
                 if os.path.exists(final_out):
                     try:
@@ -3299,12 +3375,10 @@ class ScorpionNativeEngine:
                         pass
                 shutil.move(sp0["partPath"], final_out)
             if os.path.exists(final_out):
-                item["filePath"] = final_out
-                item["filename"] = os.path.basename(final_out)
+                item["_videoOutput"] = final_out
                 item["totalSize"] = os.path.getsize(final_out)
                 item["downloadedBytes"] = item["totalSize"]
 
-        self._cleanup_item_temp(item)
         item["useRangeVideoEngine"] = False
         return True
 
@@ -3411,6 +3485,8 @@ class ScorpionNativeEngine:
             "hls_prefer_native": True,
             "retries": 10,
             "fragment_retries": 10,
+            "skip_unavailable_fragments": False,
+            "socket_timeout": 30,
             "progress_hooks": [hook],
             "quiet": True,
             "no_warnings": True,
@@ -3445,13 +3521,15 @@ class ScorpionNativeEngine:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # 1) Extract streams first
                 info = self._extract_with_fallback(ydl, item)
+                if not isinstance(info, dict):
+                    raise RuntimeError("تعذر استخراج بيانات الفيديو.")
                 if ctrl["aborted"]:
                     return
                 reqs = info.get("requested_formats") or [info]
 
                 # 2) Try Scorpion's 16-port HTTP Range Video Engine first (for YouTube / MP4 streams)
                 handled_by_16_ports = self._download_video_streams_16ports(
-                    item, ctrl, reqs, base_no_ext, ffmpeg_bin, has_ffmpeg, q
+                    item, ctrl, reqs, temp_base, ffmpeg_bin, has_ffmpeg, q, ydl.cookiejar
                 )
                 if ctrl["aborted"]:
                     return
@@ -3490,32 +3568,23 @@ class ScorpionNativeEngine:
                             actual_temp = cand_temp
                             chosen_ext = cand_ext
                             break
-                    if os.path.exists(actual_temp):
-                        final_dest = base_no_ext + chosen_ext
-                        os.makedirs(os.path.dirname(final_dest), exist_ok=True)
-                        if os.path.exists(final_dest):
-                            try:
-                                os.remove(final_dest)
-                            except Exception:
-                                pass
-                        shutil.move(actual_temp, final_dest)
-                        item["filePath"] = final_dest
-                        item["filename"] = os.path.basename(final_dest)
-                        item["totalSize"] = os.path.getsize(final_dest)
-                        item["downloadedBytes"] = item["totalSize"]
+                    if not os.path.isfile(actual_temp):
+                        raise RuntimeError("لم ينتج التنزيل ملف فيديو. أعد المحاولة من المشغّل.")
+                    item["_videoOutput"] = actual_temp
 
-            # A "video" with no picture means the page handed over the wrong file (e.g. an interface sound)
-            fp = item.get("filePath") or ""
-            if q != "audio" and os.path.isfile(fp) and self._has_video_stream(fp) is False:
-                try:
-                    os.remove(fp)
-                except OSError:
-                    pass
-                raise RuntimeError(
-                    "الملف اللي وصل من الصفحة مفيهوش فيديو (غالبًا صوت من واجهة الموقع). "
-                    "شغّل الفيديو واضغط زر التحميل اللي فوقه، أو انسخ رابط المنشور نفسه."
-                )
-
+            fp = item.pop("_videoOutput", "")
+            expect_audio = q != "audio" and any(f.get("acodec") not in (None, "none") for f in reqs)
+            item["actualDuration"] = self._validate_video_output(fp, item, info.get("duration"), expect_audio)
+            if ctrl["aborted"]:
+                return
+            final_dest = self._available_media_path(base_no_ext + os.path.splitext(fp)[1], item["id"])
+            os.makedirs(os.path.dirname(final_dest), exist_ok=True)
+            # Publish only after validation, and never overwrite a previous or concurrent download.
+            shutil.move(fp, final_dest)
+            item["filePath"] = final_dest
+            item["filename"] = os.path.basename(final_dest)
+            item["totalSize"] = os.path.getsize(final_dest)
+            item["downloadedBytes"] = item["totalSize"]
             self._cleanup_item_temp(item)
             for s in item.get("segments") or []:
                 s["status"] = "completed"
@@ -3532,6 +3601,8 @@ class ScorpionNativeEngine:
             self.save_state()
             self.signals.completed.emit(item["id"])
         except Exception as err:
+            item.pop("_videoOutput", None)
+            item["filePath"] = base_no_ext + os.path.splitext(item["filename"])[1]
             item["useRangeVideoEngine"] = False
             self.controllers.pop(item["id"], None)
             if not ctrl["aborted"]:
@@ -3914,17 +3985,30 @@ class ScorpionNativeEngine:
         return save_dir if moved else ""
 
     def _finalize(self, item: dict, ctrl: dict):
-        self.controllers.pop(item["id"], None)
         try:
             ctrl["file"].close()
-            if os.path.exists(item["tempFilePath"]):
-                if os.path.exists(item["filePath"]):
-                    os.remove(item["filePath"])
-                shutil.move(item["tempFilePath"], item["filePath"])
-        except Exception:
-            pass
+            if ctrl["aborted"]:
+                return
+            actual_size = os.path.getsize(item["tempFilePath"])
+            if item.get("totalSize") and actual_size != item["totalSize"]:
+                raise RuntimeError("الملف لم يصل بحجمه الكامل. أعد المحاولة.")
+            if item.get("category") == "Video" or item.get("expectedDuration"):
+                item["actualDuration"] = self._validate_video_output(item["tempFilePath"], item)
+            if ctrl["aborted"]:
+                return
+            destination = self._available_media_path(item["filePath"], item["id"])
+            shutil.move(item["tempFilePath"], destination)
+            item["filePath"] = destination
+            item["filename"] = os.path.basename(destination)
+        except Exception as err:
+            if not ctrl["aborted"]:
+                item.update(status="error", speed=0, errorMsg=str(err)[:160])
+                self.save_state()
+            return
+        finally:
+            self.controllers.pop(item["id"], None)
         self._cleanup_item_temp(item)
-        item["downloadedBytes"] = item["totalSize"] or item["downloadedBytes"]
+        item["downloadedBytes"] = actual_size
         item["totalSize"] = item["downloadedBytes"]
         item["progress"] = 100.0
         item["speed"] = 0
@@ -4003,7 +4087,7 @@ class ScorpionNativeEngine:
                 item = self.downloads.get(dl_id)
                 if not item or item["status"] != "downloading":
                     continue
-                if item.get("isTorrent") or (item.get("isVideo") and not item.get("useRangeVideoEngine")):
+                if item.get("isTorrent") or (item.get("isVideo") and not item.get("useRangeVideoEngine") and not item.get("browserTransfer")):
                     continue
                 elapsed = max(0.1, now - ctrl["last_time"])
                 delta = max(0, item["downloadedBytes"] - ctrl["last_bytes"])
@@ -6449,6 +6533,9 @@ class ScorpionMainWindow(QMainWindow):
         item["torrentSelection"] = dlg.selected_indices()
 
     def on_browser_captured(self, payload: dict):
+        if payload.get("browserTransferId"):
+            self.show_download_started(payload["browserTransferId"])
+            return
         url = (payload.get("url") or "").strip()
         if not url:
             return
@@ -6490,6 +6577,7 @@ class ScorpionMainWindow(QMainWindow):
                 "tabUrl": (payload.get("tabUrl") or "").strip(),
                 "candidates": payload.get("candidates") or [],
                 "cookies": payload.get("cookies") or [],
+                "expectedDuration": payload.get("expectedDuration") or 0,
                 "category": cat,
                 "totalSize": int(payload.get("totalSize") or 0),
                 "connections": 32,
@@ -6503,7 +6591,16 @@ class ScorpionMainWindow(QMainWindow):
             item = self.engine.add_download(opts)
             self.show_download_started(item["id"])
         else:
-            self.open_add_dialog(url, is_video and quality != "direct", is_torrent)
+            dlg = AddDownloadDialog(self.engine, url, is_video and quality != "direct", self.lang, self, is_torrent=is_torrent)
+            if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_opts:
+                dlg.result_opts.update({
+                    "referer": ref_url, "tabUrl": payload.get("tabUrl") or "",
+                    "candidates": payload.get("candidates") or [], "cookies": payload.get("cookies") or [],
+                    "expectedDuration": payload.get("expectedDuration") or 0,
+                })
+                item = self.engine.add_download(dlg.result_opts)
+                if dlg.result_opts.get("startImmediately", True):
+                    self.show_download_started(item["id"])
 
     def open_add_dialog(self, initial_url: str = "", is_video: bool = False, is_torrent: bool = False):
         dlg = AddDownloadDialog(self.engine, initial_url, is_video, self.lang, self, is_torrent=is_torrent)

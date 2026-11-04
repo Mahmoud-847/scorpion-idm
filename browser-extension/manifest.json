@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Scorpion IDM Integration Module",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Download Manager Integration & Video Helper for Scorpion IDM.",
   "icons": {
     "16": "icon.png",
@@ -13,7 +13,8 @@
     "activeTab",
     "storage",
     "contextMenus",
-    "cookies"
+    "cookies",
+    "webRequest"
   ],
   "background": {
     "service_worker": "background.js"
@@ -25,11 +26,19 @@
   },
   "content_scripts": [
     {
+      "matches": ["https://web.telegram.org/*"],
+      "js": ["browser-transfer.js", "telegram-reader.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
       "matches": [
         "http://*/*",
         "https://*/*"
       ],
       "js": [
+        "media.js",
+        "browser-transfer.js",
         "content.js"
       ],
       "css": [
