@@ -13,6 +13,8 @@ electron/
 src/
 public/
 package*.json
+!tests/package.json
+!tests/package-lock.json
 tsconfig*.json
 vite.config.*
 postcss.config.*

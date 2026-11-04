@@ -64,6 +64,10 @@ WATCH_TARGETS = [
     os.path.join(PROJECT_ROOT, "requirements.txt"),
     os.path.join(PROJECT_ROOT, "tests", "test_media_transfer.py"),
     os.path.join(PROJECT_ROOT, "tests", "browser-transfer.test.cjs"),
+    os.path.join(PROJECT_ROOT, "tests", "content-panel.test.cjs"),
+    os.path.join(PROJECT_ROOT, "tests", "test_publisher_startup.py"),
+    os.path.join(PROJECT_ROOT, "tests", "package.json"),
+    os.path.join(PROJECT_ROOT, "tests", "package-lock.json"),
 ]
 
 
@@ -71,14 +75,24 @@ def validate_release_sources(log):
     """Never close the user's app or publish a release whose regression checks fail."""
     commands = [
         [sys.executable, "-m", "py_compile", "native_app/scorpion_qt.py", "native_app/media_transfer.py", "auto_publish.py"],
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_media_transfer.py", "-v"],
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"],
     ]
     node = shutil.which("node")
     if not node:
         raise RuntimeError("Node.js is required to validate the browser extension before publishing")
+    if not os.path.isdir(os.path.join(PROJECT_ROOT, "tests", "node_modules", "jsdom")):
+        npm = shutil.which("npm.cmd") or shutil.which("npm")
+        if not npm:
+            raise RuntimeError("npm is required to install the extension UI test dependencies")
+        installed = subprocess.run([npm, "ci", "--prefix", "tests", "--ignore-scripts", "--no-audit", "--no-fund"],
+                                   cwd=PROJECT_ROOT, capture_output=True, text=True,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if installed.returncode:
+            raise RuntimeError("Could not install the extension UI test dependencies")
     commands.extend([[node, "--check", f"browser-extension/{name}"] for name in
                      ("background.js", "content.js", "popup.js", "media.js", "browser-transfer.js", "telegram-reader.js")])
     commands.append([node, "--test", "tests/browser-transfer.test.cjs"])
+    commands.append([node, "--test", "tests/content-panel.test.cjs"])
     for command in commands:
         log("==> Checking: " + " ".join(command[1:]))
         result = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True,
@@ -189,6 +203,25 @@ def find_gh() -> str:
         if cand and os.path.isfile(cand):
             return cand
     return ""
+
+
+def desktop_app_environment():
+    """The publisher's headless Qt platform must never leak into the desktop app."""
+    return {key: value for key, value in os.environ.items() if key.upper() != "QT_QPA_PLATFORM"}
+
+
+def wait_for_desktop_app(version, timeout=15):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:19615/ping", timeout=1) as response:
+                status = json.load(response)
+            if status.get("version") == version and status.get("uiReady") and status.get("uiPlatform") == "windows" and status.get("uiVisible"):
+                return
+        except Exception:
+            pass
+        time.sleep(0.25)
+    raise RuntimeError("لم تظهر واجهة البرنامج بعد التحديث. تم إيقاف النشر؛ راجع تشغيل النسخة المثبتة.")
 
 
 def publish_tools_pack(version: str, pack_path: str, log) -> None:
@@ -542,7 +575,9 @@ class AutoPublisherWindow(QMainWindow):
 
                 exe_p = os.path.join(dst_app, "ScorpionIDM.exe")
                 if os.path.isfile(exe_p):
-                    subprocess.Popen([exe_p], cwd=dst_app, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    subprocess.Popen([exe_p], cwd=dst_app, env=desktop_app_environment(),
+                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    wait_for_desktop_app(new_ver)
 
                 # Clients refuse packages without a matching checksum, so never publish one that would fail
                 with open(os.path.join(PROJECT_ROOT, "release", "update.json"), "r", encoding="utf-8") as f:
@@ -566,7 +601,8 @@ class AutoPublisherWindow(QMainWindow):
                      "native_app/media_transfer.py", "browser-extension/media.js", "browser-extension/browser-transfer.js",
                      "browser-extension/telegram-reader.js",
                      "VIDEO_DOWNLOADS.md",
-                     "tests/test_media_transfer.py", "tests/browser-transfer.test.cjs"),
+                     "tests/test_media_transfer.py", "tests/browser-transfer.test.cjs", "tests/test_publisher_startup.py",
+                     "tests/content-panel.test.cjs", "tests/package.json", "tests/package-lock.json"),
                     ("commit", "-m", f"Release Scorpion IDM v{new_ver}", "--allow-empty"),
                     ("push", "-u", "origin", "main"),
                 ):

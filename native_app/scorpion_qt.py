@@ -157,7 +157,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.13"
+APP_VERSION = "2.1.14"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -225,6 +225,22 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.14",
+        "date": "2026-11-04",
+        "title_ar": "إصلاح ظهور البرنامج وثبات شريط التحميل",
+        "title_en": "Desktop startup and stable browser download bar",
+        "ar": [
+            "إصلاح تشغيل البرنامج بدون نافذة بعد استخدام الناشر التلقائي، والتحقق من ظهور الواجهة قبل النشر.",
+            "إزالة إخفاء شريط التحميل التلقائي وتكرار تحريكه، مع مقبض سحب مستقل وإغلاق يستمر حتى تغيير الصفحة.",
+            "منع إعادة فحص الصفحة بسبب تحديثات الشريط نفسه، وإضافة اختبارات تفاعل الإغلاق والسحب.",
+        ],
+        "en": [
+            "Keep the publisher's headless Qt setting out of the desktop app; verify visible Windows startup before publishing.",
+            "Keep the download bar stable, use a dedicated drag handle, and preserve dismissal across player events.",
+            "Ignore the bar's own DOM mutations and cover close/drag interactions with DOM tests.",
+        ],
+    },
     {
         "version": "2.1.13",
         "date": "2026-11-04",
@@ -2063,6 +2079,10 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                             {
                                 "ok": True,
                                 "app": "Scorpion IDM Native",
+                                "version": APP_VERSION,
+                                "uiReady": bool(getattr(engine_ref, "_ui_ready", False)),
+                                "uiVisible": bool(getattr(engine_ref, "_ui_visible", False)),
+                                "uiPlatform": getattr(engine_ref, "_ui_platform", ""),
                                 "lang": engine_ref.settings.get("lang", "ar"),
                             }
                         ).encode("utf-8")
@@ -6140,6 +6160,8 @@ class ScorpionMainWindow(QMainWindow):
 
         if self.engine.settings.get("autoCheckUpdates", True):
             QTimer.singleShot(3000, self._background_check_updates)
+        self.engine._ui_platform = QApplication.platformName()
+        self.engine._ui_ready = True
 
     def setup_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -6842,6 +6864,7 @@ class ScorpionMainWindow(QMainWindow):
         self.app.quit()
 
     def refresh_all(self):
+        self.engine._ui_visible = self.isVisible()
         is_ar = self.lang == "ar"
         c = pal()
         items = sorted(self.engine.downloads.values(), key=lambda x: x.get("createdAt", 0), reverse=True)

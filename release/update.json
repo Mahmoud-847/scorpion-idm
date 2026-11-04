@@ -1,20 +1,20 @@
 {
-  "version": "2.1.13",
+  "version": "2.1.14",
   "publishedAt": "2026-11-04",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "f5d1bee705b3833182070da78c3c155cc3b330ec320e975a60995160dbaead53",
+  "sha256": "48e4207a3299a87ec2be9fb9570e41e6f84ec324cc9bc95bee0c84a0746b7acd",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "إصلاح تنزيل الفيديو والتحقق من اكتماله",
-  "title_en": "Browser-owned media transfers and video integrity checks",
+  "title_ar": "إصلاح ظهور البرنامج وثبات شريط التحميل",
+  "title_en": "Desktop startup and stable browser download bar",
   "changelog_ar": [
-    "مسار تنزيل مخصص لفيديو تليجرام عبر جلسة المتصفح مع التحقق من كل جزء والحجم الكامل.",
-    "فحص مدة الفيديو ومساراته قبل اعتماد اكتمال التنزيل، وإيقاف التحميل عند فقد أي جزء من البث.",
-    "تحسين اكتشاف روابط الفيديو ومنع اختيار أجزاء البث والروابط التابعة لفيديوهات سابقة."
+    "إصلاح تشغيل البرنامج بدون نافذة بعد استخدام الناشر التلقائي، والتحقق من ظهور الواجهة قبل النشر.",
+    "إزالة إخفاء شريط التحميل التلقائي وتكرار تحريكه، مع مقبض سحب مستقل وإغلاق يستمر حتى تغيير الصفحة.",
+    "منع إعادة فحص الصفحة بسبب تحديثات الشريط نفسه، وإضافة اختبارات تفاعل الإغلاق والسحب."
   ],
   "changelog_en": [
-    "Transfer Telegram Web media through the active browser session with strict range and size checks.",
-    "Validate duration and media tracks before completion; fail on missing streaming fragments.",
-    "Improve media detection and reject fragment URLs and stale video candidates."
+    "Keep the publisher's headless Qt setting out of the desktop app; verify visible Windows startup before publishing.",
+    "Keep the download bar stable, use a dedicated drag handle, and preserve dismissal across player events.",
+    "Ignore the bar's own DOM mutations and cover close/drag interactions with DOM tests."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",

@@ -1,0 +1,5 @@
+{
+  "name": "scorpion-extension-regression-tests",
+  "private": true,
+  "devDependencies": { "jsdom": "27.0.0" }
+}

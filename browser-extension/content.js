@@ -18,6 +18,8 @@
   let floatingBtnEnabled = true;
   let currentLang = 'ar';
   let dismissedForUrl = '';
+  let panelDragging = false;
+  let transferInProgress = false;
 
   const I18N = {
     ar: {
@@ -470,8 +472,15 @@
       }
       if (dropdownEl) dropdownEl.classList.remove('open');
       if (panelEl) panelEl.style.display = 'none';
+      if (hideTimeout) clearTimeout(hideTimeout);
     });
 
+    const dragHandle = document.createElement('button');
+    dragHandle.type = 'button';
+    dragHandle.className = 'scorpion-idm-drag-handle';
+    dragHandle.textContent = '⠿';
+    dragHandle.title = currentLang === 'ar' ? 'اسحب لتحريك الشريط' : 'Drag to move the bar';
+    mainBtn.appendChild(dragHandle);
     mainBtn.appendChild(triggerEl);
     mainBtn.appendChild(langBtnEl);
     mainBtn.appendChild(closeBtnEl);
@@ -479,26 +488,27 @@
     dropdownEl = document.createElement('div');
     dropdownEl.className = 'scorpion-idm-dropdown';
 
-    let isDragging = false;
     let didMove = false;
     let dragOffsetX = 0;
     let dragOffsetY = 0;
 
-    mainBtn.addEventListener('mousedown', (e) => {
+    dragHandle.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
-      if (e.target === langBtnEl || e.target === closeBtnEl) return;
-      isDragging = true;
+      e.preventDefault();
+      e.stopPropagation();
+      panelDragging = true;
       didMove = false;
+      dragHandle.setPointerCapture(e.pointerId);
       const r = panelEl.getBoundingClientRect();
       dragOffsetX = e.clientX - r.left;
       dragOffsetY = e.clientY - r.top;
     });
 
     const endDrag = () => {
-      isDragging = false;
+      panelDragging = false;
     };
-    window.addEventListener('mousemove', (e) => {
-      if (!isDragging || !panelEl) return;
+    dragHandle.addEventListener('pointermove', (e) => {
+      if (!panelDragging || !panelEl) return;
       // Button no longer held (release missed, e.g. outside the window): the drag is over
       if (!(e.buttons & 1)) {
         endDrag();
@@ -519,17 +529,14 @@
     });
 
     // Capture phase: the panel stops presses from reaching the page, which must not hide the release from us
-    window.addEventListener('mouseup', endDrag, true);
-    window.addEventListener('pointerup', endDrag, true);
+    dragHandle.addEventListener('pointerup', endDrag);
+    dragHandle.addEventListener('pointercancel', endDrag);
+    dragHandle.addEventListener('lostpointercapture', endDrag);
     window.addEventListener('blur', endDrag);
 
     triggerEl.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      if (didMove) {
-        didMove = false;
-        return;
-      }
       renderDropdownOptions();
       if (!(e.target.closest && e.target.closest('.scorpion-idm-badge'))) {
         // Quick download: the first option is "best quality" (or best audio in audio mode)
@@ -557,7 +564,6 @@
 
     panelEl.addEventListener('mouseleave', () => {
       isHoveringPanel = false;
-      scheduleHide();
     });
 
     ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'dblclick'].forEach((type) => {
@@ -784,6 +790,7 @@
   }
 
   function triggerVideoDownload(payload) {
+    if (transferInProgress) return;
     payload.expectedDuration = ScorpionMedia.mediaDuration(activeMedia);
     const tr = t();
     dropdownEl.classList.remove('open');
@@ -824,12 +831,14 @@
           else resolve(res);
         });
       });
+      transferInProgress = true;
       ScorpionTransfer.transfer(src, {
         filename: payload.filename || `${payload.title || 'Telegram_Video'}.mp4`,
         pageUrl: location.href, expectedDuration: payload.expectedDuration,
       }, request, fetch, (done, total) => {
         if (labelEl) labelEl.textContent = `${currentLang === 'ar' ? 'جارٍ التنزيل' : 'Downloading'} ${Math.min(99, Math.floor(done / total * 100))}%`;
-      }, readTelegramPageRange).then(() => onDone(true)).catch((err) => onDone(false, err.message));
+      }, readTelegramPageRange).then(() => onDone(true)).catch((err) => onDone(false, err.message))
+        .finally(() => { transferInProgress = false; });
       return;
     }
 
@@ -897,7 +906,7 @@
     if (!isAudioEl && (rect.width < 160 || rect.height < 100)) return;
 
     createFloatingPanel();
-    if (labelEl) labelEl.textContent = currentMainLabel();
+    if (labelEl && !transferInProgress && labelEl.textContent !== currentMainLabel()) labelEl.textContent = currentMainLabel();
 
     const hostEl = document.fullscreenElement || document.documentElement;
     if (panelEl.parentElement !== hostEl) {
@@ -938,7 +947,6 @@
     if (!floatingBtnEnabled || isDismissed(null)) return;
     activeMode = 'audio';
     positionPanelOverMedia(activeMedia);
-    scheduleHide(7500);
   }
 
   function scheduleHide(delayMs = 3800) {
@@ -954,6 +962,11 @@
 
   function activateMediaElement(media) {
     if (!media) return;
+    if (panelDragging || isHoveringPanel || dropdownEl && dropdownEl.classList.contains('open')) return;
+    if (media.tagName === 'VIDEO') {
+      const rect = media.getBoundingClientRect();
+      if (!media.isConnected || rect.width < 160 || rect.height < 100 || rect.bottom < 0 || rect.top >= window.innerHeight) return;
+    }
     if (dismissedForUrl && dismissedForUrl !== window.location.href) {
       dismissedForUrl = '';
     }
@@ -965,31 +978,11 @@
     activeMedia = media;
     activeMode = isAud ? 'audio' : 'video';
     positionPanelOverMedia(media);
-    scheduleHide(isAud ? 7500 : 3800);
     if (media.__scorpionPrefetchedFor !== window.location.href) {
       media.__scorpionPrefetchedFor = window.location.href;
       setTimeout(prefetchQualities, 600);
     }
   }
-
-  let lastPointerCheck = 0;
-  document.addEventListener(
-    'mousemove',
-    (e) => {
-      const now = Date.now();
-      if (now - lastPointerCheck < 250) return;
-      lastPointerCheck = now;
-      for (const media of document.querySelectorAll('video')) {
-        if (!media.__scorpionBoundV4 || isDismissed(media)) continue;
-        const r = media.getBoundingClientRect();
-        if (r.width > 80 && r.height > 60 && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
-          activateMediaElement(media);
-          break;
-        }
-      }
-    },
-    { capture: true, passive: true }
-  );
 
   function bindMediaElement(media) {
     if (media.__scorpionBoundV4) return;
@@ -1000,8 +993,7 @@
     media.addEventListener('play', showForThis);
     media.addEventListener('playing', showForThis);
     media.addEventListener('loadeddata', showForThis);
-    media.addEventListener('mouseenter', showForThis);
-    media.addEventListener('mousemove', showForThis);
+    media.addEventListener('pointerenter', showForThis);
 
     if (!media.paused || (media.tagName === 'VIDEO' && media.readyState >= 2)) {
       showForThis();
@@ -1036,13 +1028,22 @@
   );
 
   scanForMedia();
-  const observer = new MutationObserver(() => scanForMedia());
+  let mediaScanPending = false;
+  const observer = new MutationObserver((changes) => {
+    // Do not observe our own label/menu changes or rescan an entire feed for every text mutation.
+    const relevant = changes.some((change) => (!panelEl || !panelEl.contains(change.target)) &&
+      Array.from(change.addedNodes).some((node) => node.nodeType === 1 &&
+        (node.matches('video, audio') || node.querySelector('video, audio'))));
+    if (!relevant || mediaScanPending) return;
+    mediaScanPending = true;
+    requestAnimationFrame(() => { mediaScanPending = false; scanForMedia(); });
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   window.addEventListener(
     'scroll',
     () => {
-      if (panelEl && panelEl.style.display !== 'none' && !isDismissed(activeMedia)) {
+      if (!panelDragging && !isHoveringPanel && panelEl && panelEl.style.display !== 'none' && !isDismissed(activeMedia)) {
         positionPanelOverMedia(activeMedia);
       }
     },
