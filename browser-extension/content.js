@@ -20,6 +20,7 @@
   let dismissedForUrl = '';
   let panelDragging = false;
   let transferInProgress = false;
+  let labelMessageUntil = 0; // a failure message stays on the button until then
   let activeSource = '';
   let mediaGeneration = 0;
   let menuGeneration = 0;
@@ -885,19 +886,18 @@
     payload.expectedDuration = session.duration;
     const tr = t();
     dropdownEl.classList.remove('open');
-    if (labelEl) {
-      labelEl.textContent = tr.sending;
-    }
 
+    // The button never shows a download's state: progress lives in the app's card. Only a failure is
+    // shown briefly, so a click that did nothing doesn't go unnoticed.
     const onDone = (ok, error = '') => {
-      if (!sessionIsCurrent(session)) return;
-      if (labelEl) {
-        labelEl.textContent = ok ? tr.sentOk : error || tr.sentErr;
-        labelEl.title = error;
-      }
+      if (ok || !labelEl || !sessionIsCurrent(session)) return;
+      labelEl.textContent = error || tr.sentErr;
+      labelEl.title = error;
+      labelMessageUntil = Date.now() + 2200;
       setTimeout(() => {
-        if (labelEl && sessionIsCurrent(session)) {
+        if (labelEl) {
           labelEl.textContent = currentMainLabel();
+          labelEl.title = '';
         }
       }, 2200);
     };
@@ -927,8 +927,8 @@
       ScorpionTransfer.transfer(src, {
         filename: payload.filename || `${payload.title || 'Telegram_Video'}.mp4`,
         pageUrl: location.href, expectedDuration: payload.expectedDuration,
-      }, request, fetch, (done, total) => {
-        if (labelEl && sessionIsCurrent(session)) labelEl.textContent = `${currentLang === 'ar' ? 'جارٍ التنزيل' : 'Downloading'} ${Math.min(99, Math.floor(done / total * 100))}%`;
+      }, request, fetch, () => {
+        // Progress is shown by the app's card, not on the button
       }, readTelegramPageRange).then(() => onDone(true)).catch((err) => onDone(false, err.message))
         .finally(() => { transferInProgress = false; });
       return true;
@@ -1001,7 +1001,7 @@
     if (visibleBottom - visibleTop < 38) { hidePanel(); return; }
 
     createFloatingPanel();
-    if (labelEl && !transferInProgress && labelEl.textContent !== currentMainLabel()) labelEl.textContent = currentMainLabel();
+    if (labelEl && Date.now() > labelMessageUntil && labelEl.textContent !== currentMainLabel()) labelEl.textContent = currentMainLabel();
 
     const hostEl = document.fullscreenElement || document.documentElement;
     if (panelEl.parentElement !== hostEl) {
