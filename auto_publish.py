@@ -65,6 +65,8 @@ WATCH_TARGETS = [
     os.path.join(PROJECT_ROOT, "tests", "test_media_transfer.py"),
     os.path.join(PROJECT_ROOT, "tests", "browser-transfer.test.cjs"),
     os.path.join(PROJECT_ROOT, "tests", "content-panel.test.cjs"),
+    os.path.join(PROJECT_ROOT, "tests", "popup.test.cjs"),
+    os.path.join(PROJECT_ROOT, "PRIVACY.md"),
     os.path.join(PROJECT_ROOT, "tests", "test_publisher_startup.py"),
     os.path.join(PROJECT_ROOT, "tests", "package.json"),
     os.path.join(PROJECT_ROOT, "tests", "package-lock.json"),
@@ -95,6 +97,7 @@ def validate_release_sources(log):
                          ("background.js", "content.js", "popup.js", "media.js", "browser-transfer.js", "telegram-reader.js")])
         commands.append([node, "--test", "tests/browser-transfer.test.cjs"])
         commands.append([node, "--test", "tests/content-panel.test.cjs"])
+        commands.append([node, "--test", "tests/popup.test.cjs"])
     for command in commands:
         log("==> Checking: " + " ".join(command[1:]))
         result = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True,
@@ -606,9 +609,9 @@ class AutoPublisherWindow(QMainWindow):
                         "release/update.json", "release/Scorpion-Update-Payload.zip", "release/Scorpion-Browser-Extension.zip",
                         "native_app/media_transfer.py", "browser-extension/media.js", "browser-extension/browser-transfer.js",
                         "browser-extension/telegram-reader.js",
-                        "VIDEO_DOWNLOADS.md",
+                        "VIDEO_DOWNLOADS.md", "PRIVACY.md",
                         "tests/test_media_transfer.py", "tests/browser-transfer.test.cjs", "tests/test_publisher_startup.py",
-                        "tests/content-panel.test.cjs", "tests/package.json", "tests/package-lock.json",
+                        "tests/content-panel.test.cjs", "tests/popup.test.cjs", "tests/package.json", "tests/package-lock.json",
                     ) if os.path.exists(os.path.join(PROJECT_ROOT, p))]),
                     ("commit", "-m", f"Release Scorpion IDM v{new_ver}", "--allow-empty"),
                     ("push", "-u", "origin", "main"),

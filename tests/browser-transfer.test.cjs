@@ -104,12 +104,55 @@ test('MAIN reader only reads an exact video source on Telegram, never arbitrary 
     ScorpionTransfer: { readRange: async () => { reads++; return { bytes: new Uint8Array([1, 2, 3]), total: 3, mime: 'video/mp4' }; } } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/telegram-reader.js'), 'utf8'), context);
   const event = (url, origin = context.location.origin) => ({ source: window, origin,
-    data: { action: 'SCORPION_READ_MEDIA_RANGE', requestId: 'test', url, offset: 0, total: 0 } });
+    data: { action: 'SCORPION_READ_MEDIA_RANGE', requestId: 'test', readerId: 'reader-1', url, offset: 0, total: 0 } });
   await listener(event('https://evil.test/a/progressive/document123'));
   await listener(event(src, 'https://evil.test'));
   assert.equal(reads, 0);
   await listener(event(src));
   assert.equal(reads, 1);
-  assert.equal(posts[0].part.data, 'AQID');
-  assert.equal(posts[0].requestId, 'test');
+  assert.equal(posts.at(-1).part.data, 'AQID');
+  assert.equal(posts.at(-1).requestId, 'test');
+});
+
+test('an authorized Telegram transfer survives DOM removal but cannot change source, skip bytes or outlive release/expiry', async () => {
+  let listener;
+  let now = 1000;
+  let videos = [];
+  const reads = [], posts = [];
+  const src = 'https://web.telegram.org/a/progressive/original';
+  const other = 'https://web.telegram.org/a/progressive/other';
+  const window = { addEventListener: (_, cb) => { listener = cb; }, postMessage: (data) => posts.push(data) };
+  const context = { window, location: { origin: 'https://web.telegram.org', hostname: 'web.telegram.org' },
+    document: { querySelectorAll: () => videos }, Date: { now: () => now }, URL, fetch: async () => {}, btoa,
+    ScorpionTransfer: { readRange: async (url, offset) => {
+      reads.push({ url, offset });
+      return { bytes: new Uint8Array([1, 2]), total: 10, mime: 'video/mp4' };
+    } } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/telegram-reader.js'), 'utf8'), context);
+  const send = async (data) => listener({ source: window, origin: context.location.origin,
+    data: { action: 'SCORPION_READ_MEDIA_RANGE', requestId: 'request', readerId: 'reader-1', url: src, offset: 0, total: 0, ...data } });
+  await send();
+  assert.equal(reads.length, 0, 'a source absent at the start is never authorized');
+  videos = [{ currentSrc: src }];
+  await send();
+  videos = [{ currentSrc: other }]; // Scrolling virtualized the original player.
+  await send({ offset: 2, total: 10 });
+  assert.equal(reads.length, 2);
+  assert.deepEqual(reads.at(-1), { url: src, offset: 2 });
+  await send({ url: other, offset: 4, total: 10 });
+  await send({ offset: 8, total: 10 });
+  await send({ offset: 4, total: 11 });
+  assert.equal(reads.length, 2);
+  await send({ offset: 2, total: 10 }); // A lost reply can be retried at the last offset.
+  assert.equal(reads.length, 3);
+  await send({ action: 'SCORPION_RELEASE_MEDIA_READER' });
+  await send({ offset: 4, total: 10 });
+  assert.equal(reads.length, 3);
+  videos = [{ currentSrc: src }];
+  await send();
+  now += 180001;
+  videos = [];
+  await send({ offset: 2, total: 10 });
+  assert.equal(reads.length, 4);
+  assert.ok(posts.at(-1).error);
 });

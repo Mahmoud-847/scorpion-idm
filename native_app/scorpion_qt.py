@@ -157,7 +157,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.16"
+APP_VERSION = "2.1.17"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -225,6 +225,24 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.17",
+        "date": "2026-11-08",
+        "title_ar": "شريط تنزيل ثابت وسياسة خصوصية واضحة",
+        "title_en": "A stable download button and a clear privacy policy",
+        "ar": [
+            "شريط الفيديو يعرض زر التنزيل والجودة فقط، دون حالات أو نسب أو رسائل خطأ.",
+            "تنزيل فيديو من تليجرام لا يمنع تنزيل فيديو آخر تختاره، مع منع تكرار تنزيل المصدر نفسه أثناء عمله.",
+            "قراءة تنزيل تليجرام تظل مرتبطة بالفيديو الأصلي أثناء التمرير، حتى إذا أزالت الصفحة مشغله من العرض.",
+            "إضافة سياسة خصوصية عامة ورابط لها داخل نافذة الإضافة، مع عرض أخطاء الإرسال هناك بدل شريط الفيديو.",
+        ],
+        "en": [
+            "The video bar keeps its download action and quality picker without statuses, progress or error messages.",
+            "A Telegram transfer no longer blocks another selected video; repeated clicks do not duplicate an active source.",
+            "Telegram reads stay bound to the original source while scrolling, even when the page removes its player.",
+            "Add a public privacy policy and a popup link, and show send errors in the popup instead of the video bar.",
+        ],
+    },
     {
         "version": "2.1.16",
         "date": "2026-11-04",

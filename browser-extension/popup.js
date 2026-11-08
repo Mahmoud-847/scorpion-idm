@@ -6,9 +6,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const interceptToggle = document.getElementById('interceptToggle');
   const videoBtnToggle = document.getElementById('videoBtnToggle');
   const grabCurrentPageBtn = document.getElementById('grabCurrentPageBtn');
+  const errorCard = document.getElementById('downloadErrorCard');
+  const errorMessage = document.getElementById('downloadErrorMessage');
+  const dismissErrorBtn = document.getElementById('dismissErrorBtn');
+  const privacyLink = document.getElementById('privacyLink');
 
   let currentLang = 'ar';
   let isAlive = false;
+  let lastError = null;
 
   const I18N = {
     ar: {
@@ -20,6 +25,14 @@ document.addEventListener('DOMContentLoaded', () => {
       grabBtn: '🎬 تحميل الفيديو المحدد الآن',
       noVideo: 'قف على الفيديو المطلوب أو مرّر الصفحة إليه، ثم استخدم الزر فوقه.',
       toggleBtn: 'EN',
+      privacy: 'سياسة الخصوصية',
+      dismissError: 'إخفاء الرسالة',
+      errors: {
+        connection: 'تعذر إرسال التنزيل. تأكد من تشغيل البرنامج، ثم حاول مرة أخرى.',
+        telegramSource: 'افتح الفيديو المطلوب داخل تليجرام ثم أعد المحاولة. إذا لم يتوفر مصدر قابل للقراءة، استخدم تنزيل تليجرام الأصلي.',
+        telegramAudio: 'نزّل فيديو تليجرام كاملًا أولًا؛ تنزيل الصوت وحده غير متاح لهذا المسار.',
+        transfer: 'تعذر إكمال تنزيل تليجرام. راجع سبب الفشل في البرنامج، ثم أعد المحاولة من الفيديو.',
+      },
     },
     en: {
       dir: 'ltr',
@@ -30,6 +43,14 @@ document.addEventListener('DOMContentLoaded', () => {
       grabBtn: '🎬 Download the selected video',
       noVideo: 'Point to the video or scroll to it, then use the button above it.',
       toggleBtn: 'عربي',
+      privacy: 'Privacy policy',
+      dismissError: 'Dismiss message',
+      errors: {
+        connection: 'Could not send the download. Open the desktop application and try again.',
+        telegramSource: 'Open the selected video in Telegram and retry. If no readable source is available, use Telegram’s own download button.',
+        telegramAudio: 'Download the complete Telegram video first; audio-only download is unavailable for this source.',
+        transfer: 'The Telegram download could not finish. Check the reason in the desktop application, then retry from the video.',
+      },
     },
   };
 
@@ -43,7 +64,24 @@ document.addEventListener('DOMContentLoaded', () => {
     lblVideoBtn.textContent = tr.videoBtn;
     grabCurrentPageBtn.textContent = tr.grabBtn;
     langToggleBtn.textContent = tr.toggleBtn;
+    privacyLink.textContent = tr.privacy;
+    dismissErrorBtn.textContent = tr.dismissError;
+    const message = lastError && tr.errors[lastError.code];
+    errorCard.hidden = !message;
+    errorMessage.textContent = message || '';
   }
+
+  chrome.storage.session.get(['scorpionDownloadError']).then((data) => {
+    const error = data.scorpionDownloadError;
+    if (error && Number.isFinite(error.at) && Date.now() - error.at >= 0 && Date.now() - error.at < 3600000) lastError = error;
+    applyLang();
+  }).catch(() => {});
+
+  dismissErrorBtn.addEventListener('click', () => {
+    lastError = null;
+    chrome.storage.session.remove('scorpionDownloadError').catch(() => {});
+    applyLang();
+  });
 
   chrome.runtime.sendMessage({ action: 'SCORPION_CHECK_STATUS' }, (res) => {
     isAlive = Boolean(res && res.alive);

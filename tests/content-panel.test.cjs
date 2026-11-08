@@ -10,6 +10,7 @@ function page(url = 'https://example.test/watch/123', options = {}) {
   const window = dom.window;
   const timers = [];
   const messages = [];
+  const sessionData = {};
   window.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
   window.clearTimeout = () => {};
   window.requestAnimationFrame = (fn) => { fn(); return 1; };
@@ -18,6 +19,7 @@ function page(url = 'https://example.test/watch/123', options = {}) {
   window.PerformanceObserver = class { observe() {} };
   window.chrome = {
     storage: { local: { get: (keys, cb) => cb({ scorpionConfig: { lang: 'ar', showVideoFloatingBtn: true } }), set: () => {} },
+      session: { set: async (data) => Object.assign(sessionData, data) },
       onChanged: { addListener() {} } },
     runtime: { lastError: null, onMessage: { addListener() {} }, sendMessage: (message, callback) => {
       messages.push(message);
@@ -41,10 +43,12 @@ function page(url = 'https://example.test/watch/123', options = {}) {
     return video;
   });
   if (options.beforeScripts) options.beforeScripts({ window, videos, states });
-  for (const script of ['media.js', 'browser-transfer.js', 'content.js'])
+  for (const script of ['media.js', 'browser-transfer.js', 'content.js']) {
+    if (script === 'content.js' && options.beforeContent) options.beforeContent({ window, videos, states });
     window.eval(fs.readFileSync(path.join(__dirname, '../browser-extension', script), 'utf8'));
+  }
   return {
-    dom, window, video: videos[0], videos, states, timers, messages,
+    dom, window, video: videos[0], videos, states, timers, messages, sessionData,
     get panel() { return window.document.querySelector('.scorpion-idm-video-panel'); },
   };
 }
@@ -60,6 +64,69 @@ function hidden(p) {
 function downloads(p) {
   return p.messages.filter((message) => message.action === 'SCORPION_DOWNLOAD_VIDEO');
 }
+
+test('downloads keep their own sources while the bar remains a download action through progress, failure and success', async () => {
+  const transfers = [];
+  const sources = ['https://web.telegram.org/a/progressive/first', 'https://web.telegram.org/a/progressive/second'];
+  const p = page('https://web.telegram.org/a/', {
+    videos: sources.map((src) => ({ src, paused: true })),
+    beforeContent: ({ window }) => {
+      window.ScorpionTransfer.transfer = (...args) => new Promise((resolve, reject) => transfers.push({ args, resolve, reject }));
+    },
+  });
+  try {
+    fire(p, p.videos[0], 'pointerenter');
+    const label = p.panel.querySelector('.scorpion-btn-text');
+    const mainText = label.textContent;
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    assert.equal(transfers.length, 1, 'a repeated click must not create a duplicate transfer');
+    transfers[0].args[4](512, 1024);
+    assert.equal(label.textContent, mainText);
+
+    fire(p, p.videos[1], 'pointerenter');
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    assert.equal(transfers.length, 2, 'the first download must not block another selected video');
+    assert.deepEqual(transfers.map((item) => item.args[0]), sources);
+    transfers[0].args[4](768, 1024);
+    assert.equal(label.textContent, mainText);
+    assert.equal(label.title, '');
+
+    transfers[0].reject(new Error('Private URL https://example.test/?token=secret'));
+    transfers[1].resolve({ ok: true });
+    await new Promise(setImmediate);
+    assert.equal(label.textContent, mainText);
+    assert.equal(label.title, '');
+    assert.equal(p.sessionData.scorpionDownloadError.code, 'transfer');
+    assert.equal(Object.keys(p.sessionData.scorpionDownloadError).sort().join(','), 'at,code');
+    assert.ok(!JSON.stringify(p.sessionData).includes('secret'));
+
+    fire(p, p.videos[0], 'pointerenter');
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    assert.equal(transfers.length, 3, 'a failed source can be retried');
+    transfers[2].resolve({ ok: true });
+    await new Promise(setImmediate);
+    assert.equal(label.textContent, mainText);
+  } finally { p.dom.window.close(); }
+});
+
+test('a desktop connection failure leaves the video button unchanged and reports only a popup error code', () => {
+  const p = page(undefined, { beforeContent: ({ window }) => {
+    const send = window.chrome.runtime.sendMessage;
+    window.chrome.runtime.sendMessage = (message, callback) => {
+      if (message.action === 'SCORPION_DOWNLOAD_VIDEO') callback({ ok: false });
+      else send(message, callback);
+    };
+  } });
+  try {
+    const label = p.panel.querySelector('.scorpion-btn-text');
+    const mainText = label.textContent;
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    assert.equal(label.textContent, mainText);
+    assert.equal(label.title, '');
+    assert.equal(p.sessionData.scorpionDownloadError.code, 'connection');
+  } finally { p.dom.window.close(); }
+});
 
 test('the download bar remains stable and has no auto-hide loop', () => {
   const p = page();

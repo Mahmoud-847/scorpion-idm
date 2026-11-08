@@ -1,5 +1,7 @@
 # Scorpion Download Manager (IDM Edition) 🦂⚡
 
+[سياسة خصوصية الإضافة](https://github.com/Mahmoud-847/scorpion-idm/blob/main/PRIVACY.md)
+
 راجع دليل إصلاحات الفيديو وحدود الدعم واقتراحات التطوير.
 
 [دليل تنزيل الفيديو](VIDEO_DOWNLOADS.md)

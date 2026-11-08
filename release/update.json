@@ -1,26 +1,22 @@
 {
-  "version": "2.1.16",
-  "publishedAt": "2026-11-04",
+  "version": "2.1.17",
+  "publishedAt": "2026-11-08",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "7f6c1b00a507816c17cafdfda965ff798373f5908b36564e59be730a74b25806",
+  "sha256": "0807ae187f91c2761ebbcb7cd9cd7fb67ceb8d99384a0e711fb8b5e61cadae7c",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "تنزيل أسرع وأوثق لفيديوهات تيليجرام",
-  "title_en": "Faster, more reliable Telegram downloads",
+  "title_ar": "شريط تنزيل ثابت وسياسة خصوصية واضحة",
+  "title_en": "A stable download button and a clear privacy policy",
   "changelog_ar": [
-    "تنزيل فيديوهات تيليجرام أصبح أسرع.",
-    "إصلاح فشل حفظ فيديو تيليجرام عندما يكون مجلد التنزيل على قرص غير C.",
-    "زر «إلغاء» لتنزيلات تيليجرام بدل الإيقاف المؤقت، وحذف الملفات المؤقتة عند فشل التنزيل أو إلغائه.",
-    "البرنامج يلتقط الآن ملفات كان المتصفح ينزّلها بنفسه بالخطأ (مثل ملفات ‎.ts).",
-    "زر التنزيل يظهر الآن فوق مشغلات كانت تخفي الفيديو داخلها (مثل OK و VK)، ومع تغيير سيرفر المشاهدة.",
-    "إصلاح فشل تنزيل الفيديو من مشغلات المواقع المضمّنة التي لا تعمل إلا داخل صفحة الموقع."
+    "شريط الفيديو يعرض زر التنزيل والجودة فقط، دون حالات أو نسب أو رسائل خطأ.",
+    "تنزيل فيديو من تليجرام لا يمنع تنزيل فيديو آخر تختاره، مع منع تكرار تنزيل المصدر نفسه أثناء عمله.",
+    "قراءة تنزيل تليجرام تظل مرتبطة بالفيديو الأصلي أثناء التمرير، حتى إذا أزالت الصفحة مشغله من العرض.",
+    "إضافة سياسة خصوصية عامة ورابط لها داخل نافذة الإضافة، مع عرض أخطاء الإرسال هناك بدل شريط الفيديو."
   ],
   "changelog_en": [
-    "Telegram video downloads are faster.",
-    "Fix Telegram videos failing to save when the download folder is on a drive other than C.",
-    "Telegram downloads get a Cancel button instead of Pause, and leftover temporary files are removed on failure or cancel.",
-    "Some files the browser used to download by itself (such as .ts files) are now caught by Scorpion.",
-    "The download button now appears on players that hide their video inside them (such as OK and VK), including after switching servers.",
-    "Fix downloads failing from embedded site players that only work inside the site's own page."
+    "The video bar keeps its download action and quality picker without statuses, progress or error messages.",
+    "A Telegram transfer no longer blocks another selected video; repeated clicks do not duplicate an active source.",
+    "Telegram reads stay bound to the original source while scrolling, even when the page removes its player.",
+    "Add a public privacy policy and a popup link, and show send errors in the popup instead of the video bar."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",

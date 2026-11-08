@@ -19,8 +19,7 @@
   let currentLang = 'ar';
   let dismissedForUrl = '';
   let panelDragging = false;
-  let transferInProgress = false;
-  let labelMessageUntil = 0; // a failure message stays on the button until then
+  const activeTransfers = new Set(); // Each source keeps its own transfer while selection changes.
   let activeSource = '';
   let mediaGeneration = 0;
   let menuGeneration = 0;
@@ -115,9 +114,6 @@
       dir: 'rtl',
       mainText: 'تحميل هذا الفيديو - Scorpion IDM',
       mainAudioText: '🎵 تحميل هذا الصوت - Scorpion IDM',
-      sending: 'جاري الإرسال إلى Scorpion IDM... ⚡',
-      sentOk: 'تم الإرسال إلى Scorpion IDM ✅',
-      sentErr: 'تأكد من تشغيل Scorpion IDM ⚠️',
       bestHd: '🎬 أفضل جودة تشتغل على أي جهاز (MP4)',
       audioMp3: '🎵 تحميل الصوت فقط (MP3 Audio)',
       loadingQualities: '⏳ جاري قراءة الجودات المتاحة...',
@@ -137,9 +133,6 @@
       dir: 'ltr',
       mainText: 'Download this video - Scorpion IDM',
       mainAudioText: '🎵 Download this audio - Scorpion IDM',
-      sending: 'Sending to Scorpion IDM... ⚡',
-      sentOk: 'Sent to Scorpion IDM ✅',
-      sentErr: 'Make sure Scorpion IDM is running ⚠️',
       bestHd: '🎬 Best quality that plays everywhere (MP4)',
       audioMp3: '🎵 Audio Only (MP3 Audio)',
       loadingQualities: '⏳ Reading available qualities...',
@@ -918,56 +911,50 @@
   }
 
   function triggerVideoDownload(payload, session = mediaSession()) {
-    if (transferInProgress || !sessionIsCurrent(session)) return false;
+    if (!sessionIsCurrent(session)) return false;
     if (computeDownloadTarget().ambiguous) return false;
     payload.expectedDuration = session.duration;
-    const tr = t();
     dropdownEl.classList.remove('open');
 
-    // The button never shows a download's state: progress lives in the app's card. Only a failure is
-    // shown briefly, so a click that did nothing doesn't go unnoticed.
-    const onDone = (ok, error = '') => {
-      if (ok || !labelEl || !sessionIsCurrent(session)) return;
-      labelEl.textContent = error || tr.sentErr;
-      labelEl.title = error;
-      labelMessageUntil = Date.now() + 2200;
-      setTimeout(() => {
-        if (labelEl) {
-          labelEl.textContent = currentMainLabel();
-          labelEl.title = '';
-        }
-      }, 2200);
+    // Keep every state, including errors, off the video button. Only a fixed error code is
+    // retained for the extension popup; never persist a source URL or a raw server error.
+    const reportError = (code) => {
+      try {
+        chrome.storage.session.set({ scorpionDownloadError: { code, at: Date.now() } }).catch(() => {});
+      } catch (_) {}
     };
 
-    const directFallback = () => onDone(false);
+    const directFallback = () => reportError('connection');
 
     if (ScorpionMedia.isTelegram(location.href)) {
       // Use only THIS player's source, never another document found in the page's request history.
       const src = session.source;
       if (!src || !ScorpionMedia.isBrowserLocal(src) || /^blob:/i.test(src)) {
-        onDone(false, currentLang === 'ar' ? 'افتح الفيديو وشغّله، ثم أعد المحاولة. يمكنك استخدام تنزيل تليجرام الأصلي.' :
-          'Open and play this video, then retry. Telegram’s own download button is also available.');
-        return;
+        reportError('telegramSource');
+        return false;
       }
       if (payload.quality === 'audio') {
-        onDone(false, currentLang === 'ar' ? 'نزّل فيديو تليجرام كاملًا أولًا؛ تحويل الصوت غير متاح لهذا المسار.' :
-          'Download the full Telegram video first; audio conversion is not supported for this transfer.');
-        return;
+        reportError('telegramAudio');
+        return false;
       }
+      if (activeTransfers.has(src)) return true; // Already accepted; do not create a duplicate.
       const request = (operation, data) => new Promise((resolve, reject) => {
         chrome.runtime.sendMessage({ action: 'SCORPION_BROWSER_TRANSFER', operation, payload: data }, (res) => {
           if (chrome.runtime.lastError || !res) reject(new Error('الاتصال بالبرنامج انقطع. أعد المحاولة.'));
           else resolve(res);
         });
       });
-      transferInProgress = true;
+      activeTransfers.add(src);
+      const readerId = crypto.randomUUID();
       ScorpionTransfer.transfer(src, {
         filename: payload.filename || `${payload.title || 'Telegram_Video'}.mp4`,
         pageUrl: location.href, expectedDuration: payload.expectedDuration,
-      }, request, fetch, () => {
-        // Progress is shown by the app's card, not on the button
-      }, readTelegramPageRange).then(() => onDone(true)).catch((err) => onDone(false, err.message))
-        .finally(() => { transferInProgress = false; });
+      }, request, fetch, () => {}, (url, offset, total) => readTelegramPageRange(url, offset, total, readerId))
+        .catch(() => reportError('transfer'))
+        .finally(() => {
+          activeTransfers.delete(src);
+          window.postMessage({ action: 'SCORPION_RELEASE_MEDIA_READER', readerId, url: src }, location.origin);
+        });
       return true;
     }
 
@@ -980,8 +967,6 @@
         (res) => {
           if (chrome.runtime.lastError || !res || !res.ok) {
             directFallback();
-          } else {
-            onDone(true);
           }
         }
       );
@@ -991,7 +976,7 @@
     return true;
   }
 
-  function readTelegramPageRange(url, offset, total) {
+  function readTelegramPageRange(url, offset, total, readerId) {
     return new Promise((resolve, reject) => {
       const requestId = crypto.randomUUID();
       const finish = (error, result) => {
@@ -1017,7 +1002,7 @@
       };
       const timer = setTimeout(() => finish(new Error('تعذر الاتصال بمشغّل تليجرام. حدّث الإضافة وأعد تحميل الصفحة.')), 95000);
       window.addEventListener('message', listener);
-      window.postMessage({ action: 'SCORPION_READ_MEDIA_RANGE', requestId, url, offset, total }, location.origin);
+      window.postMessage({ action: 'SCORPION_READ_MEDIA_RANGE', requestId, readerId, url, offset, total }, location.origin);
     });
   }
 
@@ -1038,7 +1023,7 @@
     if (visibleBottom - visibleTop < 38) { hidePanel(); return; }
 
     createFloatingPanel();
-    if (labelEl && Date.now() > labelMessageUntil && labelEl.textContent !== currentMainLabel()) labelEl.textContent = currentMainLabel();
+    if (labelEl && labelEl.textContent !== currentMainLabel()) labelEl.textContent = currentMainLabel();
 
     const hostEl = document.fullscreenElement || document.documentElement;
     if (panelEl.parentElement !== hostEl) {

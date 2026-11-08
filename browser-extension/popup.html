@@ -90,6 +90,9 @@
       .btn:hover {
         opacity: 0.92;
       }
+      .privacy-link { display: block; margin-top: 12px; color: #fbbf24; text-align: center; font-size: 12px; }
+      .error-message { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+      [hidden] { display: none !important; }
     </style>
   </head>
   <body>
@@ -115,6 +118,13 @@
     <button id="grabCurrentPageBtn" class="btn">
       🎬 سحب فيديو الصفحة الحالية الآن
     </button>
+
+    <div id="downloadErrorCard" class="card" hidden>
+      <p id="downloadErrorMessage" class="error-message"></p>
+      <button id="dismissErrorBtn" class="btn" type="button">إخفاء الرسالة</button>
+    </div>
+
+    <a id="privacyLink" class="privacy-link" href="https://github.com/Mahmoud-847/scorpion-idm/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">سياسة الخصوصية</a>
 
     <script src="popup.js"></script>
   </body>
