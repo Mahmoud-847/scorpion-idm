@@ -4,12 +4,15 @@ import os
 from pathlib import Path
 import runpy
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "native_app"))
 import auto_publish
+import scorpion_qt
 
 
 class PublisherStartupTests(unittest.TestCase):
@@ -56,6 +59,26 @@ class PublisherStartupTests(unittest.TestCase):
                 exec(compile(launcher.read_text(encoding="utf-8"), str(launcher), "exec"), {"__file__": str(launcher)})
                 launch.assert_not_called()
                 terminate.assert_not_called()
+
+    def test_edge_browser_wizard_points_to_official_store(self):
+        self.assertEqual(scorpion_qt.EDGE_STORE_CRX_ID, "hgcdbjpjlfgnejhceobphikeebmhmgcj")
+        self.assertEqual(
+            scorpion_qt.EDGE_STORE_URL,
+            "https://microsoftedge.microsoft.com/addons/detail/hgcdbjpjlfgnejhceobphikeebmhmgcj",
+        )
+        by_key = {key: url for key, _name, url, _accent in scorpion_qt.BROWSER_SPECS}
+        self.assertEqual(by_key["msedge"], scorpion_qt.EDGE_STORE_URL)
+        self.assertEqual(by_key["chrome"], "chrome://extensions")
+        self.assertEqual(by_key["brave"], "brave://extensions")
+
+    def test_edge_store_extension_detection_across_profiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(scorpion_qt.is_edge_store_extension_installed(tmp))
+            crx_root = Path(tmp) / "Profile 2" / "Extensions" / scorpion_qt.EDGE_STORE_CRX_ID
+            crx_root.mkdir(parents=True)
+            self.assertFalse(scorpion_qt.is_edge_store_extension_installed(tmp))
+            (crx_root / "1.8.6_0").mkdir()
+            self.assertTrue(scorpion_qt.is_edge_store_extension_installed(tmp))
 
 
 if __name__ == "__main__":

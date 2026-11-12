@@ -157,7 +157,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.17"
+APP_VERSION = "2.1.18"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -225,6 +225,22 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.18",
+        "date": "2026-11-12",
+        "title_ar": "الإضافة الرسمية على متجر Microsoft Edge",
+        "title_en": "Official Microsoft Edge Add-ons Store Integration",
+        "ar": [
+            "ربط متصفح Microsoft Edge مباشرةً بالإضافة الرسمية على متجر مايكروسوفت للتثبيت بضغطة واحدة.",
+            "تمييز حالة الإضافة في Edge بين نسخة المتجر الرسمية والنسخة اليدوية السابقة، مع زر سريع لإدارتها ومنع التكرار.",
+            "تحديث دليل المشروع وروابط التثبيت الرسمية وسياسة الخصوصية.",
+        ],
+        "en": [
+            "Link Microsoft Edge directly to the official Microsoft Edge Add-ons Store listing for 1-click installation.",
+            "Distinguish official Edge Store vs. manual unpacked setup, with a quick Manage Extensions shortcut to prevent duplicates.",
+            "Update project documentation, official store links, and build/test reference.",
+        ],
+    },
     {
         "version": "2.1.17",
         "date": "2026-11-08",
@@ -4242,9 +4258,35 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 # ==============================================================================
 # INTERACTIVE 3-SCREEN BROWSER SETUP WIZARD (CHROME / EDGE / BRAVE)
 # ==============================================================================
+EDGE_STORE_CRX_ID = "hgcdbjpjlfgnejhceobphikeebmhmgcj"
+EDGE_STORE_URL = f"https://microsoftedge.microsoft.com/addons/detail/{EDGE_STORE_CRX_ID}"
+
+
+def is_edge_store_extension_installed(user_data_dir: str = "") -> bool:
+    """Read-only check whether the official Edge Add-ons Store CRX is installed in any Edge profile."""
+    base = user_data_dir or os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
+    if not base or not os.path.isdir(base):
+        return False
+    try:
+        entries = os.listdir(base)
+    except OSError:
+        return False
+    for name in entries:
+        if name == "Default" or name.startswith("Profile "):
+            ext_dir = os.path.join(base, name, "Extensions", EDGE_STORE_CRX_ID)
+            try:
+                if os.path.isdir(ext_dir) and any(
+                    os.path.isdir(os.path.join(ext_dir, sub)) for sub in os.listdir(ext_dir)
+                ):
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 BROWSER_SPECS = [
+    ("msedge", "Microsoft Edge", EDGE_STORE_URL, "#0284c7"),
     ("chrome", "Google Chrome", "chrome://extensions", "#2563eb"),
-    ("msedge", "Microsoft Edge", "edge://extensions", "#0284c7"),
     ("brave", "Brave Browser", "brave://extensions", "#ea580c"),
 ]
 
@@ -4309,12 +4351,17 @@ class BrowserIconBadge(QWidget):
 
 
 class BrowserStepDiagramWidget(QWidget):
-    """Paints a visual 3-step illustration showing Developer Mode, Load Unpacked, and Ctrl+V."""
+    """Paints a visual 3-step illustration for either Official Store install or Developer Mode unpacked setup."""
 
     def __init__(self, is_ar: bool = True, parent=None):
         super().__init__(parent)
         self.is_ar = is_ar
+        self.store_mode = False
         self.setMinimumHeight(195)
+
+    def set_store_mode(self, store_mode: bool):
+        self.store_mode = bool(store_mode)
+        self.update()
 
     def paintEvent(self, _e):
         p = pal()
@@ -4327,26 +4374,48 @@ class BrowserStepDiagramWidget(QWidget):
         card_w = (w - gap * 2) / 3.0
         card_h = h - 4
 
-        steps = [
-            (
-                "1",
-                "فعّل وضع المطوّر" if self.is_ar else "Enable Developer mode",
-                "أعلى صفحة الإضافات في المتصفح" if self.is_ar else "Top corner of Extensions page",
-                "toggle",
-            ),
-            (
-                "2",
-                "اضغط Load unpacked" if self.is_ar else "Click Load unpacked",
-                "أو «تحميل غير محزوم» بالعربية" if self.is_ar else "Opens the folder picker dialog",
-                "button",
-            ),
-            (
-                "3",
-                "اضغط Ctrl + V ثم Enter" if self.is_ar else "Press Ctrl + V then Enter",
-                "المسار منسوخ جاهز في الحافظة ✓" if self.is_ar else "Path is already copied to clipboard ✓",
-                "keys",
-            ),
-        ]
+        if self.store_mode:
+            steps = [
+                (
+                    "1",
+                    "متجر إضافات Edge الرسمي" if self.is_ar else "Official Edge Add-ons Store",
+                    "فُتحت صفحة الإضافة تلقائياً" if self.is_ar else "Store page opened automatically",
+                    "store_page",
+                ),
+                (
+                    "2",
+                    "اضغط زر Get (الحصول عليها)" if self.is_ar else "Click the blue Get button",
+                    "أعلى صفحة الإضافة في المتجر" if self.is_ar else "Top right of the store listing",
+                    "store_get",
+                ),
+                (
+                    "3",
+                    "اضغط Add extension" if self.is_ar else "Click Add extension",
+                    "يتصل بالبرنامج تلقائياً ✓" if self.is_ar else "Connects automatically ✓",
+                    "store_confirm",
+                ),
+            ]
+        else:
+            steps = [
+                (
+                    "1",
+                    "فعّل وضع المطوّر" if self.is_ar else "Enable Developer mode",
+                    "أعلى صفحة الإضافات في المتصفح" if self.is_ar else "Top corner of Extensions page",
+                    "toggle",
+                ),
+                (
+                    "2",
+                    "اضغط Load unpacked" if self.is_ar else "Click Load unpacked",
+                    "أو «تحميل غير محزوم» بالعربية" if self.is_ar else "Opens the folder picker dialog",
+                    "button",
+                ),
+                (
+                    "3",
+                    "اضغط Ctrl + V ثم Enter" if self.is_ar else "Press Ctrl + V then Enter",
+                    "المسار منسوخ جاهز في الحافظة ✓" if self.is_ar else "Path is already copied to clipboard ✓",
+                    "keys",
+                ),
+            ]
 
         for idx, (num, title, sub, kind) in enumerate(steps):
             col_idx = (2 - idx) if self.is_ar else idx
@@ -4376,7 +4445,46 @@ class BrowserStepDiagramWidget(QWidget):
             painter.setBrush(QColor(p["surface"]))
             painter.drawRoundedRect(vis_rect, 8, 8)
 
-            if kind == "toggle":
+            if kind == "store_page":
+                pill_w = min(vis_rect.width() - 18, 168)
+                pill_r = QRectF(vis_rect.center().x() - pill_w / 2, vis_rect.center().y() - 16, pill_w, 32)
+                painter.setPen(QPen(QColor("#0284c7"), 1.4))
+                painter.setBrush(QColor(p["accent_soft"]))
+                painter.drawRoundedRect(pill_r, 6, 6)
+                painter.setPen(QColor("#0284c7"))
+                f_lbl = painter.font()
+                f_lbl.setBold(True)
+                f_lbl.setPixelSize(11)
+                painter.setFont(f_lbl)
+                painter.drawText(pill_r, Qt.AlignmentFlag.AlignCenter, "Edge Add-ons  •  Live")
+
+            elif kind == "store_get":
+                btn_w = min(vis_rect.width() - 36, 130)
+                btn_r = QRectF(vis_rect.center().x() - btn_w / 2, vis_rect.center().y() - 17, btn_w, 34)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#0078d4"))
+                painter.drawRoundedRect(btn_r, 6, 6)
+                painter.setPen(QColor("#ffffff"))
+                f_btn = painter.font()
+                f_btn.setBold(True)
+                f_btn.setPixelSize(13)
+                painter.setFont(f_btn)
+                painter.drawText(btn_r, Qt.AlignmentFlag.AlignCenter, "Get")
+
+            elif kind == "store_confirm":
+                btn_w = min(vis_rect.width() - 20, 152)
+                btn_r = QRectF(vis_rect.center().x() - btn_w / 2, vis_rect.center().y() - 17, btn_w, 34)
+                painter.setPen(QPen(QColor(p["success"]), 1.8))
+                painter.setBrush(QColor(p["accent_soft"]))
+                painter.drawRoundedRect(btn_r, 6, 6)
+                painter.setPen(QColor(p["success"]))
+                f_btn = painter.font()
+                f_btn.setBold(True)
+                f_btn.setPixelSize(12)
+                painter.setFont(f_btn)
+                painter.drawText(btn_r, Qt.AlignmentFlag.AlignCenter, "Add extension ✓")
+
+            elif kind == "toggle":
                 # Draw "Developer mode" label + ON blue toggle switch centered inside vis_rect
                 sw_w, sw_h = 38, 22
                 total_w = sw_w + 8 + 94
@@ -4454,9 +4562,10 @@ class BrowserStepDiagramWidget(QWidget):
                 title,
             )
 
-            painter.setPen(QColor(p["success"] if kind == "keys" else p["muted"]))
+            is_final = kind in ("keys", "store_confirm")
+            painter.setPen(QColor(p["success"] if is_final else p["muted"]))
             f_s = painter.font()
-            f_s.setBold(kind == "keys")
+            f_s.setBold(is_final)
             f_s.setPixelSize(11)
             painter.setFont(f_s)
             painter.drawText(
@@ -4656,9 +4765,9 @@ class BrowserSetupDialog(QDialog):
         ic_lay.addWidget(h_lbl)
 
         s_lbl = QLabel(
-            "سيقوم المعالج بتجهيز ملفات الإضافة في مسار النظام الدائم، ونسخ المسار، وفتح صفحة التفعيل، والانتقال تلقائياً بمجرد تفعيلها."
+            "ثبّت الإضافة الرسمية مباشرة من متجر Microsoft Edge بضغطة واحدة، أو اربط Chrome وBrave من مسار النظام الدائم مع اكتشاف فوري للتفعيل."
             if self.is_ar
-            else "The wizard prepares the extension files in a permanent path, copies the path, opens the extensions page, and detects activation automatically."
+            else "Install directly from the official Microsoft Edge Add-ons Store in 1 click, or link Chrome & Brave from the permanent system path with live auto-detection."
         )
         s_lbl.setWordWrap(True)
         s_lbl.setStyleSheet(f"font-size: 12px; color: {p['muted']};")
@@ -4750,35 +4859,74 @@ class BrowserSetupDialog(QDialog):
         p = pal()
         self.engine.sync_and_repair_browser_extensions()
         connected_list = set(self.engine.settings.get("connectedBrowsers") or []) | set(self.engine.last_ext_seen.keys())
+        edge_store_installed = is_edge_store_extension_installed()
 
         for br_key, br_name, _ext_url, _accent in BROWSER_SPECS:
             w = self.br_cards_widgets[br_key]
             exe_path = self._find_browser_exe(br_key)
             installed = os.path.exists(exe_path)
-            is_conn = br_key in connected_list
+            is_conn = (br_key in connected_list) or (br_key == "msedge" and edge_store_installed)
 
-            if is_conn:
-                w["conn_pill"].setText("✓ متصل ومفعّل" if self.is_ar else "✓ Connected")
+            if br_key == "msedge" and is_conn and not edge_store_installed:
+                w["conn_pill"].setText("نسخة يدوية نشطة" if self.is_ar else "Manual Copy")
+                w["conn_pill"].setStyleSheet(
+                    f"background: {p['surface2']}; color: {p['warn']}; font-weight: 700; "
+                    f"font-size: 12px; padding: 4px 12px; border-radius: 11px;"
+                )
+                w["conn_pill"].show()
+                w["status_lbl"].setText(
+                    "متصل بنسخة يدوية سابقة — يُنصح بالترقية لنسخة متجر Edge الرسمية وحذف اليدوية"
+                    if self.is_ar
+                    else "Connected via manual copy — Upgrade to the official Edge Store version"
+                )
+                w["btn"].setText("الترقية لنسخة المتجر  ←" if self.is_ar else "Upgrade to Store  →")
+                w["btn"].setObjectName("PrimaryBtn")
+            elif is_conn:
+                w["conn_pill"].setText(
+                    ("✓ متصل (نسخة المتجر)" if br_key == "msedge" else "✓ متصل ومفعّل")
+                    if self.is_ar
+                    else ("✓ Official Store" if br_key == "msedge" else "✓ Connected")
+                )
                 w["conn_pill"].setStyleSheet(
                     f"background: {p['accent_soft']}; color: {p['success']}; font-weight: 700; "
                     f"font-size: 12px; padding: 4px 12px; border-radius: 11px;"
                 )
                 w["conn_pill"].show()
                 w["status_lbl"].setText(
-                    "الإضافة مفعّلة في المتصفح وتلتقط التحميلات والفيديوهات تلقائياً"
+                    (
+                        "الإضافة الرسمية من متجر Microsoft Edge مفعّلة وتلتقط التحميلات والفيديوهات تلقائياً"
+                        if br_key == "msedge"
+                        else "الإضافة مفعّلة في المتصفح وتلتقط التحميلات والفيديوهات تلقائياً"
+                    )
                     if self.is_ar
-                    else "Extension is active and capturing downloads & videos automatically"
+                    else (
+                        "Official Microsoft Edge Store extension is active and capturing downloads & videos"
+                        if br_key == "msedge"
+                        else "Extension is active and capturing downloads & videos automatically"
+                    )
                 )
-                w["btn"].setText("إعادة الفتح / فحص" if self.is_ar else "Re-open / Check")
+                w["btn"].setText(
+                    ("صفحة المتجر / فحص" if br_key == "msedge" else "إعادة الفتح / فحص")
+                    if self.is_ar
+                    else ("Store Page / Check" if br_key == "msedge" else "Re-open / Check")
+                )
                 w["btn"].setObjectName("")
             elif installed:
                 w["conn_pill"].hide()
-                w["status_lbl"].setText(
-                    "مثبّت على جهازك — جاهز للربط في 3 خطوات سريعة"
-                    if self.is_ar
-                    else "Installed on this PC — Ready for 3-step quick setup"
-                )
-                w["btn"].setText("ربط المتصفح الآن  ←" if self.is_ar else "Connect Browser  →")
+                if br_key == "msedge":
+                    w["status_lbl"].setText(
+                        "متاحة رسمياً على متجر Microsoft Edge — تثبيت مباشر بضغطة واحدة"
+                        if self.is_ar
+                        else "Official Microsoft Edge Add-ons Store — 1-click direct install"
+                    )
+                    w["btn"].setText("تثبيت من متجر Edge  ←" if self.is_ar else "Install from Store  →")
+                else:
+                    w["status_lbl"].setText(
+                        "مثبّت على جهازك — جاهز للربط في 3 خطوات سريعة"
+                        if self.is_ar
+                        else "Installed on this PC — Ready for 3-step quick setup"
+                    )
+                    w["btn"].setText("ربط المتصفح الآن  ←" if self.is_ar else "Connect Browser  →")
                 w["btn"].setObjectName("PrimaryBtn")
             else:
                 w["conn_pill"].hide()
@@ -4838,9 +4986,14 @@ class BrowserSetupDialog(QDialog):
         self.txt_ext_path.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         path_row.addWidget(self.txt_ext_path, 1)
 
-        btn_recopy = QPushButton("نسخ المسار ✓" if self.is_ar else "Copy Path ✓")
-        btn_recopy.clicked.connect(self.copy_ext_path)
-        path_row.addWidget(btn_recopy)
+        self.btn_recopy = QPushButton("نسخ المسار ✓" if self.is_ar else "Copy Path ✓")
+        self.btn_recopy.clicked.connect(self.copy_ext_path)
+        path_row.addWidget(self.btn_recopy)
+
+        self.btn_edge_ext_mgr = QPushButton("إدارة الإضافات (حذف النسخة اليدوية)" if self.is_ar else "Manage Extensions")
+        self.btn_edge_ext_mgr.clicked.connect(self._open_edge_extensions_manager)
+        self.btn_edge_ext_mgr.setVisible(False)
+        path_row.addWidget(self.btn_edge_ext_mgr)
 
         btn_reopen = QPushButton("إعادة فتح المتصفح" if self.is_ar else "Re-open Browser")
         btn_reopen.clicked.connect(self._reopen_current_browser_ext_page)
@@ -4990,12 +5143,22 @@ class BrowserSetupDialog(QDialog):
                 return p
         return br_key
 
+    def _is_store_setup(self) -> bool:
+        return self.selected_browser_key == "msedge" and self.selected_ext_url.startswith("https://")
+
     def copy_ext_path(self) -> str:
-        perm_dir = self.engine.get_permanent_ext_dir()
+        val = self.selected_ext_url if self._is_store_setup() else self.engine.get_permanent_ext_dir()
         if self.parent_win:
-            self.parent_win.last_clip = perm_dir
-        QApplication.clipboard().setText(perm_dir)
-        return perm_dir
+            self.parent_win.last_clip = val
+        QApplication.clipboard().setText(val)
+        return val
+
+    def _open_edge_extensions_manager(self):
+        exe = self._find_browser_exe("msedge")
+        try:
+            subprocess.Popen([exe, "edge://extensions"])
+        except Exception:
+            pass
 
     def start_browser_wizard(self, br_key: str, br_name: str, ext_url: str):
         self.selected_browser_key = br_key
@@ -5003,26 +5166,57 @@ class BrowserSetupDialog(QDialog):
         self.selected_ext_url = ext_url
         self.wait_started_at = time.time()
 
-        perm_dir = self.copy_ext_path()
-        self.txt_ext_path.setText(perm_dir)
-        self.txt_ext_path.setCursorPosition(0)
+        is_store = self._is_store_setup()
+        store_already = is_edge_store_extension_installed() if is_store else False
+        prev_edge_conn = br_key in (self.engine.settings.get("connectedBrowsers") or []) or (
+            self.engine.last_ext_seen.get("msedge", 0.0) > 0
+        )
+        self._edge_store_at_start = store_already
+        self._upgrading_manual_edge = bool(is_store and not store_already and prev_edge_conn)
+        self.diagram.set_store_mode(is_store)
+        self.btn_edge_ext_mgr.setVisible(is_store)
+        self.btn_recopy.setText(
+            ("نسخ رابط المتجر ✓" if self.is_ar else "Copy Store Link ✓")
+            if is_store
+            else ("نسخ المسار ✓" if self.is_ar else "Copy Path ✓")
+        )
 
-        self.lbl_s2_title.setText(
-            f"✓ تم نسخ مسار الإضافة تلقائياً وفتح صفحة إضافات {L(br_name)}!"
-            if self.is_ar
-            else f"✓ Extension path copied & {br_name} extensions page opened!"
-        )
-        self.lbl_s2_sub.setText(
-            "نفّذ هذه الـ 3 خطوات السريعة في نافذة المتصفح التي فتحت الآن — وسينتقل هذا المعالج تلقائياً فور التفعيل:"
-            if self.is_ar
-            else "Follow these 3 quick steps in the browser window that just opened — this wizard will advance automatically:"
-        )
+        if is_store:
+            self.txt_ext_path.setText(ext_url)
+            self.txt_ext_path.setCursorPosition(0)
+            self.lbl_s2_title.setText(
+                "✓ تم فتح صفحة الإضافة الرسمية على متجر Microsoft Edge!"
+                if self.is_ar
+                else "✓ Official Microsoft Edge Add-ons Store page opened!"
+            )
+            self.lbl_s2_sub.setText(
+                "اضغط زر «Get / الحصول عليها» ثم «Add extension» في المتصفح — وسينتقل هذا المعالج تلقائياً فور التفعيل.\n"
+                "تنبيه: إذا كنت قد ركّبت نسخة يدوية سابقة عبر Load unpacked، احذفها من زر «إدارة الإضافات» لعدم تكرار الشريط."
+                if self.is_ar
+                else "Click 'Get' then 'Add extension' in Microsoft Edge — this wizard will advance automatically.\n"
+                "Note: If you previously installed a manual unpacked copy, remove it via 'Manage Extensions' to avoid duplicates."
+            )
+        else:
+            perm_dir = self.copy_ext_path()
+            self.txt_ext_path.setText(perm_dir)
+            self.txt_ext_path.setCursorPosition(0)
+            self.lbl_s2_title.setText(
+                f"✓ تم نسخ مسار الإضافة تلقائياً وفتح صفحة إضافات {L(br_name)}!"
+                if self.is_ar
+                else f"✓ Extension path copied & {br_name} extensions page opened!"
+            )
+            self.lbl_s2_sub.setText(
+                "نفّذ هذه الـ 3 خطوات السريعة في نافذة المتصفح التي فتحت الآن — وسينتقل هذا المعالج تلقائياً فور التفعيل:"
+                if self.is_ar
+                else "Follow these 3 quick steps in the browser window that just opened — this wizard will advance automatically:"
+            )
 
         self.go_to_screen(1)
         self._reopen_current_browser_ext_page()
 
     def _reopen_current_browser_ext_page(self):
-        self.copy_ext_path()
+        if not self._is_store_setup():
+            self.copy_ext_path()
         exe = self._find_browser_exe(self.selected_browser_key)
         try:
             subprocess.Popen([exe, self.selected_ext_url])
@@ -5031,6 +5225,10 @@ class BrowserSetupDialog(QDialog):
 
     def _on_extension_ping_received(self, br_key: str):
         if self.stack.currentIndex() == 1:
+            if getattr(self, "_upgrading_manual_edge", False):
+                if is_edge_store_extension_installed():
+                    self._transition_to_success("msedge")
+                return
             if br_key == self.selected_browser_key or (time.time() - self.wait_started_at) >= 0:
                 self._transition_to_success(br_key)
         elif self.stack.currentIndex() == 0:
@@ -5038,6 +5236,13 @@ class BrowserSetupDialog(QDialog):
 
     def _poll_connection_state(self):
         if self.stack.currentIndex() == 1 and self.wait_started_at > 0:
+            if self._is_store_setup():
+                if not getattr(self, "_edge_store_at_start", False) and is_edge_store_extension_installed():
+                    self.engine.record_browser_connection("msedge")
+                    self._transition_to_success("msedge")
+                    return
+                if getattr(self, "_upgrading_manual_edge", False):
+                    return
             seen_ts = self.engine.last_ext_seen.get(self.selected_browser_key, 0.0)
             if seen_ts >= self.wait_started_at - 0.5:
                 self._transition_to_success(self.selected_browser_key)
