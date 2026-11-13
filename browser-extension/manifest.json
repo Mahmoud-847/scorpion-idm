@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Scorpion IDM Integration Module",
-  "version": "1.8.7",
+  "version": "1.8.8",
   "description": "Download Manager Integration & Video Helper for Scorpion IDM.",
   "icons": {
     "16": "icon.png",

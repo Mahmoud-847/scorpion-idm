@@ -389,6 +389,40 @@ class MediaRegressionTests(unittest.TestCase):
             self.engine._validate_video_output("voice.ogg", {"category": "Video", "videoQuality": "best"})
             self.assertTrue(mock_val.call_args.args[3])
 
+    def test_duplicate_capture_deduplication_and_delete_reset(self):
+        url = "https://example.com/report?id=1"
+        self.assertIsNone(self.engine.should_ignore_duplicate_capture(url, "best", "file"))
+        self.engine.record_capture(url, "best", "file", "dl-1")
+        self.engine.downloads["dl-1"] = {"id": "dl-1", "url": url, "status": "downloading"}
+        self.assertEqual(self.engine.should_ignore_duplicate_capture(url, "best", "file"), "dl-1")
+        # Distinct quality should not be suppressed
+        self.assertIsNone(self.engine.should_ignore_duplicate_capture(url, "audio", "video"))
+        # Deleting the download clears duplicate suppression so manual retry works
+        self.engine.delete_download("dl-1")
+        self.assertIsNone(self.engine.should_ignore_duplicate_capture(url, "best", "file"))
+
+    def test_excel_extension_detection_from_headers_query_and_ooxml(self):
+        self.assertEqual(
+            sq.extract_filename(
+                "https://portal.example.com/getAgentProductivityDownload?from=1",
+                {"Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+            ),
+            "getAgentProductivityDownload.xlsx",
+        )
+        self.assertEqual(
+            sq.extract_filename(
+                "https://portal.example.com/getAgentActivityReportDownload?type=EXCEL",
+                {"Content-Type": "application/octet-stream"},
+            ),
+            "getAgentActivityReportDownload.xlsx",
+        )
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xlsx_tmp = Path(tmpdir) / "getAgentProductivityDownload"
+            with zipfile.ZipFile(xlsx_tmp, "w") as zf:
+                zf.writestr("xl/workbook.xml", "<workbook/>")
+            self.assertEqual(sq._sniff_file_ext(str(xlsx_tmp)), ".xlsx")
+
 
 if __name__ == "__main__":
     unittest.main()

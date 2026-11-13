@@ -1,22 +1,22 @@
 {
-  "version": "2.1.20",
+  "version": "2.1.21",
   "publishedAt": "2026-11-13",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "d2318c906e98ba66debe45bde7455e29858f1ef374a8491838e57d453f35741d",
+  "sha256": "337ac8ff90060133171ed56ab3ee54d15fc5ba988d786bfca8c88e5d39089a3c",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.20 — إصلاح وتحسين التعرف على ملفات الصوت",
-  "title_en": "Version 2.1.20 — Audio Detection & Download Fixes",
+  "title_ar": "الإصدار 2.1.21 — منع التكرار، زر الإلغاء، وإصلاح تحميل الصوت والتقارير",
+  "title_en": "Version 2.1.21 — Deduplication, Card Cancel Button, Audio & Report Fixes",
   "changelog_ar": [
-    "إصلاح ظهور الشريط العائم فوق مشغلات الصوت القياسية (<audio>) والمشغلات المخفية وصفحات التشغيل المباشر للصوتيات.",
-    "دعم جميع صيغ الصوت (MP3, M4A, OGG, OPUS, AAC, WAV, FLAC, WMA, AMR, M4B, WEBA, AIFF) ونوع MIME audio/* في الإضافة والبرنامج.",
-    "إصلاح تحميل المقاطع والرسائل الصوتية من تليجرام والتحقق الصحيح من المسارات الصوتية عبر ffprobe.",
-    "تحسين استخراج الصوتيات المحمية بالكوكيز والمرجع (Referer) واكتشاف روابط الصوت في الحافظة."
+    "منع تكرار تنزيل نفس الرابط مرتين عند وصول إشارة الالتقاط أكثر من مرة.",
+    "إضافة زر «إلغاء» واضح في أسفل بطاقة التحميل المنبثقة لإيقاف وحذف التحميل فورًا.",
+    "إصلاح توقف تحميل مقاطع SoundCloud / HLS عند 20% عبر ضبط عدد الاتصالات المتزامنة.",
+    "تسريع بدء تحميل ملفات المواقع البطيئة وعدم تجميد الواجهة، مع اكتشاف امتداد الملفات مثل (.xlsx, .csv, .pdf) تلقائيًا."
   ],
   "changelog_en": [
-    "Fixed floating download bar detection for standard <audio> controls, hidden audio players, and standalone browser audio tabs.",
-    "Added full audio format (MP3, M4A, OGG, OPUS, AAC, WAV, FLAC, WMA, AMR, M4B, WEBA, AIFF) and audio/* MIME support across extension and desktop.",
-    "Fixed Telegram audio/voice transfers and ffprobe validation for direct and audio-only streams.",
-    "Forwarded cookies and Referer for authenticated audio downloads and expanded clipboard audio extension detection."
+    "Prevented duplicate downloads when identical captures arrive within seconds.",
+    "Added a visible Cancel button at the bottom of the floating DownloadCard popup.",
+    "Fixed SoundCloud / HLS audio downloads stalling at 20% by tuning concurrent fragment downloads.",
+    "Skipped synchronous UI-thread probes for browser-captured files, raised read timeout for slow report servers, and inferred missing extensions (.xlsx, .csv, .pdf) from headers/query."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",

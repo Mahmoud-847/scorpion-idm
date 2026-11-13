@@ -157,7 +157,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.20"
+APP_VERSION = "2.1.21"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -225,6 +225,24 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.21",
+        "date": "2026-11-13",
+        "title_ar": "الإصدار 2.1.21 — منع التكرار، زر الإلغاء، وإصلاح تحميل الصوت والتقارير",
+        "title_en": "Version 2.1.21 — Deduplication, Card Cancel Button, Audio & Report Fixes",
+        "ar": [
+            "منع تكرار تنزيل نفس الرابط مرتين عند وصول إشارة الالتقاط أكثر من مرة.",
+            "إضافة زر «إلغاء» واضح في أسفل بطاقة التحميل المنبثقة لإيقاف وحذف التحميل فورًا.",
+            "إصلاح توقف تحميل مقاطع SoundCloud / HLS عند 20% عبر ضبط عدد الاتصالات المتزامنة.",
+            "تسريع بدء تحميل ملفات المواقع البطيئة وعدم تجميد الواجهة، مع اكتشاف امتداد الملفات مثل (.xlsx, .csv, .pdf) تلقائيًا.",
+        ],
+        "en": [
+            "Prevented duplicate downloads when identical captures arrive within seconds.",
+            "Added a visible Cancel button at the bottom of the floating DownloadCard popup.",
+            "Fixed SoundCloud / HLS audio downloads stalling at 20% by tuning concurrent fragment downloads.",
+            "Skipped synchronous UI-thread probes for browser-captured files, raised read timeout for slow report servers, and inferred missing extensions (.xlsx, .csv, .pdf) from headers/query.",
+        ],
+    },
     {
         "version": "2.1.20",
         "date": "2026-11-13",
@@ -623,20 +641,105 @@ def sanitize_filename(name: str) -> str:
     return clean or "scorpion_download.bin"
 
 
-def extract_filename(url: str, headers: dict) -> str:
-    cd = headers.get("Content-Disposition") or headers.get("content-disposition") or ""
-    if "filename=" in cd:
-        part = cd.split("filename=")[-1].strip().strip('"\';')
-        if part:
-            return sanitize_filename(urllib.parse.unquote(part))
+def _infer_ext_from_meta(url: str, headers: dict) -> str:
+    ct = (headers.get("Content-Type") or headers.get("content-type") or "").split(";")[0].strip().lower()
+    mime_map = (
+        ("spreadsheetml", ".xlsx"),
+        ("ms-excel", ".xls"),
+        ("csv", ".csv"),
+        ("pdf", ".pdf"),
+        ("wordprocessingml", ".docx"),
+        ("msword", ".doc"),
+        ("presentationml", ".pptx"),
+        ("audio/mpeg", ".mp3"),
+        ("audio/mp4", ".m4a"),
+        ("audio/ogg", ".ogg"),
+        ("audio/wav", ".wav"),
+        ("audio/flac", ".flac"),
+        ("video/mp4", ".mp4"),
+        ("video/webm", ".webm"),
+        ("zip", ".zip"),
+    )
+    for token, ext in mime_map:
+        if token in ct:
+            return ext
     try:
-        parsed = urllib.parse.urlparse(url)
-        base = os.path.basename(urllib.parse.unquote(parsed.path))
-        if base and len(base) > 1 and base != "/":
-            return sanitize_filename(base)
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        qtype = " ".join(str(v).lower() for k in ("type", "format", "ext") for v in qs.get(k, []))
+        for token, ext in (("xlsx", ".xlsx"), ("excel", ".xlsx"), ("xls", ".xls"), ("csv", ".csv"), ("pdf", ".pdf"), ("docx", ".docx"), ("zip", ".zip")):
+            if token in qtype:
+                return ext
     except Exception:
         pass
-    return "scorpion_file.bin"
+    return ""
+
+
+def _sniff_file_ext(path: str) -> str:
+    try:
+        with open(path, "rb") as f:
+            head = f.read(16)
+    except Exception:
+        return ""
+    if not head:
+        return ""
+    if head.startswith(b"PK\x03\x04"):
+        import zipfile
+        try:
+            with zipfile.ZipFile(path, "r") as zf:
+                names = zf.namelist()
+            if any(n.startswith("xl/") for n in names):
+                return ".xlsx"
+            if any(n.startswith("word/") for n in names):
+                return ".docx"
+            if any(n.startswith("ppt/") for n in names):
+                return ".pptx"
+        except Exception:
+            pass
+        return ".zip"
+    if head.startswith(b"\xd0\xcf\x11\xe0"):
+        return ".xls"
+    if head.startswith(b"%PDF-"):
+        return ".pdf"
+    if head.startswith(b"ID3") or head[:2] in (b"\xff\xfb", b"\xff\xf3"):
+        return ".mp3"
+    if head.startswith(b"OggS"):
+        return ".ogg"
+    if head.startswith(b"fLaC"):
+        return ".flac"
+    return ""
+
+
+def extract_filename(url: str, headers: dict) -> str:
+    cd = headers.get("Content-Disposition") or headers.get("content-disposition") or ""
+    name = ""
+    m_ext = re.search(r"filename\*\s*=\s*([^;\s]+)", cd, re.I)
+    if m_ext:
+        val = m_ext.group(1).strip().strip('"\'')
+        if "''" in val:
+            val = val.split("''", 1)[1]
+        if val:
+            name = sanitize_filename(urllib.parse.unquote(val))
+    if not name and "filename=" in cd.lower():
+        m_std = re.search(r'filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;\r\n]+)', cd, re.I)
+        if m_std:
+            part = (m_std.group(1) or m_std.group(2) or "").strip().strip('"\';')
+            if part:
+                name = sanitize_filename(urllib.parse.unquote(part))
+    if not name:
+        try:
+            parsed = urllib.parse.urlparse(url)
+            base = os.path.basename(urllib.parse.unquote(parsed.path))
+            if base and len(base) > 1 and base != "/":
+                name = sanitize_filename(base)
+        except Exception:
+            pass
+    if not name:
+        return "scorpion_file.bin"
+    if not os.path.splitext(name)[1]:
+        inferred = _infer_ext_from_meta(url, headers)
+        if inferred:
+            name += inferred
+    return name
 
 
 # ==============================================================================
@@ -1664,6 +1767,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         self.total_speed = 0
         self.downloads = {}
         self.controllers = {}
+        self._recent_captures = {}
         self.lock = threading.RLock()
 
         os.makedirs(self.app_data, exist_ok=True)
@@ -2417,6 +2521,40 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             return found
         return ""
 
+    def _capture_key(self, url: str, quality: str = "", ptype: str = "") -> tuple:
+        return ((url or "").strip(), (quality or "best").strip().lower(), (ptype or "file").strip().lower())
+
+    def record_capture(self, url: str, quality: str, ptype: str, dl_id: str):
+        key = self._capture_key(url, quality, ptype)
+        with self.lock:
+            self.__dict__.setdefault("_recent_captures", {})[key] = (time.time(), dl_id)
+
+    def should_ignore_duplicate_capture(self, url: str, quality: str = "", ptype: str = "") -> str | None:
+        url_clean = (url or "").strip()
+        if not url_clean:
+            return None
+        key = self._capture_key(url_clean, quality, ptype)
+        now = time.time()
+        with self.lock:
+            recent = self.__dict__.setdefault("_recent_captures", {})
+            for k in [k for k, (ts, _did) in recent.items() if now - ts > 30.0]:
+                recent.pop(k, None)
+            hit = recent.get(key)
+            if hit:
+                _ts, dl_id = hit
+                existing = self.downloads.get(dl_id)
+                if existing and existing.get("status") != "error":
+                    return dl_id
+            q_clean = (quality or "best").strip().lower()
+            for it in self.downloads.values():
+                if (
+                    (it.get("url") or "").strip() == url_clean
+                    and it.get("status") in ("downloading", "connecting", "queued")
+                    and (it.get("videoQuality") or "best").strip().lower() == q_clean
+                ):
+                    return it["id"]
+        return None
+
     def add_download(self, opts: dict) -> dict:
         url = opts["url"].strip()
         total_size = int(opts.get("totalSize") or 0)
@@ -2427,7 +2565,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         is_torrent = self._is_torrent_source(url, opts)
         is_video = bool(opts.get("isVideo", False)) and not is_torrent
 
-        if total_size <= 0 and not is_video and not is_torrent:
+        if total_size <= 0 and not is_video and not is_torrent and not opts.get("fromBrowser"):
             try:
                 p = self.probe_url(url, referer=opts.get("referer") or "", cookies=opts.get("cookies"))
                 url = p["url"]
@@ -2518,6 +2656,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         }
         with self.lock:
             self.downloads[dl_id] = item
+        cap_quality = opts.get("_captureQuality") or ("audio" if opts.get("category") == "Music" else opts.get("videoQuality", "best"))
+        cap_type = opts.get("_captureType") or ("torrent" if is_torrent else ("audio" if cap_quality == "audio" else ("video" if is_video else "file")))
+        self.record_capture(url, cap_quality, cap_type, dl_id)
         if opts.get("cookies"):
             self.__dict__.setdefault("_site_cookies", {})[dl_id] = opts["cookies"]
         if item["browserTransfer"]:
@@ -2660,7 +2801,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
                     jar = self._cookies_to_jar(self.__dict__.get("_site_cookies", {}).get(item["id"]))
                     with requests.get(
-                        item["url"], headers=hdrs, cookies=jar, stream=True, timeout=20, allow_redirects=True, verify=False
+                        item["url"], headers=hdrs, cookies=jar, stream=True, timeout=(15, 180), allow_redirects=True, verify=False
                     ) as r:
                         if r.status_code in (429, 503, 509, 403, 500, 502, 504):
                             retry_reason = f"HTTP {r.status_code}"
@@ -2673,6 +2814,38 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                             threading.Thread(target=self._restart_single_connection, args=(item, ctrl), daemon=True).start()
                             return
                         else:
+                            if seg["id"] == 1 and seg["currentByte"] == 0:
+                                resp_hdrs = dict(r.headers)
+                                if int(item.get("totalSize") or 0) <= 0:
+                                    discovered_total = 0
+                                    cr = resp_hdrs.get("Content-Range") or resp_hdrs.get("content-range") or ""
+                                    if "/" in cr:
+                                        try:
+                                            discovered_total = int(cr.split("/")[-1])
+                                        except Exception:
+                                            discovered_total = 0
+                                    if discovered_total <= 0:
+                                        try:
+                                            discovered_total = int(resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or 0)
+                                        except Exception:
+                                            discovered_total = 0
+                                    if discovered_total > 0:
+                                        item["totalSize"] = discovered_total
+                                        if len(item.get("segments") or []) == 1 and seg.get("endByte", -1) == -1:
+                                            seg["endByte"] = discovered_total - 1
+                                better_name = extract_filename(r.url or item["url"], resp_hdrs)
+                                has_cd_name = "filename" in (resp_hdrs.get("Content-Disposition") or resp_hdrs.get("content-disposition") or "").lower()
+                                if better_name not in ("scorpion_file.bin", "download_file") and (
+                                    not os.path.splitext(item.get("filename") or "")[1] or has_cd_name
+                                ):
+                                    with self.lock:
+                                        new_cat = detect_category(better_name, resp_hdrs.get("Content-Type") or "")
+                                        new_dir = os.path.join(self.settings["downloadsRoot"], new_cat)
+                                        os.makedirs(new_dir, exist_ok=True)
+                                        item["category"] = new_cat
+                                        item["saveDir"] = new_dir
+                                        item["filePath"] = self._available_media_path(os.path.join(new_dir, better_name), item["id"])
+                                        item["filename"] = os.path.basename(item["filePath"])
                             seg["info"] = "Receiving data..."
                             for chunk in r.iter_content(chunk_size=65536):
                                 if ctrl["aborted"] or item["status"] != "downloading":
@@ -3628,6 +3801,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 pass
 
         n_ports = max(8, int(item.get("connections") or self.settings.get("defaultConnections") or 16))
+        is_audio_frag = q == "audio" or item.get("category") == "Music"
+        frag_ports = min(6, n_ports) if is_audio_frag else min(16, n_ports)
 
         def update_16_virtual_ports(dl_b: int, tot_b: int, frag_idx: int = 0, frag_cnt: int = 0):
             segs = item.get("segments") or []
@@ -3705,7 +3880,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
-            "concurrent_fragment_downloads": n_ports,
+            "concurrent_fragment_downloads": frag_ports,
             "logger": QuietYtdlpLogger(),
         }
         if item.get("_cookiefile"):
@@ -3753,7 +3928,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     is_ar = self.settings.get("lang", "ar") == "ar"
                     kind_lbl = "بورت فيديو" if is_ar else "Video Port"
                     tot_est = sum(int(f.get("filesize") or f.get("filesize_approx") or 0) for f in reqs)
-                    per_p = max(1, tot_est // n_ports) if tot_est > 0 else 0
+                    per_p = max(1, tot_est // frag_ports) if tot_est > 0 else 0
                     item["segments"] = [
                         {
                             "id": i,
@@ -3767,7 +3942,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                             "status": "downloading",
                             "info": f"Port #{i}",
                         }
-                        for i in range(1, n_ports + 1)
+                        for i in range(1, frag_ports + 1)
                     ]
                     item["totalSize"] = tot_est
                     item["supportsRange"] = True
@@ -4215,6 +4390,14 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             ctrl["file"].close()
             if ctrl["aborted"]:
                 return
+            if not os.path.splitext(item.get("filename") or "")[1]:
+                ext = _sniff_file_ext(item["tempFilePath"]) or _infer_ext_from_meta(item.get("url") or "", {})
+                if ext:
+                    item["filename"] = f"{item.get('filename') or 'download_file'}{ext}"
+                    item["category"] = detect_category(item["filename"])
+                    item["saveDir"] = os.path.join(self.settings["downloadsRoot"], item["category"])
+                    os.makedirs(item["saveDir"], exist_ok=True)
+                    item["filePath"] = os.path.join(item["saveDir"], item["filename"])
             actual_size = os.path.getsize(item["tempFilePath"])
             if item.get("totalSize") and actual_size != item["totalSize"]:
                 raise RuntimeError("الملف لم يصل بحجمه الكامل. أعد المحاولة.")
@@ -4280,7 +4463,12 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
     def delete_download(self, dl_id: str):
         self.pause_download(dl_id)
-        item = self.downloads.pop(dl_id, None)
+        with self.lock:
+            item = self.downloads.pop(dl_id, None)
+            recent = self.__dict__.get("_recent_captures")
+            if isinstance(recent, dict):
+                for k in [k for k, (_ts, did) in recent.items() if did == dl_id]:
+                    recent.pop(k, None)
         if item:
             self._cleanup_item_temp(item)
         self.save_state()
@@ -6184,7 +6372,7 @@ class DownloadCard(QWidget):
 
     action = pyqtSignal(str, str)  # download id, action
 
-    W, H = 384, 132
+    W, H = 408, 134
 
     def __init__(self, dl_id: str, is_ar: bool):
         super().__init__(
@@ -6246,25 +6434,36 @@ class DownloadCard(QWidget):
         btns = QHBoxLayout()
         btns.setSpacing(6)
         btns.addStretch()
+        self.btn_c = QPushButton()
         self.btn_b = QPushButton()
         self.btn_a = QPushButton()
-        for b in (self.btn_b, self.btn_a):
+        for b in (self.btn_c, self.btn_b, self.btn_a):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setFixedHeight(30)
-            b.setStyleSheet("padding: 2px 14px;")
+            b.setStyleSheet("padding: 2px 12px;")
             btns.addWidget(b)
         self.btn_a.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_a.property("act")))
         self.btn_b.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_b.property("act")))
+        self.btn_c.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_c.property("act")))
         lay.addLayout(btns)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    def _set_buttons(self, a: tuple, b: tuple, primary_a: bool = False):
-        for btn, (text, act) in ((self.btn_a, a), (self.btn_b, b)):
-            btn.setText(text)
-            btn.setProperty("act", act)
+    def _set_buttons(self, a: tuple, b: tuple, c: tuple | None = None, primary_a: bool = False, danger_c: bool = True):
+        for btn, spec in ((self.btn_a, a), (self.btn_b, b), (self.btn_c, c)):
+            if spec is None:
+                btn.setVisible(False)
+                btn.setText("")
+                btn.setProperty("act", "")
+            else:
+                text, act = spec
+                btn.setVisible(True)
+                btn.setText(text)
+                btn.setProperty("act", act)
         self.btn_a.setObjectName("PrimaryBtn" if primary_a else "")
-        self.btn_a.style().unpolish(self.btn_a)
-        self.btn_a.style().polish(self.btn_a)
+        self.btn_c.setObjectName("DangerBtn" if (c and danger_c) else "")
+        for btn in (self.btn_a, self.btn_c):
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
     def update_from(self, item: dict):
         T = self.T
@@ -6303,22 +6502,22 @@ class DownloadCard(QWidget):
             browser_owned = item.get("browserTransfer")
             if browser_owned and mode == "error":
                 # Only the browser tab can restart it, so no Retry here
-                self._set_buttons((T("التفاصيل", "Details"), "details"), (T("إغلاق", "Close"), "close"))
+                self._set_buttons((T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"))
                 self.dismiss_at = time.time() + 15
             elif browser_owned and mode != "done":
-                self._set_buttons((T("إلغاء", "Cancel"), "pause"), (T("التفاصيل", "Details"), "details"))
+                self._set_buttons((T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"))
                 self.dismiss_at = None
             elif mode == "done":
-                self._set_buttons((T("تشغيل", "Open"), "open"), (T("فتح المجلد", "Show in folder"), "folder"), True)
+                self._set_buttons((T("تشغيل", "Open"), "open"), (T("فتح المجلد", "Show in folder"), "folder"), None, True)
                 self.dismiss_at = time.time() + 6
             elif mode == "error":
-                self._set_buttons((T("إعادة المحاولة", "Retry"), "retry"), (T("التفاصيل", "Details"), "details"), True)
+                self._set_buttons((T("إعادة المحاولة", "Retry"), "retry"), (T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"), True)
                 self.dismiss_at = time.time() + 15
             elif mode == "paused":
-                self._set_buttons((T("استئناف", "Resume"), "resume"), (T("التفاصيل", "Details"), "details"))
+                self._set_buttons((T("استئناف", "Resume"), "resume"), (T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"))
                 self.dismiss_at = None
             else:
-                self._set_buttons((T("إيقاف مؤقت", "Pause"), "pause"), (T("التفاصيل", "Details"), "details"))
+                self._set_buttons((T("إيقاف مؤقت", "Pause"), "pause"), (T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"))
                 self.dismiss_at = None
 
     def _elide_name(self):
@@ -6445,6 +6644,13 @@ class DownloadCardManager(QObject):
             self.win.open_progress_window(dl_id)
         elif act == "pause":
             eng.pause_download(dl_id)
+        elif act == "cancel":
+            dlg = self.win.open_progress_dialogs.pop(dl_id, None)
+            if dlg is not None:
+                dlg.close()
+            self.remove(dl_id)
+            eng.delete_download(dl_id)
+            self.win.refresh_all()
         elif act in ("resume", "retry"):
             if item.get("status") == "error":
                 item["status"] = "paused"
@@ -6989,6 +7195,14 @@ class ScorpionMainWindow(QMainWindow):
                 url = ref_url
         is_audio = (ptype == "audio" or quality == "audio") and not is_torrent
         is_video = ptype in ("video", "audio") and not is_torrent
+        cap_quality = "audio" if is_audio else (
+            quality if quality in ("best", "audio") or re.fullmatch(r"\d{3,4}p", quality or "") else "best"
+        )
+        cap_type = "torrent" if is_torrent else ("audio" if is_audio else ("video" if is_video else "file"))
+        existing_id = self.engine.should_ignore_duplicate_capture(url, cap_quality, cap_type)
+        if existing_id:
+            self.show_download_started(existing_id)
+            return
         title = (payload.get("title") or "").strip()
         filename = (payload.get("filename") or "").strip()
 
@@ -7011,11 +7225,12 @@ class ScorpionMainWindow(QMainWindow):
                 "totalSize": int(payload.get("totalSize") or 0),
                 "connections": 32,
                 "startImmediately": True,
+                "fromBrowser": True,
+                "_captureQuality": cap_quality,
+                "_captureType": cap_type,
                 "isVideo": is_video and quality != "direct",
                 "isTorrent": is_torrent,
-                "videoQuality": "audio" if is_audio else (
-                    quality if quality in ("best", "audio") or re.fullmatch(r"\d{3,4}p", quality or "") else "best"
-                ),
+                "videoQuality": cap_quality,
             }
             item = self.engine.add_download(opts)
             self.show_download_started(item["id"])
@@ -7027,6 +7242,9 @@ class ScorpionMainWindow(QMainWindow):
                     "candidates": payload.get("candidates") or [], "cookies": payload.get("cookies") or [],
                     "strictTarget": bool(payload.get("strictTarget", False)),
                     "expectedDuration": payload.get("expectedDuration") or 0,
+                    "fromBrowser": True,
+                    "_captureQuality": cap_quality,
+                    "_captureType": cap_type,
                 })
                 item = self.engine.add_download(dlg.result_opts)
                 if dlg.result_opts.get("startImmediately", True):

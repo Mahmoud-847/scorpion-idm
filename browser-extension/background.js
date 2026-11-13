@@ -212,15 +212,31 @@ async function siteCookies(urls) {
   return Array.from(seen.values());
 }
 
+const recentCaptures = new Map();
+
 async function sendToScorpion(payload) {
+  const dedupKey = `${payload.url || ''}|${payload.quality || ''}|${payload.type || ''}`;
+  const now = Date.now();
+  const prev = recentCaptures.get(dedupKey);
+  if (prev && now - prev < 4000) {
+    return true;
+  }
+  recentCaptures.set(dedupKey, now);
+  if (recentCaptures.size > 64) {
+    for (const [k, ts] of recentCaptures) {
+      if (now - ts >= 4000) recentCaptures.delete(k);
+    }
+  }
   try {
     const res = await fetch(`${SCORPION_SERVER}/capture`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
       body: JSON.stringify(payload),
     });
+    if (!res.ok) recentCaptures.delete(dedupKey);
     return res.ok;
   } catch (_) {
+    recentCaptures.delete(dedupKey);
     return false;
   }
 }
