@@ -157,7 +157,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.18"
+APP_VERSION = "2.1.19"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -225,6 +225,18 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.19",
+        "date": "2026-11-13",
+        "title_ar": "الإصدار 2.1.19",
+        "title_en": "Version 2.1.19",
+        "ar": [
+            "تحسينات وإصلاحات عامة.",
+        ],
+        "en": [
+            "General improvements and fixes.",
+        ],
+    },
     {
         "version": "2.1.18",
         "date": "2026-11-12",

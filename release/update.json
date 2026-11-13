@@ -1,20 +1,16 @@
 {
-  "version": "2.1.18",
-  "publishedAt": "2026-11-12",
+  "version": "2.1.19",
+  "publishedAt": "2026-11-13",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "874e1609ce8af55698cd17930ab1384cd2ff11d2d339fdf2e602f34518566afa",
+  "sha256": "7297677e7bff0ee2b7ae9417d8b5f872a7ca2c65fa45396ebfae1ea1e515a922",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإضافة الرسمية على متجر Microsoft Edge",
-  "title_en": "Official Microsoft Edge Add-ons Store Integration",
+  "title_ar": "الإصدار 2.1.19",
+  "title_en": "Version 2.1.19",
   "changelog_ar": [
-    "ربط متصفح Microsoft Edge مباشرةً بالإضافة الرسمية على متجر مايكروسوفت للتثبيت بضغطة واحدة.",
-    "تمييز حالة الإضافة في Edge بين نسخة المتجر الرسمية والنسخة اليدوية السابقة، مع زر سريع لإدارتها ومنع التكرار.",
-    "تحديث دليل المشروع وروابط التثبيت الرسمية وسياسة الخصوصية."
+    "تحسينات وإصلاحات عامة."
   ],
   "changelog_en": [
-    "Link Microsoft Edge directly to the official Microsoft Edge Add-ons Store listing for 1-click installation.",
-    "Distinguish official Edge Store vs. manual unpacked setup, with a quick Manage Extensions shortcut to prevent duplicates.",
-    "Update project documentation, official store links, and build/test reference."
+    "General improvements and fixes."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",
