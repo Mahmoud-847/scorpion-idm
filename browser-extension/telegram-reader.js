@@ -23,10 +23,13 @@
     if (url.origin !== location.origin || !/\/(progressive|stream|download)\//i.test(url.pathname)) return fail();
     let reader = readers.get(msg.readerId);
     if (!reader) {
-      // Authorize only an exact DOM video source at the start. Telegram may remove that video
+      // Authorize only an exact DOM media source at the start. Telegram may remove that player
       // while scrolling; subsequent sequential reads stay bound to the originally chosen source.
       if (msg.offset !== 0 || msg.total !== 0 || readers.size >= 8 ||
-          !Array.from(document.querySelectorAll('video')).some((video) => (video.currentSrc || video.src) === msg.url)) return fail();
+          !Array.from(document.querySelectorAll('video, audio')).some((el) => {
+            const child = el.querySelector && el.querySelector('source[src]');
+            return (el.currentSrc || el.src || (child && child.src)) === msg.url;
+          })) return fail();
       reader = { url: msg.url, total: 0, nextOffset: 0, lastOffset: -1, busy: false, lastActivity: Date.now() };
       readers.set(msg.readerId, reader);
     }

@@ -80,13 +80,26 @@ class BrowserTransferMixin:
         with self.lock:
             if self.active_count() >= max(1, int(self.settings.get("maxConcurrent") or 4)):
                 raise ValueError("انتظر اكتمال تحميل جارٍ ثم أعد المحاولة من المتصفح.")
-            item = self.add_download({
-                "url": url, "filename": payload.get("filename") or "Telegram_Video.mp4",
+            mime = str(payload.get("mime") or "").lower()
+            raw_name = str(payload.get("filename") or "")
+            is_audio = bool(
+                payload.get("isAudio")
+                or mime.startswith("audio/")
+                or os.path.splitext(raw_name)[1].lower()
+                in (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac", ".wma", ".amr", ".m4b", ".weba", ".aiff")
+            )
+            dl_spec = {
+                "url": url,
+                "filename": raw_name or ("Telegram_Audio.ogg" if is_audio else "Telegram_Video.mp4"),
                 "referer": payload.get("pageUrl") or "https://web.telegram.org/",
                 "totalSize": total, "isVideo": True, "browserTransfer": True,
                 "expectedDuration": payload.get("expectedDuration"), "startImmediately": False,
                 "connections": 1,
-            })
+            }
+            if is_audio:
+                dl_spec["category"] = "Music"
+                dl_spec["videoQuality"] = "audio"
+            item = self.add_download(dl_spec)
         ctrl = {"aborted": False, "file_lock": threading.RLock(), "last_bytes": 0,
                 "last_time": time.time(), "last_activity": time.time()}
         try:

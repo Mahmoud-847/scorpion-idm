@@ -377,6 +377,18 @@ class MediaRegressionTests(unittest.TestCase):
             self.assertTrue((ROOT / "browser-extension" / script).is_file())
             self.assertIn(script, required)
 
+    def test_audio_browser_transfer_marks_music_category_and_audio_quality(self):
+        _token, item = self.start_transfer(isAudio=True, filename="voice.ogg", mime="audio/ogg")
+        self.assertEqual(item["category"], "Music")
+        self.assertEqual(item["videoQuality"], "audio")
+
+    def test_validate_video_output_treats_music_and_audio_exts_as_audio_only(self):
+        with patch.object(sq, "validate_media", return_value=12.5) as mock_val:
+            self.engine._validate_video_output("song.mp3", {"category": "Music", "videoQuality": "direct"})
+            self.assertTrue(mock_val.call_args.args[3])
+            self.engine._validate_video_output("voice.ogg", {"category": "Video", "videoQuality": "best"})
+            self.assertTrue(mock_val.call_args.args[3])
+
 
 if __name__ == "__main__":
     unittest.main()

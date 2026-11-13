@@ -83,10 +83,13 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       type: 'file',
     });
   } else if (info.menuItemId === 'scorpion-download-media' && info.srcUrl) {
+    const isAudio = info.mediaType === 'audio' ||
+      /\.(mp3|m4a|aac|ogg|opus|wav|flac|wma|amr|m4b|weba|aiff)(\?|$)/i.test(info.srcUrl);
     await sendToScorpion({
       url: info.srcUrl,
       referer: info.pageUrl || '',
-      type: 'video',
+      type: isAudio ? 'audio' : 'video',
+      quality: isAudio ? 'direct' : 'best',
     });
   } else if (info.menuItemId === 'scorpion-download-page-video' && tab && tab.url) {
     await sendToScorpion({
@@ -99,7 +102,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-const DOWNLOAD_EXT_REGEX = /\.(torrent|zip|rar|7z|exe|msi|iso|dmg|pkg|deb|rpm|apk|mp4|mkv|avi|mov|webm|flv|mp3|flac|wav|m4a|pdf|doc|docx|xls|xlsx|ppt|pptx|tar|gz|tgz|csv|epub|bin)(\?|$)/i;
+const DOWNLOAD_EXT_REGEX = /\.(torrent|zip|rar|7z|exe|msi|iso|dmg|pkg|deb|rpm|apk|mp4|mkv|avi|mov|webm|flv|mp3|flac|wav|m4a|ogg|opus|aac|wma|amr|m4b|weba|aiff|pdf|doc|docx|xls|xlsx|ppt|pptx|tar|gz|tgz|csv|epub|bin)(\?|$)/i;
 const IGNORE_WEB_ASSET_REGEX = /\.(html?|htm|json|xml|css|js|svg|ico|webp|gif|jpe?g|png)(\?|$)/i;
 
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
@@ -121,7 +124,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     /\.torrent(\?|$)/i.test(targetUrl) ||
     fname.toLowerCase().endsWith('.torrent');
 
-  const matchesDownloadExt = isTorrent || DOWNLOAD_EXT_REGEX.test(targetUrl) || DOWNLOAD_EXT_REGEX.test(fname);
+  const matchesDownloadExt = isTorrent || DOWNLOAD_EXT_REGEX.test(targetUrl) || DOWNLOAD_EXT_REGEX.test(fname) || mime.startsWith('audio/');
   const isSmallWebAsset =
     !isTorrent &&
     (IGNORE_WEB_ASSET_REGEX.test(targetUrl) || IGNORE_WEB_ASSET_REGEX.test(fname) || mime.startsWith('image/') || mime === 'text/html') &&
@@ -138,7 +141,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       filename: downloadItem.filename ? downloadItem.filename.split(/[\\/]/).pop() : '',
       referer: downloadItem.referrer || '',
       totalSize: fileSize > 0 ? fileSize : 0,
-      type: isTorrent ? 'torrent' : (mime.startsWith('video/') ? 'video' : 'file'),
+      type: isTorrent ? 'torrent' : (mime.startsWith('video/') ? 'video' : (mime.startsWith('audio/') ? 'audio' : 'file')),
       cookies: await siteCookies([targetUrl, downloadItem.referrer]),
     });
     // Leave the original browser download alone if the desktop never accepted it.

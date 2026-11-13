@@ -157,7 +157,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.19"
+APP_VERSION = "2.1.20"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -225,6 +225,24 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.20",
+        "date": "2026-11-13",
+        "title_ar": "الإصدار 2.1.20 — إصلاح وتحسين التعرف على ملفات الصوت",
+        "title_en": "Version 2.1.20 — Audio Detection & Download Fixes",
+        "ar": [
+            "إصلاح ظهور الشريط العائم فوق مشغلات الصوت القياسية (<audio>) والمشغلات المخفية وصفحات التشغيل المباشر للصوتيات.",
+            "دعم جميع صيغ الصوت (MP3, M4A, OGG, OPUS, AAC, WAV, FLAC, WMA, AMR, M4B, WEBA, AIFF) ونوع MIME audio/* في الإضافة والبرنامج.",
+            "إصلاح تحميل المقاطع والرسائل الصوتية من تليجرام والتحقق الصحيح من المسارات الصوتية عبر ffprobe.",
+            "تحسين استخراج الصوتيات المحمية بالكوكيز والمرجع (Referer) واكتشاف روابط الصوت في الحافظة.",
+        ],
+        "en": [
+            "Fixed floating download bar detection for standard <audio> controls, hidden audio players, and standalone browser audio tabs.",
+            "Added full audio format (MP3, M4A, OGG, OPUS, AAC, WAV, FLAC, WMA, AMR, M4B, WEBA, AIFF) and audio/* MIME support across extension and desktop.",
+            "Fixed Telegram audio/voice transfers and ffprobe validation for direct and audio-only streams.",
+            "Forwarded cookies and Referer for authenticated audio downloads and expanded clipboard audio extension detection.",
+        ],
+    },
     {
         "version": "2.1.19",
         "date": "2026-11-13",
@@ -546,7 +564,7 @@ CATEGORY_MAP = {
     "Compressed": [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz"],
     "Programs": [".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm", ".apk", ".iso", ".bat"],
     "Video": [".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v", ".ts"],
-    "Music": [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus"],
+    "Music": [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".amr", ".m4b", ".weba", ".aiff"],
     "Documents": [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".epub", ".csv"],
 }
 
@@ -2296,9 +2314,34 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             except Exception:
                 pass
 
-    def probe_url(self, url: str) -> dict:
+    def _cookies_to_jar(self, cookies):
+        if not cookies:
+            return None
+        if isinstance(cookies, requests.cookies.RequestsCookieJar):
+            return cookies
+        jar = requests.cookies.RequestsCookieJar()
+        if isinstance(cookies, dict):
+            for k, v in cookies.items():
+                jar.set(str(k), str(v or ""))
+            return jar if len(jar) else None
+        if isinstance(cookies, list):
+            for c in cookies:
+                if isinstance(c, dict) and c.get("name"):
+                    jar.set(
+                        str(c["name"]),
+                        str(c.get("value") or ""),
+                        domain=str(c.get("domain") or ""),
+                        path=str(c.get("path") or "/"),
+                    )
+            return jar if len(jar) else None
+        return None
+
+    def probe_url(self, url: str, referer: str = "", cookies=None) -> dict:
         hdrs = {"User-Agent": self.settings["userAgent"], "Range": "bytes=0-0"}
-        r = requests.get(url, headers=hdrs, stream=True, timeout=12, allow_redirects=True, verify=False)
+        if referer:
+            hdrs["Referer"] = referer
+        jar = self._cookies_to_jar(cookies)
+        r = requests.get(url, headers=hdrs, cookies=jar, stream=True, timeout=12, allow_redirects=True, verify=False)
         final_url = r.url
         status = r.status_code
         resp_headers = dict(r.headers)
@@ -2386,7 +2429,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
         if total_size <= 0 and not is_video and not is_torrent:
             try:
-                p = self.probe_url(url)
+                p = self.probe_url(url, referer=opts.get("referer") or "", cookies=opts.get("cookies"))
                 url = p["url"]
                 total_size = p["totalSize"]
                 supports_range = p["supportsRange"]
@@ -2615,7 +2658,10 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     if ranged:
                         hdrs["Range"] = f"bytes={seg['currentByte']}-{seg['endByte']}"
 
-                    with requests.get(item["url"], headers=hdrs, stream=True, timeout=20, allow_redirects=True, verify=False) as r:
+                    jar = self._cookies_to_jar(self.__dict__.get("_site_cookies", {}).get(item["id"]))
+                    with requests.get(
+                        item["url"], headers=hdrs, cookies=jar, stream=True, timeout=20, allow_redirects=True, verify=False
+                    ) as r:
                         if r.status_code in (429, 503, 509, 403, 500, 502, 504):
                             retry_reason = f"HTTP {r.status_code}"
                         elif r.status_code not in (200, 206):
@@ -3014,10 +3060,16 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             index += 1
         return result
 
-    def _validate_video_output(self, path: str, item: dict, expected_duration=0, expect_audio=False):
+    def _validate_video_output(self, path: str, item: dict, expected_duration=0, expect_audio=False, audio_only=None):
+        if audio_only is None:
+            audio_only = (
+                item.get("videoQuality") == "audio"
+                or item.get("category") == "Music"
+                or os.path.splitext(path or "")[1].lower() in CATEGORY_MAP["Music"]
+            )
         return validate_media(path, find_tool("ffprobe"),
                               max(finite_duration(item.get("expectedDuration")), finite_duration(expected_duration)),
-                              item.get("videoQuality") == "audio", expect_audio)
+                              bool(audio_only), expect_audio)
 
     def _has_video_stream(self, path: str):
         """True/False from ffprobe; None when it can't tell (no ffprobe, unreadable file)."""
@@ -3724,7 +3776,10 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     info = ydl.process_ie_result(info, download=True)
                     actual_temp = ydl.prepare_filename(info)
                     chosen_ext = os.path.splitext(actual_temp)[1] or ".mp4"
-                    for cand_ext in (".mp3", ".mp4", ".m4a", ".mkv", ".webm"):
+                    for cand_ext in (
+                        ".mp3", ".mp4", ".m4a", ".ogg", ".opus", ".wav", ".flac",
+                        ".aac", ".wma", ".amr", ".m4b", ".weba", ".aiff", ".mkv", ".webm",
+                    ):
                         cand_temp = temp_base + cand_ext
                         if os.path.exists(cand_temp):
                             actual_temp = cand_temp
@@ -3735,8 +3790,17 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     item["_videoOutput"] = actual_temp
 
             fp = item.pop("_videoOutput", "")
-            expect_audio = q != "audio" and any(f.get("acodec") not in (None, "none") for f in reqs)
-            item["actualDuration"] = self._validate_video_output(fp, item, info.get("duration"), expect_audio)
+            streams_are_audio_only = bool(reqs) and all(f.get("vcodec") in (None, "none") for f in reqs)
+            is_audio_dl = (
+                q == "audio"
+                or item.get("category") == "Music"
+                or streams_are_audio_only
+                or os.path.splitext(fp or "")[1].lower() in CATEGORY_MAP["Music"]
+            )
+            expect_audio = not is_audio_dl and any(f.get("acodec") not in (None, "none") for f in reqs)
+            item["actualDuration"] = self._validate_video_output(
+                fp, item, info.get("duration"), expect_audio, audio_only=is_audio_dl
+            )
             if ctrl["aborted"]:
                 return
             final_dest = self._available_media_path(base_no_ext + os.path.splitext(fp)[1], item["id"])
@@ -7043,7 +7107,11 @@ class ScorpionMainWindow(QMainWindow):
         if text.lower().startswith("magnet:?xt=urn:btih:"):
             self.open_add_dialog(text, False, True)
             return
-        exts = (".torrent", ".zip", ".rar", ".7z", ".exe", ".msi", ".iso", ".mp4", ".mkv", ".mp3", ".pdf", ".apk")
+        exts = tuple(
+            CATEGORY_MAP["Video"]
+            + CATEGORY_MAP["Music"]
+            + [".torrent", ".zip", ".rar", ".7z", ".exe", ".msi", ".iso", ".pdf", ".apk"]
+        )
         if text.startswith(("http://", "https://")) and text.split("?")[0].lower().endswith(exts):
             is_tor = text.split("?")[0].lower().endswith(".torrent")
             self.open_add_dialog(text, False, is_tor)

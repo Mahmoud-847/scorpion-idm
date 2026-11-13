@@ -552,3 +552,79 @@ test('a shadow player added after load is found when the pointer moves over it',
     assert.equal(hidden(p), false);
   } finally { p.dom.window.close(); }
 });
+
+test('visible <audio controls> with child <source> shows the audio bar and sends a direct audio download', () => {
+  const srcUrl = 'https://cdn.example.com/episode.mp3';
+  const p = page('https://podcast.test/ep1', {
+    videos: [],
+    beforeScripts: ({ window }) => {
+      const audio = window.document.createElement('audio');
+      audio.controls = true;
+      const source = window.document.createElement('source');
+      source.src = srcUrl;
+      audio.appendChild(source);
+      audio.getBoundingClientRect = () => ({ left: 40, top: 120, right: 340, bottom: 152, width: 300, height: 32 });
+      window.document.body.appendChild(audio);
+    },
+  });
+  try {
+    assert.equal(hidden(p), false);
+    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, '🎵 تحميل هذا الصوت - Scorpion IDM');
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    const sent = downloads(p).map((msg) => msg.payload || msg);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].quality, 'direct');
+    assert.equal(sent[0].type, 'audio');
+    assert.equal(sent[0].url, srcUrl);
+  } finally { p.dom.window.close(); }
+});
+
+test('hidden 0x0 custom <audio> player anchors the audio bar at bottom-right and downloads as audio', () => {
+  const srcUrl = 'https://cdn.example.com/track.m4a';
+  const p = page('https://music.test/player', {
+    videos: [],
+    beforeScripts: ({ window }) => {
+      const audio = window.document.createElement('audio');
+      audio.src = srcUrl;
+      Object.defineProperty(audio, 'currentSrc', { configurable: true, get: () => srcUrl });
+      audio.getBoundingClientRect = () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 });
+      window.document.body.appendChild(audio);
+    },
+  });
+  try {
+    assert.equal(hidden(p), false);
+    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, '🎵 تحميل هذا الصوت - Scorpion IDM');
+    assert.ok(parseFloat(p.panel.style.top) > 0 && parseFloat(p.panel.style.left) > 0);
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    const sent = downloads(p).map((msg) => msg.payload || msg);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].type, 'audio');
+    assert.equal(sent[0].quality, 'direct');
+    assert.equal(sent[0].url, srcUrl);
+  } finally { p.dom.window.close(); }
+});
+
+test('standalone browser audio tab (<video> playing audio/*) is detected in audio mode', () => {
+  const srcUrl = 'https://cdn.example.com/song.mp3';
+  const p = page(srcUrl, {
+    videos: [],
+    beforeScripts: ({ window }) => {
+      Object.defineProperty(window.document, 'contentType', { configurable: true, get: () => 'audio/mpeg' });
+      const video = window.document.createElement('video');
+      video.controls = true;
+      video.src = srcUrl;
+      Object.defineProperty(video, 'currentSrc', { configurable: true, get: () => srcUrl });
+      video.getBoundingClientRect = () => ({ left: 100, top: 200, right: 400, bottom: 254, width: 300, height: 54 });
+      window.document.body.appendChild(video);
+    },
+  });
+  try {
+    assert.equal(hidden(p), false);
+    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, '🎵 تحميل هذا الصوت - Scorpion IDM');
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    const sent = downloads(p).map((msg) => msg.payload || msg);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].type, 'audio');
+    assert.equal(sent[0].url, srcUrl);
+  } finally { p.dom.window.close(); }
+});

@@ -1,16 +1,22 @@
 {
-  "version": "2.1.19",
+  "version": "2.1.20",
   "publishedAt": "2026-11-13",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "7297677e7bff0ee2b7ae9417d8b5f872a7ca2c65fa45396ebfae1ea1e515a922",
+  "sha256": "d2318c906e98ba66debe45bde7455e29858f1ef374a8491838e57d453f35741d",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.19",
-  "title_en": "Version 2.1.19",
+  "title_ar": "الإصدار 2.1.20 — إصلاح وتحسين التعرف على ملفات الصوت",
+  "title_en": "Version 2.1.20 — Audio Detection & Download Fixes",
   "changelog_ar": [
-    "تحسينات وإصلاحات عامة."
+    "إصلاح ظهور الشريط العائم فوق مشغلات الصوت القياسية (<audio>) والمشغلات المخفية وصفحات التشغيل المباشر للصوتيات.",
+    "دعم جميع صيغ الصوت (MP3, M4A, OGG, OPUS, AAC, WAV, FLAC, WMA, AMR, M4B, WEBA, AIFF) ونوع MIME audio/* في الإضافة والبرنامج.",
+    "إصلاح تحميل المقاطع والرسائل الصوتية من تليجرام والتحقق الصحيح من المسارات الصوتية عبر ffprobe.",
+    "تحسين استخراج الصوتيات المحمية بالكوكيز والمرجع (Referer) واكتشاف روابط الصوت في الحافظة."
   ],
   "changelog_en": [
-    "General improvements and fixes."
+    "Fixed floating download bar detection for standard <audio> controls, hidden audio players, and standalone browser audio tabs.",
+    "Added full audio format (MP3, M4A, OGG, OPUS, AAC, WAV, FLAC, WMA, AMR, M4B, WEBA, AIFF) and audio/* MIME support across extension and desktop.",
+    "Fixed Telegram audio/voice transfers and ffprobe validation for direct and audio-only streams.",
+    "Forwarded cookies and Referer for authenticated audio downloads and expanded clipboard audio extension detection."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",
