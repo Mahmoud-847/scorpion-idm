@@ -27,6 +27,7 @@ else:
 EMBEDDED_RUNTIME = not getattr(sys, "frozen", False) and os.path.basename(sys.executable).lower() == "scorpionidm.exe"
 INSTALLED = getattr(sys, "frozen", False) or EMBEDDED_RUNTIME
 import hashlib
+import http.cookiejar
 import socket
 import base64
 import urllib.parse
@@ -184,7 +185,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.24"
+APP_VERSION = "2.1.25"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -266,12 +267,109 @@ def localize_error_msg(msg, is_ar: bool) -> str:
             if is_ar
             else "This URL is not a single video (it may be a profile or feed page). Play the video itself and use its button, or copy the post URL."
         )
-    if "لم ينتج التنزيل ملف فيديو" in text:
+    if any(k in low for k in ("403: forbidden", "http error 403", "http 403")):
         return (
-            text
+            "رفض الخادم الوصول للرابط (HTTP 403). أعد فتح صفحة الفيديو واضغط زر التنزيل لتجديد الرابط."
             if is_ar
-            else "No video file was produced by the download. Please retry from the player."
+            else "The server denied access to this stream (HTTP 403). Reopen the video page and click download to refresh the link."
         )
+
+    exact_pairs = (
+        (
+            "تعذر تنزيل الفيديو المحدد",
+            "Could not download the selected video. Reopen the video page, play it briefly, and click the download button above it.",
+        ),
+        (
+            "ما قدرناش نلاقي الفيديو في الصفحة دي",
+            "Could not find a downloadable video on this page. Sign in if required, play the video for a few seconds, and click its download button.",
+        ),
+        (
+            "العنوان يحتوي على عدة فيديوهات",
+            "This URL contains multiple videos. Open the specific video on its own page and try again.",
+        ),
+        (
+            "فيديو تليجرام مرتبط بجلسة المتصفح",
+            "Telegram videos are tied to the browser session. Open the video in Telegram Web and click the download button above it.",
+        ),
+        (
+            "الملف مرتبط بجلسة المتصفح",
+            "This file is tied to the browser session. Reopen the video in your browser and click download again.",
+        ),
+        (
+            "الرابط يخص جزءًا من البث",
+            "This URL points to a single stream segment. Please use the full video or stream URL.",
+        ),
+        (
+            "تعذر استخراج بيانات الفيديو",
+            "Could not extract video stream information.",
+        ),
+        (
+            "لم ينتج التنزيل ملف فيديو",
+            "No video file was produced by the download. Please retry from the player.",
+        ),
+        (
+            "فشل دمج الصوت والصورة",
+            "Failed to merge audio and video tracks. The incomplete file was not saved.",
+        ),
+        (
+            "فشل تحويل الصوت",
+            "Failed to convert audio track. The incomplete file was not saved.",
+        ),
+        (
+            "أداة فحص الفيديو غير متاحة",
+            "Media verification tool (ffprobe) is unavailable. Update app tools and retry.",
+        ),
+        (
+            "الملف المستلم غير قابل للتشغيل أو غير مكتمل",
+            "The downloaded media file is incomplete or unplayable. Please retry from the player.",
+        ),
+        (
+            "الملف المستلم لا يحتوي على المسار المطلوب",
+            "The downloaded file is missing the required media track. Please retry from the player.",
+        ),
+        (
+            "التنزيل وصل من غير الصوت الموجود في المصدر",
+            "The video downloaded without its audio track. Please retry.",
+        ),
+        (
+            "مدة الملف أقصر من الفيديو الأصلي",
+            "The downloaded file is shorter than the original media and was rejected as incomplete. Please retry.",
+        ),
+        (
+            "الملف لم يصل بحجمه الكامل",
+            "The downloaded file size did not match the server total. Please retry.",
+        ),
+        (
+            "التنزيل من المتصفح انقطع",
+            "Browser media transfer was interrupted. Reopen the video and try again.",
+        ),
+        (
+            "انقطع الاتصال بتبويب الفيديو",
+            "Lost connection to the video browser tab. Reopen it and start the download again.",
+        ),
+        (
+            "تم إلغاء التنزيل. اضغط زر التنزيل",
+            "Download cancelled. Click the floating download button on the video in your browser to restart.",
+        ),
+        (
+            "جلسة التنزيل انتهت",
+            "Browser transfer session expired. Please retry from the browser.",
+        ),
+        (
+            "الفيديو لم يصل بالكامل",
+            "The video did not transfer completely. Please retry from your browser.",
+        ),
+        (
+            "تعذر إنشاء ملف التنزيل",
+            "Could not create the download file. Check free disk space and folder permissions.",
+        ),
+    )
+    for ar_needle, en_msg in exact_pairs:
+        if ar_needle in text or en_msg.lower() == low:
+            return text if (is_ar and ar_needle in text) else (en_msg if not is_ar else text)
+
+    if "aria2c torrent engine not found" in low:
+        return "محرك التورنت aria2c غير موجود." if is_ar else "aria2c torrent engine not found."
     return text
 
 
@@ -308,6 +406,22 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.25",
+        "date": "2026-11-17",
+        "title_ar": "الإصدار 2.1.25 — إصلاح تحميل مشغلات البث المدمجة وأسماء الملفات المباشرة وترجمة الأخطاء",
+        "title_en": "Version 2.1.25 — Embedded HLS Stream Extraction, Direct Media Filenames & Error Localization",
+        "ar": [
+            "تمرير ترويسات المتصفح الحقيقية (User-Agent و Accept-Language) مع إعادة استخراج الروابط من الإطار المدمج تلقائياً لمنع أخطاء 403 في مشغلات HLS مثل wecima و lplaygo.",
+            "الاحتفاظ بالاسم الحقيقي للملف عند التقاط روابط فيديو أو صوت مباشرة (.mp4 / .mp3) بدلاً من الاسم المؤقت Scorpion_Video.mp4.",
+            "ترجمة جميع رسائل الخطأ العربية إلى الإنجليزية عند تفعيل الواجهة الإنجليزية وتنقية عرض تفاصيل المنافذ عند فشل التحضير.",
+        ],
+        "en": [
+            "Forward real browser User-Agent & Accept-Language headers and automatically re-scrape embedded player iframes on expired/token-bound HLS links (fixing 403 errors on sites like wecima / lplaygo).",
+            "Preserve real filenames from direct media URLs (.mp4 / .mp3) instead of defaulting to Scorpion_Video.mp4.",
+            "Translate all download & validation error messages cleanly in English UI mode and refine pre-transfer error metadata.",
+        ],
+    },
     {
         "version": "2.1.24",
         "date": "2026-11-17",
@@ -1620,7 +1734,7 @@ class IDMProgressDialog(QDialog):
         meta_parts = [T(f"الوقت المنقضي {L(elapsed)}", f"Elapsed {elapsed}")]
         if status == "downloading" and segs:
             meta_parts.append(T(f"الاتصالات {L(f'{active}/{len(segs)}')}", f"Connections {active}/{len(segs)}"))
-        elif segs:
+        elif segs and (status != "error" or len(segs) > 1 or done > 0):
             meta_parts.append(T(f"البورتات {L(len(segs))}", f"Ports {len(segs)}"))
         if status != "error":
             meta_parts.append(resume)
@@ -1714,7 +1828,7 @@ class IDMProgressDialog(QDialog):
                     cell.setForeground(QColor(fg))
             tip = s.get("info") or ""
             if tip and s.get("status") == "error":
-                self.seg_table.item(r, 4).setToolTip(tip)
+                self.seg_table.item(r, 4).setToolTip(localize_error_msg(tip, self.is_ar))
 
     def toggle_pause(self):
         item = self.engine.downloads.get(self.dl_id)
@@ -2770,9 +2884,16 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     length = min(int(self.headers.get("Content-Length") or 0), 2 * 1024 * 1024)
                     try:
                         req = json.loads(self.rfile.read(length).decode("utf-8", errors="replace") if length > 0 else "{}")
-                        res = engine_ref.list_video_qualities(req.get("url", ""), req.get("referer", ""), req.get("tab", ""),
-                                                              req.get("candidates") or [], req.get("cookies") or [],
-                                                              strict_target=bool(req.get("strictTarget", False)))
+                        res = engine_ref.list_video_qualities(
+                            req.get("url", ""),
+                            req.get("referer", ""),
+                            req.get("tab", ""),
+                            req.get("candidates") or [],
+                            req.get("cookies") or [],
+                            strict_target=bool(req.get("strictTarget", False)),
+                            user_agent=req.get("userAgent", ""),
+                            accept_language=req.get("acceptLanguage", ""),
+                        )
                     except Exception:
                         res = {"ok": False, "qualities": []}
                     self._send_cors(200)
@@ -2898,6 +3019,27 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     )
             return jar if len(jar) else None
         return None
+
+    def _build_media_headers(
+        self,
+        referer: str = "",
+        user_agent: str = "",
+        accept_language: str = "",
+        default_ua: str = BROWSER_UA,
+        include_origin: bool = True,
+    ) -> dict:
+        hdrs = {
+            "User-Agent": (user_agent or "").strip() or default_ua,
+            "Accept-Language": (accept_language or "").strip() or "en-US,en;q=0.9,ar;q=0.8",
+        }
+        ref = (referer or "").strip()
+        if ref:
+            hdrs["Referer"] = ref
+            if include_origin:
+                pr = urllib.parse.urlparse(ref)
+                if pr.scheme and pr.netloc:
+                    hdrs["Origin"] = f"{pr.scheme}://{pr.netloc}"
+        return hdrs
 
     def probe_url(self, url: str, referer: str = "", cookies=None) -> dict:
         hdrs = {"User-Agent": self.settings["userAgent"], "Range": "bytes=0-0"}
@@ -3049,7 +3191,22 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     raw_fn = os.path.basename(url.split("?")[0]) or "Torrent_Download"
                     filename = raw_fn[:-8] if raw_fn.lower().endswith(".torrent") else raw_fn
             elif is_video:
-                filename = "Scorpion_Video.mp4"
+                url_name = extract_filename(url, {})
+                url_stem, url_ext = os.path.splitext(url_name)
+                generic_stems = {
+                    "", "master", "index", "playlist", "manifest", "video",
+                    "audio", "stream", "playback", "watch", "media", "scorpion_file", "download_file",
+                }
+                media_exts = tuple(CATEGORY_MAP["Video"] + CATEGORY_MAP["Music"])
+                if (
+                    url_ext.lower() in media_exts
+                    and url_stem.strip().lower() not in generic_stems
+                    and not re.match(r"^index[-_]", url_stem.strip(), re.I)
+                ):
+                    filename = url_name
+                else:
+                    is_aud_dl = opts.get("videoQuality") == "audio" or category == "Music"
+                    filename = "Scorpion_Audio.mp3" if is_aud_dl else "Scorpion_Video.mp4"
             else:
                 filename = extract_filename(url, {})
         if is_torrent and filename.lower().endswith(".torrent"):
@@ -3110,6 +3267,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             # Other addresses that may identify the video (post links near it, streams the player loaded)
             "candidates": [c for c in (opts.get("candidates") or []) if isinstance(c, str)][:10],
             "strictTarget": bool(opts.get("strictTarget", False)),
+            "userAgent": (opts.get("userAgent") or "").strip(),
+            "acceptLanguage": (opts.get("acceptLanguage") or "").strip(),
             "checksumSha256": None,
             "checksumMd5": None,
         }
@@ -3282,9 +3441,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 retry_reason = None
                 released = False
                 try:
-                    hdrs = {"User-Agent": self.settings["userAgent"]}
-                    if item.get("referer"):
-                        hdrs["Referer"] = item["referer"]
+                    hdrs = self._build_media_headers(
+                        item.get("referer") or "",
+                        item.get("userAgent") or "",
+                        item.get("acceptLanguage") or "",
+                        default_ua=self.settings.get("userAgent") or BROWSER_UA,
+                        include_origin=False,
+                    )
                     ranged = item["supportsRange"] and seg["endByte"] >= seg["currentByte"]
                     if ranged:
                         hdrs["Range"] = f"bytes={seg['currentByte']}-{seg['endByte']}"
@@ -3457,11 +3620,20 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         """Fetch an embed/player page and pull out .m3u8 / .mp4 links (incl. escaped JSON)."""
         import re
 
-        hdrs = {"User-Agent": BROWSER_UA}
+        hdrs = {"User-Agent": BROWSER_UA, "Accept-Language": "en-US,en;q=0.9,ar;q=0.8"}
+        tls_ydl = getattr(self.__dict__.get("_scrape_tls"), "ydl", None)
+        if isinstance(getattr(tls_ydl, "params", None), dict) and isinstance(tls_ydl.params.get("http_headers"), dict):
+            ydl_hdrs = tls_ydl.params["http_headers"]
+            if ydl_hdrs.get("User-Agent"):
+                hdrs["User-Agent"] = str(ydl_hdrs["User-Agent"])
+            if ydl_hdrs.get("Accept-Language"):
+                hdrs["Accept-Language"] = str(ydl_hdrs["Accept-Language"])
         if referer:
             hdrs["Referer"] = referer
+        cookiejar = getattr(tls_ydl, "cookiejar", None)
+        req_cookies = cookiejar if isinstance(cookiejar, http.cookiejar.CookieJar) else None
         try:
-            html = requests.get(page_url, headers=hdrs, timeout=15, verify=False).text
+            html = requests.get(page_url, headers=hdrs, cookies=req_cookies, timeout=15, verify=False).text
         except Exception:
             return []
         html = html.replace("\\/", "/").replace("\\u002F", "/").replace("&amp;", "&")
@@ -3475,6 +3647,14 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         html += "\n" + decode_packed_codes(block).replace("\\/", "/")
                     except Exception:
                         pass
+            except Exception:
+                pass
+        # Some embed hosts obfuscate source URLs with base64 literals inside atob("...")
+        for b64 in re.findall(r'atob\(\s*["\']([A-Za-z0-9+/=]{24,})["\']\s*\)', html):
+            try:
+                decoded = base64.b64decode(b64).decode("utf-8", errors="ignore").replace("\\/", "/")
+                if decoded:
+                    html += "\n" + decoded
             except Exception:
                 pass
         found = re.findall(
@@ -3494,28 +3674,61 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
     def _extract_from_player_frame(self, ydl, item: dict, unwrap):
         """Yields (stream, info) for the stream in the player config of the iframe the video plays in."""
-        frame_page = (item.get("url") or "").strip()
+        ref_page = (item.get("referer") or "").strip()
+        url_page = (item.get("url") or "").strip()
         tab_url = (item.get("tabUrl") or "").strip()
-        if not frame_page.lower().startswith(("http://", "https://")) or not tab_url.lower().startswith(("http://", "https://")):
+        if not tab_url.lower().startswith(("http://", "https://")):
             return
         same = lambda a, b: a.split("#")[0] == b.split("#")[0]
-        # Only the frame document itself (the extension sends a frame's own address as referer, and the tab
-        # only for frames). A post link found in a feed is not a frame and may list other videos.
-        if not same(frame_page, item.get("referer") or "") or same(frame_page, tab_url):
+        # Only the frame document itself (the extension sends the frame's own address as referer, and puts it
+        # in url or candidates). A post link found in a feed is not a frame and may list other videos.
+        allowed = [url_page] + [c.strip() for c in (item.get("candidates") or []) if isinstance(c, str)]
+        if not ref_page.lower().startswith(("http://", "https://")) or same(ref_page, tab_url):
             return
+        if not any(same(ref_page, c) for c in allowed if c):
+            return
+        frame_page = ref_page
+
         tab = urllib.parse.urlparse(tab_url)
         referers = [tab_url] + ([f"{tab.scheme}://{tab.netloc}/"] if f"{tab.scheme}://{tab.netloc}/" != tab_url else [])
+        tls = self.__dict__.setdefault("_scrape_tls", threading.local())
+        pf = urllib.parse.urlparse(frame_page)
+        frame_origin = f"{pf.scheme}://{pf.netloc}" if pf.scheme and pf.netloc else ""
+        has_params = isinstance(getattr(ydl, "params", None), dict)
+        had_hdrs = has_params and ("http_headers" in ydl.params)
+        orig_hdrs = ydl.params.get("http_headers") if has_params else None
+
         for ref in referers:
-            streams = [u for u in self._scrape_media_urls(frame_page, ref)
-                       if not fragment_url(u) and not browser_local_url(u)]
+            tls.ydl = ydl
+            try:
+                streams = [u for u in self._scrape_media_urls(frame_page, ref)
+                           if not fragment_url(u) and not browser_local_url(u)]
+            finally:
+                tls.ydl = None
             for stream in streams:
+                if has_params:
+                    new_hdrs = dict(orig_hdrs or {})
+                    new_hdrs["Referer"] = frame_page
+                    if frame_origin:
+                        new_hdrs["Origin"] = frame_origin
+                    ydl.params["http_headers"] = (
+                        type(orig_hdrs)(new_hdrs)
+                        if isinstance(orig_hdrs, dict) and type(orig_hdrs) is not dict
+                        else new_hdrs
+                    )
                 try:
                     info = unwrap(ydl.extract_info(stream, download=False))
                 except Exception:
                     continue
                 if isinstance(info, dict) and (info.get("formats") or info.get("url")):
+                    item["referer"] = frame_page
                     yield stream, info
                     return
+            if has_params:
+                if had_hdrs:
+                    ydl.params["http_headers"] = orig_hdrs
+                else:
+                    ydl.params.pop("http_headers", None)
             if streams:
                 return  # the page answered with a player; another Referer will not change its streams
 
@@ -3770,7 +3983,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 raise first_err
             if not item["url"].lower().split("?")[0].endswith((".html", ".htm", "/")) and "unsupported url" not in str(first_err).lower():
                 raise
-            for cand in self._scrape_media_urls(item["url"], item.get("referer") or item["url"]):
+            tls = self.__dict__.setdefault("_scrape_tls", threading.local())
+            tls.ydl = ydl
+            try:
+                scraped_cands = self._scrape_media_urls(item["url"], item.get("referer") or item["url"])
+            finally:
+                tls.ydl = None
+            for cand in scraped_cands:
                 if fragment_url(cand) or browser_local_url(cand):
                     continue
                 try:
@@ -3883,7 +4102,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         return opts
 
     def list_video_qualities(self, url: str, referer: str = "", tab_url: str = "", candidates=None, cookies=None,
-                             strict_target: bool = False) -> dict:
+                             strict_target: bool = False, user_agent: str = "", accept_language: str = "") -> dict:
         """
         Every video quality a page offers (as yt-dlp sees it), for the quality pickers in the browser
         button and the Add Download dialog. Cached for a few minutes per address.
@@ -3907,10 +4126,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         opts = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True,
                 "nocheckcertificate": True, "logger": _Quiet()}
         opts.update(self._js_runtime_opts())
-        if referer:
-            pr = urllib.parse.urlparse(referer)
-            opts["http_headers"] = {"Referer": referer, "Origin": f"{pr.scheme}://{pr.netloc}", "User-Agent": BROWSER_UA}
-        item = {"url": url, "referer": referer, "tabUrl": tab_url, "candidates": candidate_urls, "strictTarget": bool(strict_target),
+        opts["http_headers"] = self._build_media_headers(referer, user_agent, accept_language)
+        item = {"url": url, "referer": referer, "tabUrl": tab_url, "candidates": candidate_urls,
+                "strictTarget": bool(strict_target), "userAgent": user_agent, "acceptLanguage": accept_language,
                 "videoQuality": "best", "category": ""}
         cookiefile = self._write_cookiefile(cookies, f"q{uuid.uuid4().hex[:8]}") if cookies else ""
         if cookiefile:
@@ -4084,9 +4302,12 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             if proto not in ("http", "https") or f.get("fragments") or ".m3u8" in s_url.lower() or ".mpd" in s_url.lower():
                 return False
 
-            hdrs = {"User-Agent": BROWSER_UA}
-            if item.get("referer") and "googlevideo.com" not in s_url.lower():
-                hdrs["Referer"] = item["referer"]
+            is_yt = "googlevideo.com" in s_url.lower()
+            hdrs = self._build_media_headers(
+                "" if is_yt else (item.get("referer") or ""),
+                item.get("userAgent") or "",
+                item.get("acceptLanguage") or "",
+            )
             if isinstance(f.get("http_headers"), dict):
                 hdrs.update(f["http_headers"])
 
@@ -4448,14 +4669,11 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         }
         if item.get("_cookiefile"):
             ydl_opts["cookiefile"] = item["_cookiefile"]
-        if item.get("referer"):
-            ref = item["referer"]
-            pr = urllib.parse.urlparse(ref)
-            ydl_opts["http_headers"] = {
-                "Referer": ref,
-                "Origin": f"{pr.scheme}://{pr.netloc}",
-                "User-Agent": BROWSER_UA,
-            }
+        ydl_opts["http_headers"] = self._build_media_headers(
+            item.get("referer") or "",
+            item.get("userAgent") or "",
+            item.get("acceptLanguage") or "",
+        )
         ydl_opts.update(self._js_runtime_opts())
         if has_ffmpeg:
             # The folder, so yt-dlp also finds ffprobe (needed for MP3 conversion)
@@ -4477,6 +4695,22 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     raise RuntimeError("تعذر استخراج بيانات الفيديو.")
                 if ctrl["aborted"]:
                     return
+                if re.fullmatch(r"Scorpion_(?:Video|Audio)(?:\s*\(\d+\))?", os.path.splitext(item.get("filename") or "")[0], re.I):
+                    raw_title = (info.get("title") or "").strip()
+                    if (
+                        raw_title
+                        and raw_title.lower() not in {"video", "audio", "master", "index", "playlist", "stream", "playback"}
+                        and not re.match(r"^index[-_]", raw_title, re.I)
+                    ):
+                        clean_stem = sanitize_filename(raw_title)
+                        if clean_stem and clean_stem not in ("download_file", "scorpion_download.bin"):
+                            cur_ext = os.path.splitext(item.get("filename") or "")[1] or (".mp3" if q == "audio" else ".mp4")
+                            save_dir = item.get("saveDir") or os.path.dirname(item["filePath"])
+                            new_fp = self._available_media_path(os.path.join(save_dir, clean_stem + cur_ext), item["id"])
+                            with self.lock:
+                                item["filePath"] = new_fp
+                                item["filename"] = os.path.basename(new_fp)
+                            base_no_ext = os.path.splitext(new_fp)[0]
                 reqs = info.get("requested_formats") or [info]
 
                 # 2) Try Scorpion's 16-port HTTP Range Video Engine first (for YouTube / MP4 streams)
@@ -8001,6 +8235,8 @@ class ScorpionMainWindow(QMainWindow):
                 "tabUrl": (payload.get("tabUrl") or "").strip(),
                 "candidates": payload.get("candidates") or [],
                 "strictTarget": bool(payload.get("strictTarget", False)),
+                "userAgent": (payload.get("userAgent") or "").strip(),
+                "acceptLanguage": (payload.get("acceptLanguage") or "").strip(),
                 "cookies": payload.get("cookies") or [],
                 "expectedDuration": payload.get("expectedDuration") or 0,
                 "category": cat,
@@ -8024,6 +8260,8 @@ class ScorpionMainWindow(QMainWindow):
                     "referer": ref_url, "tabUrl": payload.get("tabUrl") or "",
                     "candidates": payload.get("candidates") or [], "cookies": payload.get("cookies") or [],
                     "strictTarget": bool(payload.get("strictTarget", False)),
+                    "userAgent": (payload.get("userAgent") or "").strip(),
+                    "acceptLanguage": (payload.get("acceptLanguage") or "").strip(),
                     "expectedDuration": payload.get("expectedDuration") or 0,
                     "fromBrowser": True,
                     "_captureQuality": cap_quality,

@@ -1,20 +1,20 @@
 {
-  "version": "2.1.24",
+  "version": "2.1.25",
   "publishedAt": "2026-11-17",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "264f13a0903c6ad24f5ab1adf1ce1fbe60880d0d4372abeb3ad9714cb8990865",
+  "sha256": "6c389c7d6b813f5681d3f853ec391d374d175da67855dbb6c7eaadcc44e53c41",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.24 — إظهار التحميلات الفوري وتأكيد الإلغاء فوق جميع النوافذ",
-  "title_en": "Version 2.1.24 — Instant Main-Window Download Reveal & Topmost Confirmations",
+  "title_ar": "الإصدار 2.1.25 — إصلاح تحميل مشغلات البث المدمجة وأسماء الملفات المباشرة وترجمة الأخطاء",
+  "title_en": "Version 2.1.25 — Embedded HLS Stream Extraction, Direct Media Filenames & Error Localization",
   "changelog_ar": [
-    "ضمان ظهور كل تحميل جديد أو ملتقط من المتصفح فوراً في جدول النافذة الرئيسية مع ضبط الفلاتر والتمرير التلقائي إليه.",
-    "إصلاح ظهور نافذة تأكيد الإلغاء خلف بطاقة التحميل المنبثقة: تُخفى البطاقة مؤقتاً وتفتح رسالة التأكيد دائماً في المقدمة بمنتصف الشاشة.",
-    "تحصين تحديث الجدول ضد الحقول الناقصة وتزامن الخيوط ومنع فقدان مقبض النافذة عند إظهار البرنامج من شريط المهام."
+    "تمرير ترويسات المتصفح الحقيقية (User-Agent و Accept-Language) مع إعادة استخراج الروابط من الإطار المدمج تلقائياً لمنع أخطاء 403 في مشغلات HLS مثل wecima و lplaygo.",
+    "الاحتفاظ بالاسم الحقيقي للملف عند التقاط روابط فيديو أو صوت مباشرة (.mp4 / .mp3) بدلاً من الاسم المؤقت Scorpion_Video.mp4.",
+    "ترجمة جميع رسائل الخطأ العربية إلى الإنجليزية عند تفعيل الواجهة الإنجليزية وتنقية عرض تفاصيل المنافذ عند فشل التحضير."
   ],
   "changelog_en": [
-    "Ensure every new or browser-captured download appears immediately in the main table, clearing hiding filters and scrolling to it.",
-    "Fixed cancel confirmation appearing behind the always-on-top DownloadCard; the card temporarily hides and the prompt opens centered on top.",
-    "Hardened refresh_all thread snapshotting and null handling, and preserved native window handle in bring_to_front()."
+    "Forward real browser User-Agent & Accept-Language headers and automatically re-scrape embedded player iframes on expired/token-bound HLS links (fixing 403 errors on sites like wecima / lplaygo).",
+    "Preserve real filenames from direct media URLs (.mp4 / .mp3) instead of defaulting to Scorpion_Video.mp4.",
+    "Translate all download & validation error messages cleanly in English UI mode and refine pre-transfer error metadata."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",

@@ -303,11 +303,19 @@ async function sendToScorpion(payload) {
       if (now - ts >= 1500 || recentCaptures.size > 64) recentCaptures.delete(k);
     }
   }
+  const clientHdrs = clientHeadersFor([
+    payload.url,
+    payload.referer,
+    payload.pageUrl,
+    payload.tabUrl,
+    ...(Array.isArray(payload.candidates) ? payload.candidates : []),
+  ]);
+  const bodyPayload = { ...clientHdrs, ...payload };
   try {
     const res = await fetch(`${SCORPION_SERVER}/capture`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(bodyPayload),
     });
     if (!res.ok) recentCaptures.delete(dedupKey);
     return res.ok;
@@ -340,6 +348,57 @@ chrome.tabs.onUpdated.addListener((id, change) => {
     chrome.tabs.sendMessage(id, { action: 'SCORPION_URL_CHANGED', url: change.url }, () => void chrome.runtime.lastError);
   }
 });
+
+function defaultAcceptLanguage() {
+  try {
+    const langs = Array.isArray(navigator.languages) && navigator.languages.length
+      ? navigator.languages.filter(Boolean)
+      : (navigator.language ? [navigator.language] : []);
+    if (langs.length) {
+      return langs.map((l, idx) => (idx === 0 ? l : `${l};q=${Math.max(0.1, (1 - idx * 0.1)).toFixed(1)}`)).join(',');
+    }
+  } catch (_) {}
+  return 'en-US,en;q=0.9,ar;q=0.8';
+}
+
+const requestClientHeaders = new Map();
+function recordClientHeaders(details) {
+  if (!details || details.tabId < 0 || !details.url || !Array.isArray(details.requestHeaders)) return;
+  let userAgent = '';
+  let acceptLanguage = '';
+  for (const h of details.requestHeaders) {
+    const n = (h.name || '').toLowerCase();
+    if (n === 'user-agent' && h.value) userAgent = h.value;
+    else if (n === 'accept-language' && h.value) acceptLanguage = h.value;
+  }
+  if (!userAgent && !acceptLanguage) return;
+  requestClientHeaders.delete(details.url);
+  requestClientHeaders.set(details.url, { userAgent, acceptLanguage });
+  if (requestClientHeaders.size > 120) requestClientHeaders.delete(requestClientHeaders.keys().next().value);
+}
+
+if (chrome.webRequest && chrome.webRequest.onSendHeaders) {
+  try {
+    chrome.webRequest.onSendHeaders.addListener(recordClientHeaders, { urls: ['http://*/*', 'https://*/*'] }, ['requestHeaders', 'extraHeaders']);
+  } catch (_) {
+    try {
+      chrome.webRequest.onSendHeaders.addListener(recordClientHeaders, { urls: ['http://*/*', 'https://*/*'] }, ['requestHeaders']);
+    } catch (_) {}
+  }
+}
+
+function clientHeadersFor(urls) {
+  let hit = null;
+  for (const u of urls || []) {
+    if (!u || typeof u !== 'string') continue;
+    hit = requestClientHeaders.get(u) || requestClientHeaders.get(u.split('#')[0]);
+    if (hit) break;
+  }
+  return {
+    userAgent: (hit && hit.userAgent) || navigator.userAgent || '',
+    acceptLanguage: (hit && hit.acceptLanguage) || defaultAcceptLanguage(),
+  };
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'SCORPION_REPORT_ERROR') {
@@ -428,8 +487,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         fetch(`${SCORPION_SERVER}/formats`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
-          body: JSON.stringify({ url: msg.url || '', referer: msg.referer || '', tab: tabUrl, candidates: msg.candidates || [], cookies,
-            strictTarget: Boolean(msg.strictTarget) }),
+          body: JSON.stringify({
+            url: msg.url || '',
+            referer: msg.referer || '',
+            tab: tabUrl,
+            candidates: msg.candidates || [],
+            cookies,
+            strictTarget: Boolean(msg.strictTarget),
+            ...clientHeadersFor([msg.url, msg.referer, tabUrl, ...(msg.candidates || [])]),
+          }),
           signal: ctrl.signal,
         })
       )

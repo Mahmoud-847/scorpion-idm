@@ -568,6 +568,157 @@ class MediaRegressionTests(unittest.TestCase):
         self.assertEqual(sq.item_status_text({"status": "queued"}, True), "في الانتظار")
         self.assertEqual(sq.item_status_text({"status": "queued"}, False), "Queued")
 
+    def test_direct_video_url_keeps_real_filename_instead_of_scorpion_video_placeholder(self):
+        direct_item = self.engine.add_download({
+            "url": "https://s4.savefiles.com/v/01/00544/6z9xdfvoubgk_n/Hadoota.2026.720p.HDCAM.mp4?t=abc&s=1",
+            "referer": "https://savefiles.com/",
+            "isVideo": True,
+            "fromBrowser": True,
+            "startImmediately": False,
+        })
+        self.assertEqual(direct_item["filename"], "Hadoota.2026.720p.HDCAM.mp4")
+
+        hls_item = self.engine.add_download({
+            "url": "https://cdn.test/hls2/02/04711/3ku5e1kzsddb_h/index-v1-a1.m3u8?t=abc",
+            "isVideo": True,
+            "fromBrowser": True,
+            "startImmediately": False,
+        })
+        self.assertEqual(hls_item["filename"], "Scorpion_Video.mp4")
+
+    def test_localize_error_msg_translates_strict_video_and_validation_errors_in_english(self):
+        for ar_err, expected_sub in (
+            ("تعذر تنزيل الفيديو المحدد. أعد فتح الفيديو واضغط زر التنزيل فوقه.", "Could not download the selected video"),
+            ("ما قدرناش نلاقي الفيديو في الصفحة دي.", "Could not find a downloadable video"),
+            ("فشل دمج الصوت والصورة. لم يتم اعتماد الفيديو كتحميل مكتمل.", "Failed to merge"),
+            ("رفض الخادم الوصول للرابط (HTTP 403).", "HTTP 403"),
+        ):
+            en_text = sq.localize_error_msg(ar_err, False)
+            self.assertIn(expected_sub, en_text)
+            self.assertFalse(re.search(r"[\u0600-\u06FF]", en_text), f"Arabic left in EN translation: {en_text}")
+
+    def test_strict_embedded_hls_rescapes_iframe_when_sniffed_m3u8_returns_403_and_matches_headers(self):
+        import hashlib
+        import urllib.parse
+
+        epoch = {"v": "1"}
+        observed = {"scrape_headers": [], "cdn_rejects": []}
+
+        def token_for(ua, al):
+            return hashlib.sha256(f"{epoch['v']}|{ua}|{al}".encode()).hexdigest()[:16]
+
+        def make_packed_html(stream_url):
+            # Standard Dean Edwards P.A.C.K.E.R payload decoded by yt_dlp.utils.decode_packed_codes
+            b64_stream = base64.b64encode(stream_url.encode("utf-8")).decode("ascii")
+            return f"<html><script>var u = atob('{b64_stream}');</script></html>"
+
+        class EmbedHandler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                ua = self.headers.get("User-Agent", "")
+                al = self.headers.get("Accept-Language", "")
+                ref = self.headers.get("Referer", "")
+                observed["scrape_headers"].append({"path": self.path, "ua": ua, "al": al, "ref": ref})
+                if not ref.startswith("https://site.test"):
+                    self.send_error(403)
+                    return
+                tok = token_for(ua, al)
+                body = make_packed_html(f"{cdn_origin}/hls2/master.m3u8?t={tok}").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        class CdnHandler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                parsed = urllib.parse.urlparse(self.path)
+                tok = (urllib.parse.parse_qs(parsed.query).get("t") or [""])[0]
+                ua = self.headers.get("User-Agent", "")
+                al = self.headers.get("Accept-Language", "")
+                ref = self.headers.get("Referer", "")
+                orig = self.headers.get("Origin", "")
+                expected = token_for(ua, al)
+                if not ref.startswith(embed_origin) or orig != embed_origin or tok != expected:
+                    observed["cdn_rejects"].append({"path": parsed.path, "tok": tok, "expected": expected, "ref": ref, "orig": orig, "ua": ua, "al": al})
+                    self.send_error(403)
+                    return
+                if parsed.path.endswith("master.m3u8"):
+                    body = (
+                        "#EXTM3U\n"
+                        "#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1500000,RESOLUTION=1280x720,CODECS=\"avc1.640029,mp4a.40.2\"\n"
+                        f"{cdn_origin}/hls2/index-v1-a1.m3u8?t={tok}\n"
+                    ).encode("utf-8")
+                else:
+                    body = (
+                        "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:1\n"
+                        "#EXTINF:4.0,\nseg1.ts\n#EXT-X-ENDLIST\n"
+                    ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        embed_srv = ThreadingHTTPServer(("127.0.0.1", 0), EmbedHandler)
+        cdn_srv = ThreadingHTTPServer(("127.0.0.1", 0), CdnHandler)
+        embed_origin = f"http://127.0.0.1:{embed_srv.server_port}"
+        cdn_origin = f"http://127.0.0.1:{cdn_srv.server_port}"
+        t1 = threading.Thread(target=embed_srv.serve_forever, daemon=True)
+        t2 = threading.Thread(target=cdn_srv.serve_forever, daemon=True)
+        t1.start()
+        t2.start()
+        try:
+            embed_url = f"{embed_origin}/e/abc123"
+            item = {
+                "url": f"{cdn_origin}/hls2/index-v1-a1.m3u8?t=expired",
+                "referer": embed_url,
+                "tabUrl": "https://site.test/watch/hadoota",
+                "candidates": [
+                    f"{cdn_origin}/hls2/index-v1-a1.m3u8?t=expired",
+                    embed_url,
+                    f"{cdn_origin}/hls2/master.m3u8?t=expired",
+                ],
+                "strictTarget": True,
+                "userAgent": "Mozilla/5.0 TestChrome/146.0",
+                "acceptLanguage": "ar-EG,ar;q=0.9,en-US;q=0.8",
+                "videoQuality": "best",
+                "category": "Video",
+            }
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+                "logger": Mock(),
+                "http_headers": self.engine._build_media_headers(item["referer"], item["userAgent"], item["acceptLanguage"]),
+            }
+            with sq.yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = self.engine._extract_with_fallback(ydl, item)
+            self.assertTrue(info.get("formats") or info.get("url"))
+            self.assertEqual(item["url"], f"{cdn_origin}/hls2/master.m3u8?t={token_for(item['userAgent'], item['acceptLanguage'])}")
+            self.assertEqual(item["referer"], embed_url)
+            self.assertEqual(observed["scrape_headers"][0]["ua"], item["userAgent"])
+            self.assertEqual(observed["scrape_headers"][0]["al"], item["acceptLanguage"])
+
+            # Rotate token secret to simulate clicking Retry after the HLS link expires
+            epoch["v"] = "2"
+            with sq.yt_dlp.YoutubeDL(ydl_opts) as ydl2:
+                info2 = self.engine._extract_with_fallback(ydl2, item)
+            self.assertTrue(info2.get("formats") or info2.get("url"))
+            self.assertEqual(item["url"], f"{cdn_origin}/hls2/master.m3u8?t={token_for(item['userAgent'], item['acceptLanguage'])}")
+        finally:
+            embed_srv.shutdown()
+            cdn_srv.shutdown()
+            embed_srv.server_close()
+            cdn_srv.server_close()
+            t1.join()
+            t2.join()
+
 
 if __name__ == "__main__":
     unittest.main()
