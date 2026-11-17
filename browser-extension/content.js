@@ -10,6 +10,7 @@
   let panelEl = null;
   let dropdownEl = null;
   let labelEl = null;
+  let badgeEl = null;
   let langBtnEl = null;
   let closeBtnEl = null;
   let detectedStreams = [];
@@ -199,7 +200,7 @@
 
   function hidePanel() {
     if (panelEl) panelEl.style.display = 'none';
-    if (dropdownEl) dropdownEl.classList.remove('open');
+    setDropdownOpen(false);
     isHoveringPanel = false;
   }
 
@@ -287,8 +288,16 @@
       langBtnEl.textContent = tr.langToggle;
       langBtnEl.title = tr.langTitle;
     }
+    if (badgeEl) {
+      badgeEl.title = tr.menuTitle;
+      badgeEl.setAttribute('aria-label', tr.menuTitle);
+    }
     if (closeBtnEl) {
       closeBtnEl.title = tr.closeTitle;
+    }
+    if (panelEl) {
+      const trig = panelEl.querySelector('.scorpion-idm-trigger');
+      if (trig) trig.title = tr.quickTitle;
     }
     if (dropdownEl && dropdownEl.classList.contains('open')) {
       renderDropdownOptions();
@@ -687,54 +696,96 @@
     };
   }
 
-  if (window.top === window.self) {
-    try {
-      chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-        if (msg && msg.action === 'SCORPION_GET_TITLE') {
-          const info = extractPlayingTrackInfo();
-          sendResponse({ title: info.title });
-        }
-    if (msg && msg.action === 'SCORPION_URL_CHANGED') {
-      resetRouteStreams();
-      dismissedForUrl = '';
-      scheduleViewportRefresh();
-      return;
-    }
-    if (msg && msg.action === 'SCORPION_DOWNLOAD_CURRENT_MEDIA') {
-      if (isDrmVideoSite() || queryMedia(document, 'video').some((el) => isDrmProtectedMedia(el))) {
-        try {
-          chrome.runtime.sendMessage({ action: 'SCORPION_REPORT_ERROR', code: 'drmProtected' }, () => void chrome.runtime.lastError);
-          if (chrome.storage && chrome.storage.session && chrome.storage.session.set) {
-            chrome.storage.session.set({ scorpionDownloadError: { code: 'drmProtected', at: Date.now() } }).catch(() => {});
-          }
-        } catch (_) {}
-        sendResponse({ ok: false, error: 'drmProtected' });
-        return;
+  function setDropdownOpen(open) {
+    if (!dropdownEl) return;
+    if (open && panelEl) {
+      const pRect = panelEl.getBoundingClientRect();
+      if (window.innerHeight - pRect.bottom < 220) {
+        dropdownEl.classList.add('drop-up');
+      } else {
+        dropdownEl.classList.remove('drop-up');
       }
-          const media = msg.src ? queryMedia(document, 'video, audio').find((el) => sourceOf(el) === msg.src) :
-            (isSelectableMedia(activeMedia) ? activeMedia : chooseVisibleMedia());
-          if (!isSelectableMedia(media)) { sendResponse({ ok: false }); return; }
-          dismissedForUrl = '';
-          media.__scorpionDismissed = '';
-          activateMediaElement(media, 'explicit');
-          const target = computeDownloadTarget();
-          const targetIsAudio = isAudioMedia(media) || AUDIO_RE.test(target.targetUrl);
-          const isMusicFallback = target.isMusicPlatform && MUSIC_FALLBACK_SITE_RE.test(target.effectivePageUrl);
-          const ok = triggerVideoDownload({
-            url: target.targetUrl,
-            pageUrl: target.effectivePageUrl,
-            referer: location.href,
-            candidates: target.candidates,
-            strictTarget: !isMusicFallback,
-            title: target.pageTitle,
-            quality: targetIsAudio ? (AUDIO_RE.test(target.targetUrl) && !target.isMusicPlatform ? 'direct' : 'audio') : 'best',
-            type: targetIsAudio ? 'audio' : 'video',
-          }, mediaSession());
-          sendResponse({ ok });
-        }
-      });
-    } catch (_) {}
+    }
+    dropdownEl.classList.toggle('open', Boolean(open));
+    if (badgeEl) {
+      badgeEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
   }
+
+  try {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (msg && msg.action === 'SCORPION_GET_TITLE') {
+        if (window.top !== window.self) return false;
+        const info = extractPlayingTrackInfo();
+        sendResponse({ title: info.title });
+        return false;
+      }
+      if (msg && msg.action === 'SCORPION_URL_CHANGED') {
+        resetRouteStreams();
+        dismissedForUrl = '';
+        scheduleViewportRefresh();
+        return false;
+      }
+      if (msg && msg.action === 'SCORPION_DOWNLOAD_CURRENT_MEDIA') {
+        if (isDrmVideoSite()) {
+          try {
+            chrome.runtime.sendMessage({ action: 'SCORPION_REPORT_ERROR', code: 'drmProtected' }, () => void chrome.runtime.lastError);
+            if (chrome.storage && chrome.storage.session && chrome.storage.session.set) {
+              chrome.storage.session.set({ scorpionDownloadError: { code: 'drmProtected', at: Date.now() } }).catch(() => {});
+            }
+          } catch (_) {}
+          sendResponse({ ok: false, error: 'drmProtected' });
+          return false;
+        }
+        const rawTarget = msg.src
+          ? queryMedia(document, 'video, audio').find((el) => sourceOf(el) === msg.src)
+          : (activeMedia || chooseVisibleMedia());
+        if (rawTarget && isDrmProtectedMedia(rawTarget)) {
+          try {
+            chrome.runtime.sendMessage({ action: 'SCORPION_REPORT_ERROR', code: 'drmProtected' }, () => void chrome.runtime.lastError);
+            if (chrome.storage && chrome.storage.session && chrome.storage.session.set) {
+              chrome.storage.session.set({ scorpionDownloadError: { code: 'drmProtected', at: Date.now() } }).catch(() => {});
+            }
+          } catch (_) {}
+          sendResponse({ ok: false, error: 'drmProtected' });
+          return false;
+        }
+        if (!isSelectableMedia(rawTarget)) {
+          if (queryMedia(document, 'video').some((el) => isDrmProtectedMedia(el))) {
+            try {
+              chrome.runtime.sendMessage({ action: 'SCORPION_REPORT_ERROR', code: 'drmProtected' }, () => void chrome.runtime.lastError);
+              if (chrome.storage && chrome.storage.session && chrome.storage.session.set) {
+                chrome.storage.session.set({ scorpionDownloadError: { code: 'drmProtected', at: Date.now() } }).catch(() => {});
+              }
+            } catch (_) {}
+            sendResponse({ ok: false, error: 'drmProtected' });
+            return false;
+          }
+          sendResponse({ ok: false });
+          return false;
+        }
+        const media = rawTarget;
+        dismissedForUrl = '';
+        media.__scorpionDismissed = '';
+        activateMediaElement(media, 'explicit');
+        const target = computeDownloadTarget();
+        const targetIsAudio = isAudioMedia(media) || AUDIO_RE.test(target.targetUrl);
+        const isMusicFallback = target.isMusicPlatform && MUSIC_FALLBACK_SITE_RE.test(target.effectivePageUrl);
+        const ok = triggerVideoDownload({
+          url: target.targetUrl,
+          pageUrl: target.effectivePageUrl,
+          referer: location.href,
+          candidates: target.candidates,
+          strictTarget: !isMusicFallback,
+          title: target.pageTitle,
+          quality: targetIsAudio ? (AUDIO_RE.test(target.targetUrl) && !target.isMusicPlatform ? 'direct' : 'audio') : 'best',
+          type: targetIsAudio ? 'audio' : 'video',
+        }, mediaSession());
+        sendResponse({ ok });
+        return false;
+      }
+    });
+  } catch (_) {}
 
   function createFloatingPanel() {
     if (panelEl) return panelEl;
@@ -748,16 +799,24 @@
     const mainBtn = document.createElement('div');
     mainBtn.className = 'scorpion-idm-main-btn';
 
-    const triggerEl = document.createElement('div');
+    const triggerEl = document.createElement('button');
+    triggerEl.type = 'button';
     triggerEl.className = 'scorpion-idm-trigger';
     triggerEl.innerHTML = `
-      <span>🦂</span>
+      <span aria-hidden="true">🦂</span>
       <span class="scorpion-btn-text">${currentMainLabel()}</span>
-      <span class="scorpion-idm-badge">▼</span>
     `;
     labelEl = triggerEl.querySelector('.scorpion-btn-text');
     triggerEl.title = tr.quickTitle;
-    triggerEl.querySelector('.scorpion-idm-badge').title = tr.menuTitle;
+
+    badgeEl = document.createElement('button');
+    badgeEl.type = 'button';
+    badgeEl.className = 'scorpion-idm-badge';
+    badgeEl.textContent = '▼';
+    badgeEl.title = tr.menuTitle;
+    badgeEl.setAttribute('aria-label', tr.menuTitle);
+    badgeEl.setAttribute('aria-haspopup', 'menu');
+    badgeEl.setAttribute('aria-expanded', 'false');
 
     langBtnEl = document.createElement('button');
     langBtnEl.type = 'button';
@@ -782,7 +841,7 @@
       if (activeMedia) {
         activeMedia.__scorpionDismissed = window.location.href;
       }
-      if (dropdownEl) dropdownEl.classList.remove('open');
+      setDropdownOpen(false);
       if (panelEl) panelEl.style.display = 'none';
       if (hideTimeout) clearTimeout(hideTimeout);
     });
@@ -794,11 +853,13 @@
     dragHandle.title = currentLang === 'ar' ? 'اسحب لتحريك الشريط' : 'Drag to move the bar';
     mainBtn.appendChild(dragHandle);
     mainBtn.appendChild(triggerEl);
+    mainBtn.appendChild(badgeEl);
     mainBtn.appendChild(langBtnEl);
     mainBtn.appendChild(closeBtnEl);
 
     dropdownEl = document.createElement('div');
     dropdownEl.className = 'scorpion-idm-dropdown';
+    dropdownEl.setAttribute('role', 'menu');
 
     let didMove = false;
     let dragOffsetX = 0;
@@ -850,23 +911,57 @@
       e.stopPropagation();
       e.preventDefault();
       renderDropdownOptions();
-      if (!(e.target.closest && e.target.closest('.scorpion-idm-badge'))) {
-        // Quick download: the first option is "best quality" (or best audio in audio mode)
-        const first = dropdownEl.querySelector('.scorpion-idm-option');
-        if (first) {
-          first.click();
+      // Quick download: the first option is "best quality" (or best audio in audio mode)
+      const first = dropdownEl.querySelector('.scorpion-idm-option');
+      if (first) {
+        first.click();
+        return;
+      }
+      setDropdownOpen(!dropdownEl.classList.contains('open'));
+    });
+
+    badgeEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const willOpen = !dropdownEl.classList.contains('open');
+      if (willOpen) renderDropdownOptions();
+      setDropdownOpen(willOpen);
+    });
+
+    panelEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        if (dropdownEl && dropdownEl.classList.contains('open')) {
+          e.stopPropagation();
+          e.preventDefault();
+          setDropdownOpen(false);
+          if (badgeEl) badgeEl.focus();
+        }
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!dropdownEl) return;
+        const isOpen = dropdownEl.classList.contains('open');
+        if (!isOpen && e.target === badgeEl && e.key === 'ArrowDown') {
+          e.stopPropagation();
+          e.preventDefault();
+          renderDropdownOptions();
+          setDropdownOpen(true);
+          const firstItem = dropdownEl.querySelector('.scorpion-idm-option');
+          if (firstItem) firstItem.focus();
           return;
         }
-      }
-      if (panelEl && dropdownEl) {
-        const pRect = panelEl.getBoundingClientRect();
-        if (window.innerHeight - pRect.bottom < 220) {
-          dropdownEl.classList.add('drop-up');
-        } else {
-          dropdownEl.classList.remove('drop-up');
+        if (isOpen) {
+          const items = Array.from(dropdownEl.querySelectorAll('.scorpion-idm-option'));
+          if (!items.length) return;
+          e.stopPropagation();
+          e.preventDefault();
+          const curIdx = items.indexOf(document.activeElement);
+          const nextIdx = e.key === 'ArrowDown'
+            ? (curIdx < 0 ? 0 : (curIdx + 1) % items.length)
+            : (curIdx <= 0 ? items.length - 1 : curIdx - 1);
+          items[nextIdx].focus();
         }
       }
-      dropdownEl.classList.toggle('open');
     });
 
     panelEl.addEventListener('mouseenter', () => {
@@ -1067,6 +1162,8 @@
 
     const makeOption = (opt) => {
       const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('role', 'menuitem');
       btn.className = 'scorpion-idm-option';
       btn.innerHTML = `
         <span></span>
@@ -1129,6 +1226,8 @@
       scopedStreams.slice(0, 4).forEach((st, idx) => {
         const tag = st.extTag || (st.isManifest ? 'HLS / M3U8' : st.isAudio ? 'MP3' : 'MP4');
         const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('role', 'menuitem');
         btn.className = 'scorpion-idm-option';
         btn.innerHTML = `
           <span>${tr.directItem(idx + 1, st.isAudio)}</span>
@@ -1156,40 +1255,47 @@
     }
   }
 
-  // Qualities per address, cached so reopening the menu is instant (one request per video)
+  // Qualities per address, partitioned by cookie/auth mode so anonymous prefetch never hides authenticated formats
   const qualityCache = new Map();
   function listQualities(url, referer, candidates, allowCookies = false) {
-    const cacheKey = `${url}|${(candidates || []).join(',')}`;
-    if (!qualityCache.has(cacheKey)) {
+    const baseKey = `${url}|${(candidates || []).join(',')}`;
+    const modeKey = `${allowCookies ? 'auth' : 'anon'}|${baseKey}`;
+    if (!allowCookies && qualityCache.has(`auth|${baseKey}`)) {
+      return qualityCache.get(`auth|${baseKey}`);
+    }
+    if (!qualityCache.has(modeKey)) {
       if (qualityCache.size >= 32) {
         qualityCache.delete(qualityCache.keys().next().value);
       }
       qualityCache.set(
-        cacheKey,
+        modeKey,
         new Promise((resolve) => {
           try {
             chrome.runtime.sendMessage(
               { action: 'SCORPION_LIST_QUALITIES', url, referer, candidates: candidates || [], strictTarget: true, allowCookies },
               (res) => {
-                if (chrome.runtime.lastError || !res || !res.ok) qualityCache.delete(cacheKey);
+                const list = res && Array.isArray(res.qualities) ? res.qualities : [];
+                if (chrome.runtime.lastError || !res || !res.ok || list.length === 0) {
+                  qualityCache.delete(modeKey);
+                }
                 resolve(chrome.runtime.lastError ? null : res);
               }
             );
           } catch (_) {
-            qualityCache.delete(cacheKey);
+            qualityCache.delete(modeKey);
             resolve(null);
           }
         })
       );
     }
-    return qualityCache.get(cacheKey);
+    return qualityCache.get(modeKey);
   }
 
   function triggerVideoDownload(payload, session = mediaSession()) {
     if (!sessionIsCurrent(session)) return false;
     if (computeDownloadTarget().ambiguous) return false;
     payload.expectedDuration = session.duration;
-    dropdownEl.classList.remove('open');
+    setDropdownOpen(false);
 
     // Keep every state, including errors, off the video button. Only a fixed error code is
     // retained for the extension popup; never persist a source URL or a raw server error.
@@ -1369,7 +1475,7 @@
     if (changed) {
       mediaGeneration++;
       menuGeneration++;
-      if (dropdownEl) { dropdownEl.classList.remove('open'); dropdownEl.innerHTML = ''; }
+      if (dropdownEl) { setDropdownOpen(false); dropdownEl.innerHTML = ''; }
       if (panelEl) delete panelEl.__userDraggedPos;
       panelDragging = false;
       isHoveringPanel = false;
@@ -1386,6 +1492,11 @@
     selectionReason = reason;
     activeMode = isAud ? 'audio' : 'video';
     positionPanelOverMedia(media);
+    if (reason === 'hover' || reason === 'play' || reason === 'explicit') {
+      try {
+        chrome.runtime.sendMessage({ action: 'SCORPION_MARK_ACTIVE_FRAME' }, () => void chrome.runtime.lastError);
+      } catch (_) {}
+    }
     const session = mediaSession();
     const prefetchKey = `${location.href}|${activeSource}`;
     if (media.__scorpionPrefetchedFor !== prefetchKey) {

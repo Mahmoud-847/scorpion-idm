@@ -2,6 +2,27 @@ importScripts('media.js');
 const SCORPION_SERVER = 'http://127.0.0.1:19615';
 // Required by the desktop app for any state-changing call (web pages cannot send it cross-site).
 const SCORPION_HEADERS = { 'X-Scorpion-Client': '1' };
+let bridgeTokenPromise = null;
+
+async function getBridgeHeaders() {
+  if (!bridgeTokenPromise) {
+    bridgeTokenPromise = (async () => {
+      try {
+        if (chrome && chrome.runtime && typeof chrome.runtime.getURL === 'function') {
+          const res = await fetch(chrome.runtime.getURL('bridge-auth.json'));
+          if (res && res.ok) {
+            const data = await res.json();
+            if (data && typeof data.token === 'string' && data.token.trim()) {
+              return { ...SCORPION_HEADERS, 'X-Scorpion-Token': data.token.trim() };
+            }
+          }
+        }
+      } catch (_) {}
+      return { ...SCORPION_HEADERS };
+    })();
+  }
+  return bridgeTokenPromise;
+}
 
 let config = {
   interceptAllDownloads: true,
@@ -110,29 +131,28 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
   if (tab && (info.menuItemId === 'scorpion-download-page-video' ||
       ScorpionMedia.isTelegram(tab.url) && info.menuItemId === 'scorpion-download-media')) {
-    chrome.tabs.sendMessage(
+    const res = await dispatchMediaCommandToTab(
       tab.id,
       { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA', src: info.srcUrl || '' },
-      { frameId: info.frameId || 0 },
-      async (res) => {
-        if (chrome.runtime.lastError || !res || !res.ok) {
-          if (res && res.error === 'drmProtected') {
-            recordPopupError('drmProtected');
-            return;
-          }
-          if (info.menuItemId === 'scorpion-download-page-video' && tab && tab.url) {
-            await sendToScorpion({
-              url: tab.url,
-              pageUrl: tab.url,
-              title: tab.title || 'Video',
-              type: 'video',
-              quality: 'best',
-              cookies: await siteCookies([tab.url], tab),
-            });
-          }
-        }
-      }
+      Number.isInteger(info.frameId) ? info.frameId : null
     );
+    if (!res || !res.ok) {
+      if (res && res.error === 'drmProtected') {
+        recordPopupError('drmProtected');
+        return;
+      }
+      if (info.menuItemId === 'scorpion-download-page-video' && tab && tab.url) {
+        await sendToScorpion({
+          url: tab.url,
+          pageUrl: tab.url,
+          title: tab.title || 'Video',
+          type: 'video',
+          quality: 'best',
+          incognito: Boolean(tab.incognito),
+          cookies: await siteCookies([tab.url], tab),
+        });
+      }
+    }
     return;
   }
   if (info.menuItemId === 'scorpion-download-link' && info.linkUrl) {
@@ -140,6 +160,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       url: info.linkUrl,
       referer: info.pageUrl || '',
       type: 'file',
+      incognito: Boolean(tab && tab.incognito),
       cookies: await siteCookies([info.linkUrl, info.pageUrl], tab),
     });
   } else if (info.menuItemId === 'scorpion-download-media' && info.srcUrl) {
@@ -150,6 +171,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       referer: info.pageUrl || '',
       type: isAudio ? 'audio' : 'video',
       quality: isAudio ? 'direct' : 'best',
+      incognito: Boolean(tab && tab.incognito),
       cookies: await siteCookies([info.srcUrl, info.pageUrl], tab),
     });
   } else if (info.menuItemId === 'scorpion-download-page-video' && tab && tab.url) {
@@ -159,6 +181,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       title: tab.title || 'Video',
       type: 'video',
       quality: 'best',
+      incognito: Boolean(tab.incognito),
       cookies: await siteCookies([tab.url], tab),
     });
   }
@@ -170,6 +193,7 @@ const IGNORE_WEB_ASSET_REGEX = /\.(html?|htm|json|xml|css|js|svg|ico|webp|gif|jp
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
   await configReady;
   if (!config.interceptAllDownloads) return;
+  if (downloadItem.incognito) return;
   if (downloadItem.state && downloadItem.state !== 'in_progress') return;
 
   const targetUrl = downloadItem.finalUrl || downloadItem.url || '';
@@ -235,7 +259,8 @@ async function checkScorpionAlive() {
     const br = await detectBrowserKey();
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 900);
-    const res = await fetch(`${SCORPION_SERVER}/ping?ext=1&browser=${encodeURIComponent(br)}`, { signal: ctrl.signal, headers: SCORPION_HEADERS });
+    const headers = await getBridgeHeaders();
+    const res = await fetch(`${SCORPION_SERVER}/ping?ext=1&browser=${encodeURIComponent(br)}`, { signal: ctrl.signal, headers });
     clearTimeout(timer);
     if (res.ok) {
       try {
@@ -294,13 +319,14 @@ async function sendToScorpion(payload) {
   const dedupKey = `${payload.url || ''}|${payload.quality || ''}|${payload.type || ''}|${payload.pageUrl || ''}`;
   const now = Date.now();
   const prev = recentCaptures.get(dedupKey);
-  if (prev && now - prev < 1500) {
-    return true;
+  if (prev && (!prev.settled || (prev.ok && now - prev.ts < 1500))) {
+    return prev.promise;
   }
-  recentCaptures.set(dedupKey, now);
   if (recentCaptures.size > 64) {
-    for (const [k, ts] of recentCaptures) {
-      if (now - ts >= 1500 || recentCaptures.size > 64) recentCaptures.delete(k);
+    for (const [k, item] of recentCaptures) {
+      if ((item.settled && (!item.ok || now - item.ts >= 1500)) || recentCaptures.size > 64) {
+        recentCaptures.delete(k);
+      }
     }
   }
   const clientHdrs = clientHeadersFor([
@@ -311,18 +337,81 @@ async function sendToScorpion(payload) {
     ...(Array.isArray(payload.candidates) ? payload.candidates : []),
   ]);
   const bodyPayload = { ...clientHdrs, ...payload };
-  try {
-    const res = await fetch(`${SCORPION_SERVER}/capture`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
-      body: JSON.stringify(bodyPayload),
-    });
-    if (!res.ok) recentCaptures.delete(dedupKey);
-    return res.ok;
-  } catch (_) {
-    recentCaptures.delete(dedupKey);
-    return false;
+  const entry = { ts: now, settled: false, ok: false, promise: null };
+  entry.promise = (async () => {
+    try {
+      const headers = await getBridgeHeaders();
+      const res = await fetch(`${SCORPION_SERVER}/capture`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(bodyPayload),
+      });
+      let accepted = Boolean(res && res.ok);
+      if (accepted && typeof res.json === 'function') {
+        const data = await res.json().catch(() => ({ ok: true }));
+        if (data && data.ok === false) accepted = false;
+      }
+      entry.settled = true;
+      entry.ok = accepted;
+      entry.ts = Date.now();
+      if (!accepted) {
+        recentCaptures.delete(dedupKey);
+        return false;
+      }
+      return true;
+    } catch (_) {
+      entry.settled = true;
+      entry.ok = false;
+      recentCaptures.delete(dedupKey);
+      return false;
+    }
+  })();
+  recentCaptures.set(dedupKey, entry);
+  return entry.promise;
+}
+
+const activeMediaFrameByTab = new Map();
+
+function sendMessageToFrame(tabId, message, frameId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(tabId, message, { frameId }, (res) => {
+        if (chrome.runtime.lastError || !res) {
+          resolve({ ok: false });
+        } else {
+          resolve(res);
+        }
+      });
+    } catch (_) {
+      resolve({ ok: false });
+    }
+  });
+}
+
+async function dispatchMediaCommandToTab(tabId, message, preferredFrameId = null) {
+  const frameOrder = [];
+  const pushFrame = (fid) => {
+    if (Number.isInteger(fid) && fid >= 0 && !frameOrder.includes(fid)) {
+      frameOrder.push(fid);
+    }
+  };
+  pushFrame(preferredFrameId);
+  const active = activeMediaFrameByTab.get(tabId);
+  if (active) pushFrame(active.frameId);
+  const streams = tabStreams.get(tabId);
+  if (streams) {
+    for (const s of Array.from(streams.values()).reverse()) {
+      pushFrame(s.frameId);
+    }
   }
+  pushFrame(0);
+  let sawDrm = false;
+  for (const fid of frameOrder) {
+    const res = await sendMessageToFrame(tabId, message, fid);
+    if (res && res.ok) return { ok: true, frameId: fid };
+    if (res && res.error === 'drmProtected') sawDrm = true;
+  }
+  return sawDrm ? { ok: false, error: 'drmProtected' } : { ok: false };
 }
 
 // Response headers find extensionless manifests/media that performance entries cannot identify.
@@ -340,11 +429,18 @@ if (chrome.webRequest) chrome.webRequest.onHeadersReceived.addListener((details)
   if (streams.size > 80) streams.delete(streams.keys().next().value);
   tabStreams.set(details.tabId, streams);
 }, { urls: ['http://*/*', 'https://*/*'] }, ['responseHeaders']);
-chrome.tabs.onRemoved.addListener((id) => tabStreams.delete(id));
-chrome.tabs.onReplaced.addListener((_, removedId) => tabStreams.delete(removedId));
+chrome.tabs.onRemoved.addListener((id) => {
+  tabStreams.delete(id);
+  activeMediaFrameByTab.delete(id);
+});
+chrome.tabs.onReplaced.addListener((_, removedId) => {
+  tabStreams.delete(removedId);
+  activeMediaFrameByTab.delete(removedId);
+});
 chrome.tabs.onUpdated.addListener((id, change) => {
   if (change.url) {
     tabStreams.delete(id);
+    activeMediaFrameByTab.delete(id);
     chrome.tabs.sendMessage(id, { action: 'SCORPION_URL_CHANGED', url: change.url }, () => void chrome.runtime.lastError);
   }
 });
@@ -406,6 +502,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
     return false;
   }
+  if (msg.action === 'SCORPION_MARK_ACTIVE_FRAME') {
+    if (sender && sender.tab && Number.isInteger(sender.tab.id)) {
+      activeMediaFrameByTab.set(sender.tab.id, { frameId: sender.frameId || 0, at: Date.now() });
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (msg.action === 'SCORPION_GRAB_TAB_MEDIA') {
+    (async () => {
+      if (!Number.isInteger(msg.tabId)) {
+        sendResponse({ handled: true, ok: false });
+        return;
+      }
+      const res = await dispatchMediaCommandToTab(msg.tabId, {
+        action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA',
+        src: msg.src || '',
+      });
+      if (!res || !res.ok) {
+        recordPopupError(res && res.error === 'drmProtected' ? 'drmProtected' : 'noVideo');
+      }
+      sendResponse({ handled: true, ...res });
+    })();
+    return true;
+  }
   if (msg.action === 'SCORPION_BROWSER_TRANSFER') {
     const operation = msg.operation;
     const payload = msg.payload || {};
@@ -422,8 +542,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const key = `scorpionTransfer:${payload.transferId || ''}`;
       if (operation !== 'start' && (await chrome.storage.session.get(key))[key] !== owner)
         return sendResponse({ ok: false, error: 'جلسة التنزيل انتهت. أعد المحاولة من الفيديو.' });
+      const headers = await getBridgeHeaders();
       const res = await fetch(`${SCORPION_SERVER}/browser-transfer/${operation}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify(payload), signal: AbortSignal.timeout(operation === 'finish' ? 120000 : 20000),
       });
       const data = await res.json();
@@ -435,6 +556,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.action === 'SCORPION_DOWNLOAD_VIDEO' || msg.action === 'SCORPION_DOWNLOAD_LINK') {
     const payload = { ...(msg.payload || {}) };
+    if (sender && sender.tab && sender.tab.incognito) {
+      payload.incognito = true;
+    }
     if (isDrmVideoUrl(payload.url) || isDrmVideoUrl(payload.pageUrl)) {
       recordPopupError('drmProtected');
       sendResponse({ ok: false, error: 'drmProtected' });
@@ -482,11 +606,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const cookiePromise = msg.allowCookies
       ? siteCookies([msg.url, tabUrl, ...(msg.candidates || [])], sender && sender.tab)
       : Promise.resolve([]);
-    cookiePromise
-      .then((cookies) =>
+    Promise.all([cookiePromise, getBridgeHeaders()])
+      .then(([cookies, headers]) =>
         fetch(`${SCORPION_SERVER}/formats`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
+          headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({
             url: msg.url || '',
             referer: msg.referer || '',
@@ -507,13 +631,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.action === 'SCORPION_SET_APP_LANG') {
     const lang = msg.lang === 'en' ? 'en' : 'ar';
-    fetch(`${SCORPION_SERVER}/ping?set_lang=${lang}`, { headers: SCORPION_HEADERS })
+    getBridgeHeaders()
+      .then((headers) => fetch(`${SCORPION_SERVER}/ping?set_lang=${lang}`, { headers }))
       .then((r) => sendResponse({ ok: r.ok }))
       .catch(() => sendResponse({ ok: false }));
     return true;
   }
   if (msg.action === 'SCORPION_GET_APP_LANG') {
-    fetch(`${SCORPION_SERVER}/ping`, { headers: SCORPION_HEADERS, signal: AbortSignal.timeout(1500) })
+    getBridgeHeaders()
+      .then((headers) => fetch(`${SCORPION_SERVER}/ping`, { headers, signal: AbortSignal.timeout(1500) }))
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => sendResponse({ lang: data && data.lang }))
       .catch(() => sendResponse({ lang: null }));

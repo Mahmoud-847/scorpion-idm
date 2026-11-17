@@ -28,6 +28,7 @@ EMBEDDED_RUNTIME = not getattr(sys, "frozen", False) and os.path.basename(sys.ex
 INSTALLED = getattr(sys, "frozen", False) or EMBEDDED_RUNTIME
 import hashlib
 import http.cookiejar
+import secrets
 import socket
 import base64
 import urllib.parse
@@ -46,9 +47,6 @@ except Exception:
     pass
 
 import requests
-import urllib3
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 try:
     import yt_dlp
@@ -185,7 +183,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.25"
+APP_VERSION = "2.1.26"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -273,8 +271,28 @@ def localize_error_msg(msg, is_ar: bool) -> str:
             if is_ar
             else "The server denied access to this stream (HTTP 403). Reopen the video page and click download to refresh the link."
         )
+    if any(k in low for k in ("certificate_verify_failed", "certificate verify failed", "sslerror", "self-signed certificate")):
+        return (
+            "تعذر التحقق من شهادة الأمان للخادم (SSL/TLS)."
+            if is_ar
+            else "Server SSL/TLS certificate verification failed."
+        )
+    if "invalid byte range" in low or "wrong byte range" in low:
+        return (
+            "أرجع الخادم نطاق بايتات غير صالح."
+            if is_ar
+            else "The server returned an invalid byte range."
+        )
 
     exact_pairs = (
+        (
+            "تعذر نقل مخرجات التورنت",
+            "Failed to move completed torrent files to the save folder. Source files were preserved.",
+        ),
+        (
+            "لم يتم العثور على ملفات التورنت",
+            "Completed torrent output files could not be found.",
+        ),
         (
             "تعذر تنزيل الفيديو المحدد",
             "Could not download the selected video. Reopen the video page, play it briefly, and click the download button above it.",
@@ -401,11 +419,59 @@ def video_format_for(quality: str, has_ffmpeg: bool = True) -> str:
     return "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
 
 
-# Local browser bridge (127.0.0.1:19615): only extension pages and native local processes are trusted.
+# Local browser bridge (127.0.0.1:19615): only our extension or authenticated local clients are trusted.
 BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
+BRIDGE_TOKEN_HEADER = "X-Scorpion-Token"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
+TRUSTED_EXTENSION_ORIGINS = (
+    "chrome-extension://hgcdbjpjlfgnejhceobphikeebmhmgcj",
+    "extension://hgcdbjpjlfgnejhceobphikeebmhmgcj",
+)
+
+
+def load_or_create_bridge_token(app_data_dir: str = "") -> str:
+    """Return the per-installation secret token shared between the desktop app and local extension."""
+    base = app_data_dir or os.path.join(os.path.expanduser("~"), "AppData", "Local", "ScorpionIDM")
+    tok_path = os.path.join(base, "bridge_token")
+    try:
+        if os.path.isfile(tok_path):
+            with open(tok_path, "r", encoding="utf-8") as f:
+                val = f.read().strip()
+            if len(val) >= 32:
+                return val
+    except OSError:
+        pass
+    val = secrets.token_hex(32)
+    try:
+        os.makedirs(base, exist_ok=True)
+        tmp = f"{tok_path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(val)
+        os.replace(tmp, tok_path)
+    except OSError:
+        pass
+    return val
+
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.26",
+        "date": "2026-11-17",
+        "title_ar": "الإصدار 2.1.26 — تثبيت سلامة الملفات والأمان وجودة تكامل المتصفح",
+        "title_en": "Version 2.1.26 — Data Integrity, Security Hardening & Browser Reliability",
+        "ar": [
+            "حصر التنظيف التلقائي في مجلد التطبيق المؤقت فقط وعدم المساس بمجلد التنزيلات العام، وضمان حفظ مخرجات التورنت قبل حذف الملفات المؤقتة.",
+            "تحقق صارم من تطابق Content-Range و ETag / Last-Modified عند الاستكمال، وحفظ السجل بأقفال متسلسلة مع نسخة احتياطية .bak، وتحديث آمن مع استرجاع تلقائي عند الفشل.",
+            "تفعيل التحقق الكامل من شهادات SSL/TLS، وحفظ قيود الكوكيز (Secure / hostOnly / Expiration)، وعزل تنزيلات التصفح الخفي، وتوثيق الجسر المحلي بمفتاح اقتران.",
+            "انتظار تأكيد القبول الحقيقي في الإضافة قبل إلغاء تنزيل المتصفح، ودعم أوامر الإطارات iframe ولوحة المفاتيح وأسماء الوصول، وفحص الروابط خارج خيط الواجهة، وتوحيد محدد السرعة.",
+        ],
+        "en": [
+            "Confined startup/item cleanup strictly to app temp directories, and prevented torrent temp deletion or false completion if output move fails.",
+            "Added strict Content-Range byte-bounds + ETag/Last-Modified resume verification, monotonic thread-safe state saves with .bak recovery, and staged rollback-capable updates.",
+            "Enabled TLS certificate verification across all requests, preserved Secure/hostOnly/expiry cookie constraints, isolated Incognito downloads, and paired the local bridge via a per-install secret token.",
+            "Fixed premature duplicate cancellation, iframe command routing, session-aware quality caching, scoped DRM checks, non-blocking Add URL probing, custom folder retention, full keyboard accessibility, accurate handshake status, scrollable settings, and unified bandwidth throttling.",
+        ],
+    },
     {
         "version": "2.1.25",
         "date": "2026-11-17",
@@ -788,9 +854,12 @@ QPushButton#ToolBtn:hover {{ background: {p['surface2']}; border-color: {p['bord
 QPushButton#ToolBtn:disabled {{ background: transparent; color: {p['muted']}; }}
 QLineEdit, QComboBox, QSpinBox, QTimeEdit {{ background: {p['surface']}; border: 1px solid {p['border']}; border-radius: 7px; padding: 6px 10px; selection-background-color: {p['primary_bg']}; selection-color: #ffffff; }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTimeEdit:focus {{ border-color: {p['accent']}; }}
+QPushButton:focus {{ border-color: {p['accent']}; }}
+QPushButton#ToolBtn:focus {{ border-color: {p['accent']}; background: {p['surface2']}; }}
 QSpinBox::up-button, QSpinBox::down-button, QTimeEdit::up-button, QTimeEdit::down-button {{ width: 16px; border: none; background: transparent; }}
 QComboBox QAbstractItemView {{ background: {p['surface']}; border: 1px solid {p['border']}; selection-background-color: {p['accent_soft']}; selection-color: {p['text']}; padding: 4px; }}
 QTreeWidget, QTableWidget {{ background: {p['surface']}; border: 1px solid {p['border']}; border-radius: 10px; outline: 0; gridline-color: transparent; alternate-background-color: {p['surface']}; }}
+QTreeWidget:focus, QTableWidget:focus {{ border: 1.5px solid {p['accent']}; }}
 QTreeWidget::item {{ padding: 8px 6px; border: none; }}
 QTreeWidget::item:hover {{ background: {p['surface2']}; }}
 QTreeWidget::item:selected {{ background: {p['accent_soft']}; color: {p['accent']}; }}
@@ -1986,9 +2055,12 @@ class AddDownloadDialog(QDialog):
         form_grid.addWidget(self.cmb_cat, 0, 3)
 
         form_grid.addWidget(QLabel("مجلد الحفظ:" if self.is_ar else "Save Folder:"), 1, 0)
+        self._custom_save_dir = False
+        self._probed_info = None
         self.txt_savedir = QLineEdit(self.engine.settings["downloadsRoot"])
         self.txt_savedir.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.txt_savedir.setCursorPosition(0)
+        self.txt_savedir.textEdited.connect(lambda _t: setattr(self, "_custom_save_dir", True))
         form_grid.addWidget(self.txt_savedir, 1, 1, 1, 2)
         btn_browse = QPushButton("تصفح" if self.is_ar else "Browse")
         btn_browse.setIcon(glyph_icon(ICONS["folder"], c["text"]))
@@ -2049,13 +2121,14 @@ class AddDownloadDialog(QDialog):
         cat = self.cmb_cat.currentData() or "General"
         dl_root = os.path.normpath(self.engine.settings.get("downloadsRoot") or "")
         cur_dir = os.path.normpath(self.txt_savedir.text().strip() or dl_root)
-        if dl_root and (cur_dir == dl_root or os.path.dirname(cur_dir) == dl_root):
+        if not self._custom_save_dir and dl_root and (cur_dir == dl_root or os.path.dirname(cur_dir) == dl_root):
             self.txt_savedir.setText(os.path.join(dl_root, cat))
             self.txt_savedir.setCursorPosition(0)
 
     def browse_dir(self):
         d = QFileDialog.getExistingDirectory(self, "Select Save Folder", self.txt_savedir.text())
         if d:
+            self._custom_save_dir = True
             self.txt_savedir.setText(os.path.normpath(d))
             self.txt_savedir.setCursorPosition(0)
 
@@ -2079,6 +2152,7 @@ class AddDownloadDialog(QDialog):
             )
 
     def _on_url_text_changed(self, text: str):
+        self._probed_info = None
         u = (text or "").strip()
         if u.lower().startswith("magnet:?"):
             self.is_torrent = True
@@ -2143,10 +2217,12 @@ class AddDownloadDialog(QDialog):
             return
         if payload.get("ok"):
             res = payload["data"]
+            self._probed_info = {"forUrl": url, **res}
             self.txt_filename.setText(res["filename"])
             self._set_category(res["category"])
-            self.txt_savedir.setText(res["saveDir"])
-            self.txt_savedir.setCursorPosition(0)
+            if not self._custom_save_dir:
+                self.txt_savedir.setText(res["saveDir"])
+                self.txt_savedir.setCursorPosition(0)
             sz = format_bytes(res["totalSize"]) if res["totalSize"] > 0 else ("بث مباشر" if self.is_ar else "Stream")
             if res["supportsRange"]:
                 rng = "يدعم 32 بورت والاستكمال" if self.is_ar else "Supports 32-port resume"
@@ -2231,12 +2307,23 @@ class AddDownloadDialog(QDialog):
             "filename": self.txt_filename.text().strip(),
             "category": self.cmb_cat.currentData() or "General",
             "saveDir": self.txt_savedir.text().strip(),
+            "customSaveDir": bool(self._custom_save_dir),
             "connections": 32 if (self.is_video or is_tor) else int(self.cmb_conn.currentText()),
             "startImmediately": start_immediately,
             "isVideo": self.is_video and not is_tor,
             "isTorrent": is_tor,
             "videoQuality": q_val,
         }
+        probed = getattr(self, "_probed_info", None)
+        if probed and probed.get("forUrl") == url:
+            self.result_opts.update({
+                "_probed": True,
+                "url": probed.get("url") or url,
+                "totalSize": int(probed.get("totalSize") or 0),
+                "supportsRange": bool(probed.get("supportsRange", True)),
+                "etag": probed.get("etag") or "",
+                "lastModified": probed.get("lastModified") or "",
+            })
         self.accept()
 
 
@@ -2285,6 +2372,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         self.rpc_port = 19615
         self.rpc_alive = False
         self.last_ext_seen = {}
+        self.bridge_token = load_or_create_bridge_token(self.app_data)
+        self._diagnostics = []
 
         self.settings = {
             "defaultConnections": 32,
@@ -2416,37 +2505,69 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                                 for line in (rel.get("body") or "").splitlines()
                                 if line.strip(" -*•\t")
                             ]
-                            dl_url = ""
-                            pkg_name = ""
                             assets = rel.get("assets") or []
+                            selected_asset = None
                             for asset in assets:
                                 aname = (asset.get("name") or "").lower()
-                                if aname.endswith((".zip", ".exe")):
-                                    dl_url = asset.get("browser_download_url") or ""
-                                    pkg_name = aname
-                                    if aname.endswith(".zip"):
-                                        break
-                            rel_sha = ""
-                            for asset in assets:
-                                if pkg_name and (asset.get("name") or "").lower() == pkg_name + ".sha256":
-                                    r_sha = requests.get(
-                                        asset.get("browser_download_url") or "",
-                                        headers={"User-Agent": BROWSER_UA},
-                                        timeout=10,
-                                    )
-                                    if r_sha.status_code == 200:
-                                        rel_sha = (r_sha.text.split() or [""])[0]
+                                if aname == "scorpion-update-payload.zip":
+                                    selected_asset = asset
                                     break
-                            manifest = {
-                                "version": ver,
-                                "publishedAt": (rel.get("published_at") or "")[:10] or latest_entry["date"],
-                                "title_ar": rel.get("name") or f"الإصدار {ver}",
-                                "title_en": rel.get("name") or f"Version {ver}",
-                                "changelog_ar": notes or latest_entry["ar"],
-                                "changelog_en": notes or latest_entry["en"],
-                                "downloadUrl": dl_url or (manifest.get("downloadUrl") if isinstance(manifest, dict) else ""),
-                                "sha256": rel_sha,
-                            }
+                            if selected_asset is None:
+                                for asset in assets:
+                                    aname = (asset.get("name") or "").lower()
+                                    if re.fullmatch(r"scorpion-setup-[\d.]+\.exe", aname):
+                                        selected_asset = asset
+                                        break
+                            dl_url = (selected_asset.get("browser_download_url") or "") if selected_asset else ""
+                            pkg_name = (selected_asset.get("name") or "").lower() if selected_asset else ""
+                            rel_sha = ""
+                            if selected_asset:
+                                digest = str(selected_asset.get("digest") or "").strip().lower()
+                                if digest.startswith("sha256:") and re.fullmatch(r"[0-9a-f]{64}", digest.split(":", 1)[1]):
+                                    rel_sha = digest.split(":", 1)[1]
+                            if pkg_name and not rel_sha:
+                                for asset in assets:
+                                    if (asset.get("name") or "").lower() == pkg_name + ".sha256":
+                                        r_sha = requests.get(
+                                            asset.get("browser_download_url") or "",
+                                            headers={"User-Agent": BROWSER_UA},
+                                            timeout=10,
+                                        )
+                                        if r_sha.status_code == 200:
+                                            cand_sha = (r_sha.text.split() or [""])[0].strip().lower()
+                                            if re.fullmatch(r"[0-9a-f]{64}", cand_sha):
+                                                rel_sha = cand_sha
+                                        break
+                            if pkg_name and not rel_sha:
+                                for asset in assets:
+                                    if (asset.get("name") or "").lower() == "update.json":
+                                        r_upd = requests.get(
+                                            asset.get("browser_download_url") or "",
+                                            headers={"User-Agent": BROWSER_UA},
+                                            timeout=10,
+                                        )
+                                        if r_upd.status_code == 200:
+                                            upd_m = r_upd.json() or {}
+                                            cand_sha = str(upd_m.get("sha256") or "").strip().lower()
+                                            if str(upd_m.get("packageFile") or "").lower() == pkg_name and re.fullmatch(r"[0-9a-f]{64}", cand_sha):
+                                                rel_sha = cand_sha
+                                        break
+                            if dl_url and len(rel_sha) == 64:
+                                manifest = {
+                                    "version": ver,
+                                    "publishedAt": (rel.get("published_at") or "")[:10] or latest_entry["date"],
+                                    "title_ar": rel.get("name") or f"الإصدار {ver}",
+                                    "title_en": rel.get("name") or f"Version {ver}",
+                                    "changelog_ar": notes or latest_entry["ar"],
+                                    "changelog_en": notes or latest_entry["en"],
+                                    "downloadUrl": dl_url,
+                                    "sha256": rel_sha,
+                                }
+                            else:
+                                result["error"] = (
+                                    "إصدار التحديث يفتقد حزمة التطبيق أو بصمة التحقق SHA-256 / "
+                                    "Release update is missing verified app package or SHA-256 checksum"
+                                )
                 # 3) Direct HTTP/HTTPS URL to update.json (or direct .zip/.exe link)
                 elif src.startswith(("http://", "https://")):
                     if src.lower().split("?")[0].endswith((".zip", ".exe")):
@@ -2567,10 +2688,11 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
     def install_update_package(self, pkg_path: str, expected_sha256: str = "", progress_cb=None) -> tuple:
         """
-        Applies an update package (.zip payload or Setup .exe) in-place without triggering Defender,
-        syncs browser extensions, and restarts ScorpionIDM.exe.
-        The package must match the SHA-256 published in update.json, otherwise nothing is installed.
+        Applies an update package (.zip payload or Setup .exe) via staged extraction and
+        transactional rollback if any file write/swap fails.
         """
+        import subprocess
+        import time
         import zipfile
 
         if not os.path.isfile(pkg_path):
@@ -2592,49 +2714,112 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         exe_path = os.path.join(install_dir, "ScorpionIDM.exe")
 
         if pkg_path.lower().endswith(".exe") and not zipfile.is_zipfile(pkg_path):
-            # Launch the installer in silent update mode and close current instance
             subprocess.Popen(
                 [pkg_path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], cwd=os.path.dirname(pkg_path)
             )
-            self.signals.quit_requested.emit()
-            return True, "restarting"
-
-        try:
-            with zipfile.ZipFile(pkg_path, "r") as zf:
-                members = zf.infolist()
-                # Zip Slip guard: refuse the whole package if any entry escapes the install folder
-                for member in members:
-                    dest = os.path.normcase(os.path.abspath(os.path.join(install_dir, member.filename)))
-                    if os.path.commonpath([install_root, dest]) != install_root:
-                        return False, f"مسار غير آمن داخل ملف التحديث / Unsafe path in update package: {member.filename}"
-                total = max(1, len(members))
-                for idx, member in enumerate(members, 1):
-                    target_path = os.path.normpath(os.path.join(install_dir, member.filename))
-                    if member.is_dir():
-                        os.makedirs(target_path, exist_ok=True)
-                        continue
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    if os.path.exists(target_path):
-                        try:
-                            os.remove(target_path)
-                        except PermissionError:
-                            stale = f"{target_path}.old_{int(time.time() * 1000)}_{idx}"
-                            try:
-                                os.replace(target_path, stale)
-                            except Exception:
-                                pass
-                    with zf.open(member) as src_f, open(target_path, "wb") as dst_f:
-                        shutil.copyfileobj(src_f, dst_f)
-                    if progress_cb and (idx % 15 == 0 or idx == total):
-                        progress_cb(int(50 + 50 * idx / total))
-
-            self.sync_and_repair_browser_extensions()
-            ensure_app_shortcuts(self.settings)
-            if os.path.exists(exe_path):
-                subprocess.Popen([exe_path], cwd=install_dir)
+            if hasattr(self, "signals"):
                 self.signals.quit_requested.emit()
             return True, "restarting"
+
+        def _rm_tree(path):
+            if not path or not os.path.exists(path):
+                return
+            for root_p, dirs, files in os.walk(path, topdown=False):
+                for fn in files:
+                    try:
+                        os.remove(os.path.join(root_p, fn))
+                    except OSError:
+                        pass
+                for dn in dirs:
+                    try:
+                        os.rmdir(os.path.join(root_p, dn))
+                    except OSError:
+                        pass
+            try:
+                os.rmdir(path)
+            except OSError:
+                pass
+
+        ts = int(time.time() * 1000)
+        stage_dir = os.path.join(install_dir, f".update_stage_{ts}")
+        stage_root = os.path.normcase(os.path.abspath(stage_dir))
+        staged_files = []
+        swapped = []
+        try:
+            os.makedirs(stage_dir, exist_ok=True)
+            with zipfile.ZipFile(pkg_path, "r") as zf:
+                members = zf.infolist()
+                for member in members:
+                    dest = os.path.normcase(os.path.abspath(os.path.join(install_dir, member.filename)))
+                    stage_dest = os.path.normcase(os.path.abspath(os.path.join(stage_dir, member.filename)))
+                    if os.path.commonpath([install_root, dest]) != install_root or os.path.commonpath([stage_root, stage_dest]) != stage_root:
+                        return False, f"مسار غير آمن داخل ملف التحديث / Unsafe path in update package: {member.filename}"
+                total = max(1, len(members))
+                # Phase 1: Extract every file into stage_dir before touching live files in install_dir
+                for idx, member in enumerate(members, 1):
+                    staged_path = os.path.normpath(os.path.join(stage_dir, member.filename))
+                    if member.is_dir():
+                        os.makedirs(staged_path, exist_ok=True)
+                        continue
+                    os.makedirs(os.path.dirname(staged_path), exist_ok=True)
+                    with zf.open(member) as src_f, open(staged_path, "wb") as dst_f:
+                        shutil.copyfileobj(src_f, dst_f)
+                        dst_f.flush()
+                    staged_files.append((member.filename, staged_path))
+                    if progress_cb and (idx % 15 == 0 or idx == total):
+                        progress_cb(int(50 + 40 * idx / total))
+
+            # Phase 2: Atomic per-file swap with rollback on any failure
+            for idx, (rel_name, staged_path) in enumerate(staged_files, 1):
+                target_path = os.path.normpath(os.path.join(install_dir, rel_name))
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                backup_path = ""
+                if os.path.exists(target_path):
+                    backup_path = f"{target_path}.old_{ts}_{idx}"
+                    os.replace(target_path, backup_path)
+                try:
+                    os.replace(staged_path, target_path)
+                except Exception:
+                    if backup_path and os.path.exists(backup_path) and not os.path.exists(target_path):
+                        try:
+                            os.replace(backup_path, target_path)
+                        except OSError:
+                            pass
+                    raise
+                swapped.append((target_path, backup_path))
+
+            for _tp, bp in swapped:
+                if bp and os.path.exists(bp):
+                    try:
+                        os.remove(bp)
+                    except OSError:
+                        pass
+            _rm_tree(stage_dir)
+            if progress_cb:
+                progress_cb(100)
+
+            if hasattr(self, "sync_and_repair_browser_extensions"):
+                self.sync_and_repair_browser_extensions()
+            if hasattr(self, "settings") and "ensure_app_shortcuts" in globals():
+                ensure_app_shortcuts(self.settings)
+            if os.path.exists(exe_path):
+                subprocess.Popen([exe_path], cwd=install_dir)
+                if hasattr(self, "signals"):
+                    self.signals.quit_requested.emit()
+            return True, "restarting"
         except Exception as e:
+            for tp, bp in reversed(swapped):
+                try:
+                    if os.path.exists(tp):
+                        os.remove(tp)
+                except OSError:
+                    pass
+                if bp and os.path.exists(bp):
+                    try:
+                        os.replace(bp, tp)
+                    except OSError:
+                        pass
+            _rm_tree(stage_dir)
             return False, str(e)
 
     def _apply_install_prefs(self):
@@ -2717,6 +2902,11 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     dst = os.path.join(target_dir, fname)
                     if os.path.exists(src):
                         shutil.copy2(src, dst)
+                tok = getattr(self, "bridge_token", "")
+                if tok:
+                    auth_file = os.path.join(target_dir, "bridge-auth.json")
+                    with open(auth_file, "w", encoding="utf-8") as af:
+                        json.dump({"token": tok}, af)
                 repaired_paths.append(target_dir)
             except Exception:
                 pass
@@ -2754,6 +2944,35 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             self.save_state()
         self.signals.extension_connected.emit(br)
 
+    def active_connected_browsers(self, max_age: float = 12.0) -> list:
+        now = time.time()
+        seen = getattr(self, "last_ext_seen", None) or {}
+        return [br for br, ts in seen.items() if now - float(ts or 0) <= max_age]
+
+    def record_diagnostic(self, event: str, detail: str = ""):
+        """Append a bounded diagnostic record after redacting query strings and cookie values."""
+        try:
+            scrubbed = re.sub(r"(https?://[^\s?]+)\?[^\s\"']+", r"\1?<redacted>", str(detail or ""))
+            scrubbed = re.sub(r"(Cookie|Authorization|X-Scorpion-Token)\s*:\s*[^\r\n]+", r"\1: <redacted>", scrubbed, flags=re.I)
+            line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{event}] {scrubbed[:280]}"
+            with self.lock:
+                buf = self.__dict__.setdefault("_diagnostics", [])
+                buf.append(line)
+                if len(buf) > 100:
+                    del buf[:-100]
+            app_data = getattr(self, "app_data", "")
+            if app_data:
+                log_p = os.path.join(app_data, "diagnostics.log")
+                if os.path.isfile(log_p) and os.path.getsize(log_p) > 256 * 1024:
+                    with open(log_p, "r", encoding="utf-8", errors="ignore") as f:
+                        tail = f.read()[-65536:]
+                    with open(log_p, "w", encoding="utf-8") as f:
+                        f.write(tail)
+                with open(log_p, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+        except Exception:
+            pass
+
     def _start_browser_rpc_bridge(self):
         engine_ref = self
 
@@ -2762,16 +2981,32 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 return
 
             def _origin_allowed(self) -> bool:
-                """Only our browser extension or a native local process (no Origin) may talk to the bridge."""
+                """Only our browser extension or an authenticated local client may talk to the bridge."""
                 origin = (self.headers.get("Origin") or "").strip().lower()
                 if not origin:
                     return True
                 return origin.startswith(BRIDGE_ALLOWED_ORIGIN_PREFIXES)
 
             def _is_trusted_client(self) -> bool:
-                # A custom header can't be sent cross-site without a CORS preflight, and the preflight
-                # is only granted to extension origins, so web pages can't trigger state-changing calls.
-                return self._origin_allowed() and self.headers.get(BRIDGE_CLIENT_HEADER) == "1"
+                import hmac
+
+                if not self._origin_allowed() or self.headers.get(BRIDGE_CLIENT_HEADER) != "1":
+                    return False
+                origin = (self.headers.get("Origin") or "").strip().lower()
+                trusted_ids = (
+                    "chrome-extension://hgcdbjpjlfgnejhceobphikeebmhmgcj",
+                    "extension://hgcdbjpjlfgnejhceobphikeebmhmgcj",
+                )
+                if origin in trusted_ids:
+                    return True
+                try:
+                    expected_tok = getattr(engine_ref, "bridge_token", "")
+                except NameError:
+                    expected_tok = ""
+                if not expected_tok:
+                    return False
+                provided_tok = (self.headers.get("X-Scorpion-Token") or "").strip()
+                return bool(provided_tok and hmac.compare_digest(provided_tok, expected_tok))
 
             def _send_cors(self, code=200):
                 self.send_response(code)
@@ -2781,7 +3016,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     self.send_header("Access-Control-Allow-Origin", origin)
                     self.send_header("Vary", "Origin")
                     self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                    self.send_header("Access-Control-Allow-Headers", f"Content-Type, {BRIDGE_CLIENT_HEADER}")
+                    self.send_header("Access-Control-Allow-Headers", f"Content-Type, {BRIDGE_CLIENT_HEADER}, {BRIDGE_TOKEN_HEADER}")
                     self.send_header("Access-Control-Allow-Private-Network", "true")
                 self.end_headers()
 
@@ -2802,7 +3037,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     return
                 if parsed.path == "/ping":
                     qs = urllib.parse.parse_qs(parsed.query)
-                    if qs.get("ext"):
+                    if qs.get("ext") and self._is_trusted_client():
                         br = (qs.get("browser") or ["chrome"])[0]
                         engine_ref.record_browser_connection(br)
                     if qs.get("set_lang") and self._is_trusted_client():
@@ -2822,6 +3057,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                                 "uiVisible": bool(getattr(engine_ref, "_ui_visible", False)),
                                 "uiPlatform": getattr(engine_ref, "_ui_platform", ""),
                                 "lang": engine_ref.settings.get("lang", "ar"),
+                                "activeCount": engine_ref.active_count(),
                             }
                         ).encode("utf-8")
                     )
@@ -2922,53 +3158,70 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             self.rpc_alive = False
 
     def _load_state(self):
-        try:
-            if os.path.exists(self.state_file):
-                with open(self.state_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+        data = None
+        bak_file = self.state_file + ".bak"
+        for cand, from_bak in ((self.state_file, False), (bak_file, True)):
+            if not os.path.exists(cand):
+                continue
+            try:
+                with open(cand, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    data = loaded
+                    if from_bak:
+                        self._state_recovered_from_backup = True
+                        if hasattr(self, "record_diagnostic"):
+                            self.record_diagnostic("state_recovered", "Recovered corrupted state from backup")
+                        try:
+                            shutil.copy2(bak_file, self.state_file)
+                        except OSError:
+                            pass
+                    break
+            except Exception as err:
+                if hasattr(self, "record_diagnostic"):
+                    self.record_diagnostic("load_state_error", str(err))
+        if isinstance(data, dict):
+            try:
                 if isinstance(data.get("settings"), dict):
                     self.settings.update(data["settings"])
                     if int(self.settings.get("defaultConnections") or 0) < 32:
                         self.settings["defaultConnections"] = 32
                 for item in data.get("downloads", []):
+                    if not isinstance(item, dict) or not item.get("id"):
+                        continue
                     if item.get("status") in ("downloading", "connecting"):
                         item["status"] = "paused"
                         item["speed"] = 0
                     dl_id = item.get("id")
                     fn = item.get("filename") or "download.bin"
-                    if dl_id:
-                        stored_tmp = item.get("tempFilePath") or ""
-                        temp_abs = os.path.abspath(self.temp_root)
-                        inside_temp = bool(
-                            stored_tmp
-                            and os.path.abspath(stored_tmp).startswith(temp_abs + os.sep)
-                            and os.path.isfile(stored_tmp)
-                        )
-                        if not inside_temp:
-                            item["tempFilePath"] = os.path.join(self.get_item_temp_dir(dl_id), fn + ".scorpion_part")
-                    self.downloads[item["id"]] = item
-        except Exception:
-            pass
+                    stored_tmp = item.get("tempFilePath") or ""
+                    temp_abs = os.path.normcase(os.path.abspath(self.temp_root))
+                    inside_temp = False
+                    if stored_tmp:
+                        try:
+                            st_abs = os.path.normcase(os.path.abspath(stored_tmp))
+                            inside_temp = os.path.commonpath([temp_abs, st_abs]) == temp_abs and os.path.isfile(stored_tmp)
+                        except ValueError:
+                            inside_temp = False
+                    if not inside_temp:
+                        item["tempFilePath"] = os.path.join(self.get_item_temp_dir(dl_id), fn + ".scorpion_part")
+                    self.downloads[dl_id] = item
+            except Exception as err:
+                if hasattr(self, "record_diagnostic"):
+                    self.record_diagnostic("load_state_items_error", str(err))
         self._sweep_stray_part_files()
 
     def _sweep_stray_part_files(self):
-        dl_root = self.settings.get("downloadsRoot") or self.default_dl_root
-        if os.path.isdir(dl_root):
-            try:
-                for dirpath, _, filenames in os.walk(dl_root):
-                    for fn in filenames:
-                        if fn.endswith((".part", ".ytdl", ".scorpion_part", ".aria2")) or "-Frag" in fn:
-                            try:
-                                os.remove(os.path.join(dirpath, fn))
-                            except Exception:
-                                pass
-            except Exception:
-                pass
+        # Never touch files inside downloadsRoot: only clean orphaned temp entries owned inside temp_root.
         if os.path.isdir(self.temp_root):
             try:
+                temp_abs = os.path.normcase(os.path.abspath(self.temp_root))
                 known_ids = set(self.downloads.keys())
                 for entry in os.listdir(self.temp_root):
                     p = os.path.join(self.temp_root, entry)
+                    p_abs = os.path.normcase(os.path.abspath(p))
+                    if os.path.commonpath([temp_abs, p_abs]) != temp_abs:
+                        continue
                     if os.path.isdir(p) and entry not in known_ids:
                         shutil.rmtree(p, ignore_errors=True)
                     elif os.path.isfile(p) and entry.startswith("cookies_") and entry.endswith(".txt"):
@@ -2980,43 +3233,111 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 pass
 
     def save_state(self):
+        import threading
+
         state_path = getattr(self, "state_file", "")
         if not state_path:
             return
         try:
             with self.lock:
+                seq = self.__dict__.get("_state_seq", 0) + 1
+                self._state_seq = seq
+                persisted_downloads = [
+                    d for d in self.downloads.values() if isinstance(d, dict) and not d.get("incognito")
+                ]
                 snapshot = copy.deepcopy(
-                    {"settings": dict(self.settings), "downloads": list(self.downloads.values())}
+                    {"settings": dict(self.settings), "downloads": persisted_downloads}
                 )
             os.makedirs(os.path.dirname(state_path), exist_ok=True)
-            tmp_path = state_path + ".tmp"
+            tmp_path = f"{state_path}.{seq}.{threading.get_ident()}.tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(snapshot, f, ensure_ascii=False, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp_path, state_path)
-        except Exception:
-            pass
+            commit_lock = self.__dict__.setdefault("_state_commit_lock", threading.Lock())
+            with commit_lock:
+                if seq < self.__dict__.get("_state_committed_seq", 0):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+                    return
+                if os.path.isfile(state_path):
+                    try:
+                        shutil.copy2(state_path, state_path + ".bak")
+                    except OSError:
+                        pass
+                os.replace(tmp_path, state_path)
+                self._state_committed_seq = seq
+        except Exception as err:
+            if hasattr(self, "record_diagnostic"):
+                self.record_diagnostic("save_state_error", str(err))
 
     def _cookies_to_jar(self, cookies):
+        import http.cookiejar
+        import time
+
         if not cookies:
             return None
         if isinstance(cookies, requests.cookies.RequestsCookieJar):
+            cookies.set_policy(
+                http.cookiejar.DefaultCookiePolicy(
+                    strict_ns_domain=http.cookiejar.DefaultCookiePolicy.DomainStrictNonDomain
+                )
+            )
             return cookies
         jar = requests.cookies.RequestsCookieJar()
+        jar.set_policy(
+            http.cookiejar.DefaultCookiePolicy(
+                strict_ns_domain=http.cookiejar.DefaultCookiePolicy.DomainStrictNonDomain
+            )
+        )
+        now = time.time()
         if isinstance(cookies, dict):
             for k, v in cookies.items():
                 jar.set(str(k), str(v or ""))
             return jar if len(jar) else None
         if isinstance(cookies, list):
             for c in cookies:
-                if isinstance(c, dict) and c.get("name"):
-                    jar.set(
-                        str(c["name"]),
-                        str(c.get("value") or ""),
-                        domain=str(c.get("domain") or ""),
-                        path=str(c.get("path") or "/"),
-                    )
+                if not isinstance(c, dict) or not c.get("name"):
+                    continue
+                raw_dom = str(c.get("domain") or "").strip()
+                if not raw_dom:
+                    continue
+                host_only = bool(c.get("hostOnly", not raw_dom.startswith(".")))
+                dom = raw_dom.lstrip(".") if host_only else (raw_dom if raw_dom.startswith(".") else "." + raw_dom)
+                exp_raw = c.get("expirationDate")
+                expires = None
+                if exp_raw:
+                    try:
+                        exp_num = int(float(exp_raw))
+                        if exp_num > 0:
+                            if exp_num <= now:
+                                continue
+                            expires = exp_num
+                    except (ValueError, TypeError):
+                        pass
+                rest = {"HttpOnly": None} if c.get("httpOnly") else {}
+                ck = http.cookiejar.Cookie(
+                    version=0,
+                    name=str(c["name"]),
+                    value=str(c.get("value") or ""),
+                    port=None,
+                    port_specified=False,
+                    domain=dom,
+                    domain_specified=not host_only,
+                    domain_initial_dot=not host_only,
+                    path=str(c.get("path") or "/"),
+                    path_specified=True,
+                    secure=bool(c.get("secure", False)),
+                    expires=expires,
+                    discard=expires is None,
+                    comment=None,
+                    comment_url=None,
+                    rest=rest,
+                    rfc2109=False,
+                )
+                jar.set_cookie(ck)
             return jar if len(jar) else None
         return None
 
@@ -3042,31 +3363,41 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         return hdrs
 
     def probe_url(self, url: str, referer: str = "", cookies=None) -> dict:
-        hdrs = {"User-Agent": self.settings["userAgent"], "Range": "bytes=0-0"}
+        hdrs = {
+            "User-Agent": (self.settings.get("userAgent") or BROWSER_UA),
+            "Range": "bytes=0-0",
+            "Accept-Encoding": "identity",
+        }
         if referer:
             hdrs["Referer"] = referer
         jar = self._cookies_to_jar(cookies)
-        r = requests.get(url, headers=hdrs, cookies=jar, stream=True, timeout=12, allow_redirects=True, verify=False)
+        r = requests.get(url, headers=hdrs, cookies=jar, stream=True, timeout=12, allow_redirects=True)
         final_url = r.url
         status = r.status_code
         resp_headers = dict(r.headers)
         r.close()
 
+        etag = (resp_headers.get("ETag") or resp_headers.get("etag") or "").strip()
+        last_modified = (resp_headers.get("Last-Modified") or resp_headers.get("last-modified") or "").strip()
+
         total_size = 0
         supports_range = False
         if status == 206:
-            supports_range = True
+            supports_range = not etag.startswith("W/")
             cr = resp_headers.get("Content-Range") or resp_headers.get("content-range") or ""
-            if "/" in cr:
+            m_cr = __import__("re").fullmatch(r"bytes\s+0-0/(\d+)", cr.strip(), __import__("re").I)
+            if m_cr:
+                total_size = int(m_cr.group(1))
+            elif "/" in cr:
                 try:
                     total_size = int(cr.split("/")[-1])
                 except Exception:
                     pass
         elif 200 <= status < 300:
-            if "bytes" in (resp_headers.get("Accept-Ranges") or "").lower():
+            if "bytes" in (resp_headers.get("Accept-Ranges") or "").lower() and not etag.startswith("W/"):
                 supports_range = True
             try:
-                total_size = int(resp_headers.get("Content-Length") or 0)
+                total_size = int(resp_headers.get("Content-Length") or resp_headers.get("content-length") or 0)
             except Exception:
                 total_size = 0
 
@@ -3081,6 +3412,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "supportsRange": supports_range,
             "category": category,
             "saveDir": save_dir,
+            "etag": "" if etag.startswith("W/") else etag,
+            "lastModified": last_modified,
         }
 
     def _create_segments(self, total_size: int, count: int):
@@ -3162,26 +3495,18 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         supports_range = bool(opts.get("supportsRange", True))
         filename = opts.get("filename") or ""
         category = opts.get("category") or ""
-        save_dir = opts.get("saveDir") or ""
+        explicit_save_dir = (opts.get("saveDir") or "").strip()
+        save_dir = explicit_save_dir
         is_torrent = self._is_torrent_source(url, opts)
         is_video = bool(opts.get("isVideo", False)) and not is_torrent
-
-        if total_size <= 0 and not is_video and not is_torrent and not opts.get("fromBrowser"):
-            try:
-                p = self.probe_url(url, referer=opts.get("referer") or "", cookies=opts.get("cookies"))
-                url = p["url"]
-                total_size = p["totalSize"]
-                supports_range = p["supportsRange"]
-                if not filename:
-                    filename = p["filename"]
-                if not category:
-                    category = p["category"]
-                if not save_dir:
-                    save_dir = p["saveDir"]
-                if p["filename"].lower().endswith(".torrent"):
-                    is_torrent = True
-            except Exception:
-                pass
+        is_incognito = bool(opts.get("incognito", False))
+        needs_probe = (
+            total_size <= 0
+            and not is_video
+            and not is_torrent
+            and not opts.get("fromBrowser")
+            and not opts.get("_probed")
+        )
 
         if not filename:
             if is_torrent:
@@ -3214,8 +3539,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         filename = sanitize_filename(filename)
         if not category:
             category = "Video" if (is_video or is_torrent) else detect_category(filename)
+        default_cat_dir = os.path.join(self.settings["downloadsRoot"], category)
         if not save_dir:
-            save_dir = os.path.join(self.settings["downloadsRoot"], category)
+            save_dir = default_cat_dir
+        custom_save_dir = bool(opts.get("customSaveDir")) or (
+            bool(explicit_save_dir)
+            and os.path.normcase(os.path.abspath(save_dir)) != os.path.normcase(os.path.abspath(default_cat_dir))
+        )
         os.makedirs(save_dir, exist_ok=True)
 
         base, ext = os.path.splitext(filename)
@@ -3236,12 +3566,15 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             supports_range = True
         else:
             conn_count = max(1, min(64, req_conns)) if (supports_range and total_size > 128 * 1024) else 1
+        etag = (opts.get("etag") or "").strip()
+        last_modified = (opts.get("lastModified") or "").strip()
         item = {
             "id": dl_id,
             "url": url,
             "filename": final_name,
             "category": category,
             "saveDir": save_dir,
+            "customSaveDir": custom_save_dir,
             "filePath": file_path,
             "tempFilePath": temp_path,
             "totalSize": total_size,
@@ -3269,15 +3602,21 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "strictTarget": bool(opts.get("strictTarget", False)),
             "userAgent": (opts.get("userAgent") or "").strip(),
             "acceptLanguage": (opts.get("acceptLanguage") or "").strip(),
+            "etag": "" if etag.startswith("W/") else etag,
+            "lastModified": last_modified,
+            "validatorRecorded": bool((etag and not etag.startswith("W/")) or last_modified),
+            "incognito": is_incognito,
             "checksumSha256": None,
             "checksumMd5": None,
         }
+        if needs_probe:
+            item["_needsInitialProbe"] = True
         with self.lock:
             self.downloads[dl_id] = item
         cap_quality = opts.get("_captureQuality") or ("audio" if opts.get("category") == "Music" else opts.get("videoQuality", "best"))
         cap_type = opts.get("_captureType") or ("torrent" if is_torrent else ("audio" if cap_quality == "audio" else ("video" if is_video else "file")))
         self.record_capture(url, cap_quality, cap_type, dl_id)
-        if opts.get("cookies"):
+        if opts.get("cookies") and not is_incognito:
             self.__dict__.setdefault("_site_cookies", {})[dl_id] = opts["cookies"]
         if item["browserTransfer"]:
             item.update(status="downloading", phase="downloading", startedAt=time.time())
@@ -3288,8 +3627,87 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         else:
             # "Download later": waits for the scheduler (or a manual Resume)
             item["status"] = "scheduled"
+            if needs_probe:
+                threading.Thread(
+                    target=self._async_probe_item,
+                    args=(dl_id, None if is_incognito else opts.get("cookies")),
+                    daemon=True,
+                ).start()
             self.save_state()
         return item
+
+    def _apply_probe_result_to_item(self, item: dict, p: dict):
+        with self.lock:
+            item.pop("_needsInitialProbe", None)
+            if p.get("url"):
+                item["url"] = p["url"]
+            total_sz = int(p.get("totalSize") or 0)
+            if total_sz > 0:
+                item["totalSize"] = total_sz
+            item["supportsRange"] = bool(p.get("supportsRange", False))
+            if p.get("etag"):
+                item["etag"] = p["etag"]
+            if p.get("lastModified"):
+                item["lastModified"] = p["lastModified"]
+            item["validatorRecorded"] = bool(item.get("etag") or item.get("lastModified"))
+            p_fn = sanitize_filename(p.get("filename") or "")
+            if p_fn and p_fn.lower().endswith(".torrent"):
+                item["isTorrent"] = True
+                p_fn = p_fn[:-8] or "Torrent_Download"
+            if p_fn and p_fn not in ("scorpion_file.bin", "download_file") and int(item.get("downloadedBytes") or 0) == 0:
+                new_cat = p.get("category") or detect_category(p_fn)
+                if not item.get("customSaveDir"):
+                    item["category"] = new_cat
+                    target_dir = p.get("saveDir") or os.path.join(self.settings["downloadsRoot"], new_cat)
+                    os.makedirs(target_dir, exist_ok=True)
+                    item["saveDir"] = target_dir
+                else:
+                    target_dir = item["saveDir"]
+                new_fp = self._available_media_path(os.path.join(target_dir, p_fn), item["id"])
+                item["filePath"] = new_fp
+                item["filename"] = os.path.basename(new_fp)
+                item["tempFilePath"] = os.path.join(self.get_item_temp_dir(item["id"]), item["filename"] + ".scorpion_part")
+            if int(item.get("downloadedBytes") or 0) == 0:
+                req_conns = int(item.get("connections") or self.settings.get("defaultConnections") or 32)
+                if item.get("isTorrent"):
+                    conn_count = max(16, min(64, req_conns))
+                    item["supportsRange"] = True
+                else:
+                    conn_count = max(1, min(64, req_conns)) if (item["supportsRange"] and item["totalSize"] > 128 * 1024) else 1
+                item["segments"] = self._create_segments(item["totalSize"], conn_count)
+
+    def _async_probe_item(self, dl_id: str, cookies=None):
+        item = self.downloads.get(dl_id)
+        if not item:
+            return
+        try:
+            p = self.probe_url(item["url"], referer=item.get("referer") or "", cookies=cookies)
+            self._apply_probe_result_to_item(item, p)
+            self.save_state()
+        except Exception:
+            with self.lock:
+                item.pop("_needsInitialProbe", None)
+
+    def _probe_and_start_worker(self, item: dict, ctrl: dict):
+        try:
+            if not ctrl.get("aborted"):
+                cookies = None if item.get("incognito") else self.__dict__.get("_site_cookies", {}).get(item["id"])
+                try:
+                    p = self.probe_url(item["url"], referer=item.get("referer") or "", cookies=cookies)
+                    if not ctrl.get("aborted"):
+                        self._apply_probe_result_to_item(item, p)
+                except Exception:
+                    with self.lock:
+                        item.pop("_needsInitialProbe", None)
+        finally:
+            aborted = bool(ctrl.get("aborted"))
+            with self.lock:
+                if self.controllers.get(item["id"]) is ctrl:
+                    self.controllers.pop(item["id"], None)
+                if not aborted and item.get("status") == "downloading":
+                    item["status"] = "paused"
+            if not aborted:
+                self.start_download(item["id"])
 
     def start_download(self, dl_id: str):
         with self.lock:
@@ -3310,6 +3728,14 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             item["errorMsg"] = ""
             item["startedAt"] = time.time()
             item.pop("finishedAt", None)
+
+            if item.pop("_needsInitialProbe", False) and int(item.get("totalSize") or 0) <= 0 and not item.get("isVideo") and not item.get("isTorrent"):
+                item["phase"] = "connecting"
+                ctrl = {"aborted": False, "probing": True, "last_bytes": 0, "last_time": time.time(), "file_lock": threading.Lock()}
+                self.controllers[dl_id] = ctrl
+                self.save_state()
+                threading.Thread(target=self._probe_and_start_worker, args=(item, ctrl), daemon=True).start()
+                return
 
             if item.get("isTorrent") or self._is_torrent_source(item.get("url", ""), item):
                 item["isTorrent"] = True
@@ -3332,7 +3758,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 item["isVideo"] = True
                 item["videoQuality"] = "audio"
                 item["category"] = "Music"
-                if item.get("downloadedBytes", 0) == 0:
+                if item.get("downloadedBytes", 0) == 0 and not item.get("customSaveDir"):
                     music_dir = os.path.join(self.settings["downloadsRoot"], "Music")
                     os.makedirs(music_dir, exist_ok=True)
                     item["saveDir"] = music_dir
@@ -3351,8 +3777,10 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             os.makedirs(item["saveDir"], exist_ok=True)
             os.makedirs(os.path.dirname(item["tempFilePath"]), exist_ok=True)
             tmp_exists = os.path.exists(item["tempFilePath"])
+            had_partial = tmp_exists and int(item.get("downloadedBytes") or 0) > 0
             need_reset = (not item.get("supportsRange", True)) or (not tmp_exists and item.get("downloadedBytes", 0) > 0)
             if need_reset:
+                had_partial = False
                 item["downloadedBytes"] = 0
                 item["progress"] = 0.0
                 for seg in item.get("segments") or []:
@@ -3362,8 +3790,17 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             else:
                 mode = "r+b" if tmp_exists else "w+b"
             f_obj = open(item["tempFilePath"], mode)
-            ctrl = {"aborted": False, "file": f_obj, "file_lock": threading.Lock(), "last_bytes": item["downloadedBytes"], "last_time": time.time(),
-                    "act_lock": threading.Lock(), "active": 0, "conn_limit": max(1, len(item["segments"]))}
+            ctrl = {
+                "aborted": False,
+                "file": f_obj,
+                "file_lock": threading.Lock(),
+                "last_bytes": item["downloadedBytes"],
+                "last_time": time.time(),
+                "act_lock": threading.Lock(),
+                "active": 0,
+                "conn_limit": max(1, len(item["segments"])),
+                "resumed_from_partial": had_partial,
+            }
             self.controllers[dl_id] = ctrl
 
             segs_to_start = []
@@ -3379,14 +3816,44 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         for seg in segs_to_start:
             threading.Thread(target=self._run_segment_worker, args=(item, seg, ctrl), daemon=True).start()
 
-    def _throttle(self, item: dict):
-        """Per-download and global speed limits."""
-        limit_kbps = item.get("speedLimitKbps") or 0
-        if limit_kbps > 0 and item["speed"] > limit_kbps * 1024:
-            time.sleep(0.06)
-        g_limit = int(self.settings.get("globalSpeedLimitKbps") or 0)
-        if g_limit > 0 and getattr(self, "total_speed", 0) > g_limit * 1024:
-            time.sleep(0.06)
+    def _consume_token_bucket(self, key: str, rate_bps: float, num_bytes: int, ctrl: dict = None):
+        if rate_bps <= 0 or num_bytes <= 0:
+            return
+        buckets = self.__dict__.setdefault("_bw_buckets", {})
+        bw_lock = self.__dict__.setdefault("_bw_lock", threading.Lock())
+        max_burst = max(float(num_bytes), min(rate_bps * 0.25, 256 * 1024.0))
+        while True:
+            if ctrl and ctrl.get("aborted"):
+                return
+            with bw_lock:
+                now = time.monotonic()
+                b = buckets.get(key)
+                if b is None:
+                    b = {"tokens": max_burst, "ts": now}
+                    buckets[key] = b
+                elapsed = max(0.0, now - b["ts"])
+                b["ts"] = now
+                b["tokens"] = min(max_burst, b["tokens"] + elapsed * rate_bps)
+                if b["tokens"] >= num_bytes:
+                    b["tokens"] -= num_bytes
+                    return
+                deficit = num_bytes - b["tokens"]
+                wait_s = min(0.05, max(0.005, deficit / rate_bps))
+            time.sleep(wait_s)
+
+    def consume_bandwidth(self, item: dict, num_bytes: int, ctrl: dict = None):
+        """Unified token-bucket limiter shared across direct, video, and browser transfer tasks."""
+        if num_bytes <= 0:
+            return
+        item_limit = int(item.get("speedLimitKbps") or 0)
+        global_limit = int(self.settings.get("globalSpeedLimitKbps") or 0)
+        if item_limit > 0:
+            self._consume_token_bucket(f"item:{item.get('id', '')}", item_limit * 1024.0, num_bytes, ctrl)
+        if global_limit > 0:
+            self._consume_token_bucket("global", global_limit * 1024.0, num_bytes, ctrl)
+
+    def _throttle(self, item: dict, num_bytes: int = 65536, ctrl: dict = None):
+        self.consume_bandwidth(item, num_bytes, ctrl)
 
     def _restart_single_connection(self, item: dict, ctrl: dict):
         """Server ignores Range requests: restart the download over one plain connection."""
@@ -3415,11 +3882,64 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             self.save_state()
         self.start_download(item["id"])
 
+    def _restart_clean_from_source_change(self, item: dict, ctrl: dict, new_etag: str = "", new_lm: str = "", new_total: int = 0):
+        """Restart cleanly from byte 0 when ETag/Last-Modified indicates the origin resource changed."""
+        with ctrl["act_lock"]:
+            if ctrl.get("restarting"):
+                return
+            ctrl["restarting"] = True
+        with ctrl["file_lock"]:
+            ctrl["aborted"] = True
+            try:
+                ctrl["file"].close()
+            except Exception:
+                pass
+        with self.lock:
+            self.controllers.pop(item["id"], None)
+            try:
+                if os.path.exists(item["tempFilePath"]):
+                    os.remove(item["tempFilePath"])
+            except Exception:
+                pass
+            if new_total > 0:
+                item["totalSize"] = new_total
+            clean_etag = "" if (new_etag or "").startswith("W/") else (new_etag or "").strip()
+            item["etag"] = clean_etag
+            item["lastModified"] = (new_lm or "").strip()
+            item["validatorRecorded"] = bool(clean_etag or item["lastModified"])
+            if (new_etag or "").startswith("W/"):
+                item["supportsRange"] = False
+            tot = int(item.get("totalSize") or 0)
+            req_conns = int(item.get("connections") or self.settings.get("defaultConnections") or 32)
+            conn_count = max(1, min(64, req_conns)) if (item.get("supportsRange", True) and tot > 128 * 1024) else 1
+            item["downloadedBytes"] = 0
+            item["progress"] = 0.0
+            item["segments"] = self._create_segments(tot, conn_count)
+            item["status"] = "paused"
+            self.save_state()
+        self.start_download(item["id"])
+
+    def _abort_all_segments_with_error(self, item: dict, ctrl: dict, reason: str):
+        with self.lock:
+            self.controllers.pop(item["id"], None)
+            ctrl["aborted"] = True
+            try:
+                if ctrl.get("file"):
+                    ctrl["file"].close()
+            except Exception:
+                pass
+            for s in item.get("segments") or []:
+                if s.get("status") != "completed":
+                    s["status"] = "error"
+                    s["info"] = reason[:60]
+            item["status"] = "error"
+            item["speed"] = 0
+            item["errorMsg"] = reason[:160]
+            self.save_state()
+
     def _run_segment_worker(self, item: dict, seg: dict, ctrl: dict):
         """
-        Downloads one byte range. Retries with back-off; if the server rejects many parallel
-        connections (429/503/reset), the shared connection limit is lowered so the remaining
-        parts continue with fewer connections instead of the whole download failing.
+        Downloads one byte range with strict Content-Range and resume-validator checks.
         """
         seg["status"] = "downloading"
         seg["info"] = "Receiving data..."
@@ -3427,7 +3947,6 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         attempt = 0
         try:
             while not ctrl["aborted"] and item["status"] == "downloading":
-                # Wait for a free connection slot under the adaptive limit
                 while not ctrl["aborted"]:
                     with ctrl["act_lock"]:
                         if ctrl["active"] < ctrl["conn_limit"]:
@@ -3448,10 +3967,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         default_ua=self.settings.get("userAgent") or BROWSER_UA,
                         include_origin=False,
                     )
-                    ranged = item["supportsRange"] and seg["endByte"] >= seg["currentByte"]
+                    req_start = seg["currentByte"]
+                    req_end = seg["endByte"]
+                    ranged = item["supportsRange"] and req_end >= req_start
                     if ranged:
-                        hdrs["Range"] = f"bytes={seg['currentByte']}-{seg['endByte']}"
-                    elif seg["currentByte"] > 0:
+                        hdrs["Range"] = f"bytes={req_start}-{req_end}"
+                        hdrs["Accept-Encoding"] = "identity"
+                    elif req_start > 0:
                         with ctrl["file_lock"]:
                             if ctrl["aborted"]:
                                 return
@@ -3460,10 +3982,11 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                             seg["currentByte"] = 0
                             seg["downloaded"] = 0
                             item["downloadedBytes"] = 0
+                        req_start = 0
 
-                    jar = self._cookies_to_jar(self.__dict__.get("_site_cookies", {}).get(item["id"]))
+                    jar = None if item.get("incognito") else self._cookies_to_jar(self.__dict__.get("_site_cookies", {}).get(item["id"]))
                     with requests.get(
-                        item["url"], headers=hdrs, cookies=jar, stream=True, timeout=(15, 180), allow_redirects=True, verify=False
+                        item["url"], headers=hdrs, cookies=jar, stream=True, timeout=(15, 180), allow_redirects=True
                     ) as r:
                         if r.status_code in (429, 503, 509, 403, 500, 502, 504):
                             retry_reason = f"HTTP {r.status_code}"
@@ -3471,30 +3994,54 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                             seg["status"] = "error"
                             seg["info"] = f"HTTP {r.status_code}"
                             return
-                        elif r.status_code == 200 and ranged and (seg["currentByte"] > 0 or len(item.get("segments") or []) > 1):
-                            # Range ignored by the server -> fall back to a single connection
+                        elif r.status_code == 200 and ranged and (req_start > 0 or len(item.get("segments") or []) > 1):
                             threading.Thread(target=self._restart_single_connection, args=(item, ctrl), daemon=True).start()
                             return
                         else:
-                            if seg["id"] == 1 and seg["currentByte"] == 0:
-                                resp_hdrs = dict(r.headers)
+                            resp_hdrs = dict(r.headers)
+                            srv_etag = (resp_hdrs.get("ETag") or resp_hdrs.get("etag") or "").strip()
+                            srv_lm = (resp_hdrs.get("Last-Modified") or resp_hdrs.get("last-modified") or "").strip()
+                            resp_ce = (resp_hdrs.get("Content-Encoding") or resp_hdrs.get("content-encoding") or "").strip().lower()
+                            if ranged and resp_ce not in ("", "identity"):
+                                threading.Thread(target=self._restart_single_connection, args=(item, ctrl), daemon=True).start()
+                                return
+
+                            with self.lock:
+                                stored_etag = (item.get("etag") or "").strip()
+                                stored_lm = (item.get("lastModified") or "").strip()
+                                v_rec = bool(item.get("validatorRecorded"))
+                                mismatch = False
+                                if stored_etag and srv_etag and srv_etag != stored_etag:
+                                    mismatch = True
+                                elif stored_lm and srv_lm and srv_lm != stored_lm:
+                                    mismatch = True
+                                elif ctrl.get("resumed_from_partial") and (
+                                    (not v_rec and (srv_etag or srv_lm))
+                                    or (v_rec and (stored_etag or stored_lm) and not (srv_etag or srv_lm))
+                                ):
+                                    mismatch = True
+                                elif ranged and srv_etag.startswith("W/") and (req_start > 0 or len(item.get("segments") or []) > 1):
+                                    mismatch = True
+                                elif not v_rec and ((srv_etag and not srv_etag.startswith("W/")) or srv_lm):
+                                    item["etag"] = "" if srv_etag.startswith("W/") else srv_etag
+                                    item["lastModified"] = srv_lm
+                                    item["validatorRecorded"] = True
+                            if mismatch:
+                                threading.Thread(
+                                    target=self._restart_clean_from_source_change,
+                                    args=(item, ctrl, srv_etag, srv_lm, int(item.get("totalSize") or 0)),
+                                    daemon=True,
+                                ).start()
+                                return
+
+                            if seg["id"] == 1 and seg["currentByte"] == 0 and r.status_code == 200:
                                 if int(item.get("totalSize") or 0) <= 0:
-                                    discovered_total = 0
-                                    cr = resp_hdrs.get("Content-Range") or resp_hdrs.get("content-range") or ""
-                                    if "/" in cr:
-                                        try:
-                                            discovered_total = int(cr.split("/")[-1])
-                                        except Exception:
-                                            discovered_total = 0
-                                    if discovered_total <= 0:
-                                        try:
-                                            discovered_total = int(resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or 0)
-                                        except Exception:
-                                            discovered_total = 0
-                                    if discovered_total > 0:
-                                        item["totalSize"] = discovered_total
+                                    cl_disc = resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or ""
+                                    if str(cl_disc).isdigit() and int(cl_disc) > 0:
+                                        item["totalSize"] = int(cl_disc)
                                         if len(item.get("segments") or []) == 1 and seg.get("endByte", -1) == -1:
-                                            seg["endByte"] = discovered_total - 1
+                                            seg["endByte"] = int(cl_disc) - 1
+                                            req_end = seg["endByte"]
                                 better_name = extract_filename(r.url or item["url"], resp_hdrs)
                                 has_cd_name = "filename" in (resp_hdrs.get("Content-Disposition") or resp_hdrs.get("content-disposition") or "").lower()
                                 if better_name not in ("scorpion_file.bin", "download_file") and (
@@ -3502,13 +4049,67 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                                 ):
                                     with self.lock:
                                         new_cat = detect_category(better_name, resp_hdrs.get("Content-Type") or "")
-                                        new_dir = os.path.join(self.settings["downloadsRoot"], new_cat)
-                                        os.makedirs(new_dir, exist_ok=True)
-                                        item["category"] = new_cat
-                                        item["saveDir"] = new_dir
+                                        if item.get("customSaveDir"):
+                                            new_dir = item["saveDir"]
+                                        else:
+                                            new_dir = os.path.join(self.settings["downloadsRoot"], new_cat)
+                                            os.makedirs(new_dir, exist_ok=True)
+                                            item["category"] = new_cat
+                                            item["saveDir"] = new_dir
                                         item["filePath"] = self._available_media_path(os.path.join(new_dir, better_name), item["id"])
                                         item["filename"] = os.path.basename(item["filePath"])
+
+                            resp_end = req_end
+                            expected_body_len = None
+                            if r.status_code == 206 and ranged:
+                                cr_raw = (resp_hdrs.get("Content-Range") or resp_hdrs.get("content-range") or "").strip()
+                                m_cr = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+)", cr_raw, re.I)
+                                if not m_cr:
+                                    self._abort_all_segments_with_error(item, ctrl, "The server returned an invalid byte range")
+                                    return
+                                cr_start, cr_end, cr_total = map(int, m_cr.groups())
+                                known_total = int(item.get("totalSize") or 0)
+                                if (
+                                    cr_start != req_start
+                                    or cr_end < req_start
+                                    or cr_end > req_end
+                                    or cr_total <= 0
+                                    or (known_total > 0 and cr_total != known_total)
+                                ):
+                                    self._abort_all_segments_with_error(item, ctrl, "The server returned the wrong byte range")
+                                    return
+                                if known_total <= 0:
+                                    item["totalSize"] = cr_total
+                                resp_end = cr_end
+                                expected_body_len = cr_end - cr_start + 1
+                                cl_hdr = (resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or "").strip()
+                                if cl_hdr.isdigit() and int(cl_hdr) != expected_body_len:
+                                    self._abort_all_segments_with_error(item, ctrl, "The server returned the wrong byte range length")
+                                    return
+                                if seg["id"] == 1 and req_start == 0:
+                                    better_name = extract_filename(r.url or item["url"], resp_hdrs)
+                                    has_cd_name = "filename" in (resp_hdrs.get("Content-Disposition") or resp_hdrs.get("content-disposition") or "").lower()
+                                    if better_name not in ("scorpion_file.bin", "download_file") and (
+                                        not os.path.splitext(item.get("filename") or "")[1] or has_cd_name
+                                    ):
+                                        with self.lock:
+                                            new_cat = detect_category(better_name, resp_hdrs.get("Content-Type") or "")
+                                            if item.get("customSaveDir"):
+                                                new_dir = item["saveDir"]
+                                            else:
+                                                new_dir = os.path.join(self.settings["downloadsRoot"], new_cat)
+                                                os.makedirs(new_dir, exist_ok=True)
+                                                item["category"] = new_cat
+                                                item["saveDir"] = new_dir
+                                            item["filePath"] = self._available_media_path(os.path.join(new_dir, better_name), item["id"])
+                                            item["filename"] = os.path.basename(item["filePath"])
+                            elif r.status_code == 200:
+                                cl_hdr = (resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or "").strip()
+                                if cl_hdr.isdigit():
+                                    expected_body_len = int(cl_hdr)
+
                             seg["info"] = "Receiving data..."
+                            resp_read = 0
                             for chunk in r.iter_content(chunk_size=65536):
                                 if ctrl["aborted"] or item["status"] != "downloading":
                                     return
@@ -3518,8 +4119,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                                     if ctrl["aborted"]:
                                         return
                                     to_write = len(chunk)
-                                    if seg["endByte"] != -1:
-                                        rem = seg["endByte"] - seg["currentByte"] + 1
+                                    if resp_end != -1:
+                                        rem = resp_end - seg["currentByte"] + 1
                                         if rem <= 0:
                                             break
                                         to_write = min(to_write, rem)
@@ -3528,21 +4129,26 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                                     seg["currentByte"] += to_write
                                     seg["downloaded"] += to_write
                                     item["downloadedBytes"] += to_write
-                                attempt = 0
-                                self._throttle(item)
-                                if seg["endByte"] != -1 and seg["currentByte"] > seg["endByte"]:
+                                    resp_read += to_write
+                                self.consume_bandwidth(item, to_write, ctrl)
+                                if resp_end != -1 and seg["currentByte"] > resp_end:
                                     break
-                            finished = seg["endByte"] == -1 or seg["currentByte"] > seg["endByte"]
-                            if finished:
+                            exact_len_ok = (expected_body_len is None) or (resp_read == expected_body_len)
+                            if not exact_len_ok:
+                                retry_reason = "Connection dropped"
+                            elif seg["endByte"] == -1 or seg["currentByte"] > seg["endByte"]:
                                 if not ctrl["aborted"]:
                                     with ctrl["act_lock"]:
                                         ctrl["active"] = max(0, ctrl["active"] - 1)
                                     released = True
                                     self._on_segment_done(item, seg, ctrl)
                                 return
-                            retry_reason = "Connection dropped"
+                            else:
+                                # Server returned a valid smaller prefix sub-range: continue immediately without counting a failure
+                                attempt = 0
+                                continue
                 except Exception as e:
-                    retry_reason = str(e)[:35]
+                    retry_reason = str(e)[:45]
                 finally:
                     if not released:
                         with ctrl["act_lock"]:
@@ -3633,7 +4239,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         cookiejar = getattr(tls_ydl, "cookiejar", None)
         req_cookies = cookiejar if isinstance(cookiejar, http.cookiejar.CookieJar) else None
         try:
-            html = requests.get(page_url, headers=hdrs, cookies=req_cookies, timeout=15, verify=False).text
+            html = requests.get(page_url, headers=hdrs, cookies=req_cookies, timeout=15).text
         except Exception:
             return []
         html = html.replace("\\/", "/").replace("\\u002F", "/").replace("&amp;", "&")
@@ -3782,7 +4388,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             if any(x in page_url.lower() for x in ("widevine", "spclient.spotify.com", "/license")):
                 continue
             try:
-                resp = requests.get(page_url, headers={"User-Agent": BROWSER_UA}, timeout=10, verify=False)
+                resp = requests.get(page_url, headers={"User-Agent": BROWSER_UA}, timeout=10)
                 html_txt = resp.text
                 m_og = (
                     re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html_txt, re.I)
@@ -4049,20 +4655,37 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         if not cookies:
             return ""
         path = os.path.join(self.temp_root, f"cookies_{key}.txt")
+        now = time.time()
         try:
             os.makedirs(self.temp_root, exist_ok=True)
             lines = ["# Netscape HTTP Cookie File"]
             for c in cookies:
-                domain = str(c.get("domain") or "")
-                if not domain or not c.get("name"):
+                domain = str(c.get("domain") or "").strip()
+                name = str(c.get("name") or "")
+                if not domain or not name:
                     continue
-                include_sub = "FALSE" if c.get("hostOnly") else "TRUE"
-                if include_sub == "TRUE" and not domain.startswith("."):
+                exp = c.get("expirationDate")
+                if exp is not None:
+                    try:
+                        exp_f = float(exp)
+                        if exp_f > 0 and exp_f <= now:
+                            continue
+                    except (TypeError, ValueError):
+                        exp_f = 0.0
+                else:
+                    exp_f = 0.0
+                host_only = bool(c.get("hostOnly"))
+                include_sub = "FALSE" if host_only else "TRUE"
+                if host_only:
+                    domain = domain.lstrip(".")
+                elif not domain.startswith("."):
                     domain = "." + domain
                 lines.append("\t".join([
                     domain, include_sub, str(c.get("path") or "/"), "TRUE" if c.get("secure") else "FALSE",
-                    str(int(c.get("expirationDate") or 0)), str(c["name"]), str(c.get("value") or ""),
+                    str(int(exp_f)), name, str(c.get("value") or ""),
                 ]))
+            if len(lines) <= 1:
+                return ""
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
             return path
@@ -4112,8 +4735,12 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             return {"ok": False, "qualities": []}
         cache = self.__dict__.setdefault("_quality_cache", {})
         candidate_urls = [candidate for candidate in (candidates or []) if isinstance(candidate, str)][:10]
-        cache_key = (url, True, tuple(candidate_urls)) if strict_target else url
+        has_auth = bool(cookies)
+        base_key = (url, bool(strict_target), tuple(candidate_urls) if strict_target else ())
+        cache_key = (*base_key, has_auth)
         hit = cache.get(cache_key)
+        if not hit and not has_auth:
+            hit = cache.get((*base_key, True))
         if hit and time.time() - hit[0] < 600:
             return hit[1]
 
@@ -4124,7 +4751,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             info = warning = error = debug
 
         opts = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True,
-                "nocheckcertificate": True, "logger": _Quiet()}
+                "logger": _Quiet()}
         opts.update(self._js_runtime_opts())
         opts["http_headers"] = self._build_media_headers(referer, user_agent, accept_language)
         item = {"url": url, "referer": referer, "tabUrl": tab_url, "candidates": candidate_urls,
@@ -4174,7 +4801,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "qualities": qualities,
             "hasAudio": bool(best_audio) or any(f.get("acodec") not in (None, "none") for f in info.get("formats") or []),
         }
-        cache[cache_key] = (time.time(), res)
+        if res.get("ok") and res.get("qualities"):
+            cache[cache_key] = (time.time(), res)
         return res
 
     def get_item_temp_dir(self, dl_id: str) -> str:
@@ -4185,28 +4813,24 @@ class ScorpionNativeEngine(BrowserTransferMixin):
     def _cleanup_item_temp(self, item: dict):
         if not item:
             return
+        temp_root_raw = os.path.abspath(self.temp_root)
+        temp_root_abs = os.path.normcase(temp_root_raw)
         dl_id = item.get("id")
         if dl_id:
-            shutil.rmtree(os.path.join(self.temp_root, str(dl_id)), ignore_errors=True)
+            dl_dir_raw = os.path.abspath(os.path.join(temp_root_raw, str(dl_id)))
+            dl_dir = os.path.normcase(dl_dir_raw)
+            try:
+                if os.path.commonpath([temp_root_abs, dl_dir]) == temp_root_abs and dl_dir != temp_root_abs:
+                    shutil.rmtree(dl_dir_raw, ignore_errors=True)
+            except Exception:
+                pass
         tp = item.get("tempFilePath")
         if tp and os.path.exists(tp):
             try:
-                os.remove(tp)
-            except Exception:
-                pass
-        save_dir = item.get("saveDir")
-        file_path = item.get("filePath")
-        if save_dir and file_path and os.path.isdir(save_dir):
-            base_prefix = os.path.splitext(os.path.basename(file_path))[0]
-            try:
-                for fn in os.listdir(save_dir):
-                    if fn.startswith(base_prefix) and (
-                        fn.endswith((".part", ".ytdl", ".scorpion_part")) or "-Frag" in fn
-                    ):
-                        try:
-                            os.remove(os.path.join(save_dir, fn))
-                        except Exception:
-                            pass
+                tp_raw = os.path.abspath(tp)
+                tp_abs = os.path.normcase(tp_raw)
+                if os.path.commonpath([temp_root_abs, tp_abs]) == temp_root_abs:
+                    os.remove(tp_raw)
             except Exception:
                 pass
 
@@ -4215,7 +4839,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         try:
             h = dict(headers or {})
             h["Range"] = "bytes=0-0"
-            r = requests.get(url, headers=h, cookies=cookies, stream=True, timeout=10, allow_redirects=True, verify=False)
+            r = requests.get(url, headers=h, cookies=cookies, stream=True, timeout=10, allow_redirects=True)
             status = r.status_code
             cr = r.headers.get("Content-Range", "")
             cl = r.headers.get("Content-Length", "")
@@ -4412,7 +5036,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 hdrs["Range"] = f"bytes={req_start}-{req_end}"
                 try:
                     with requests.get(
-                        sp["url"], headers=hdrs, cookies=cookiejar, stream=True, timeout=20, allow_redirects=True, verify=False
+                        sp["url"], headers=hdrs, cookies=cookiejar, stream=True, timeout=20, allow_redirects=True
                     ) as resp:
                         content_range = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", resp.headers.get("Content-Range", "").strip())
                         if resp.status_code != 206 or not content_range or tuple(map(int, content_range.groups())) != (req_start, req_end, sp["size"]):
@@ -4436,9 +5060,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                                 seg["currentByte"] += to_write
                                 seg["downloaded"] += to_write
                                 item["downloadedBytes"] += to_write
-                            limit_kbps = item.get("speedLimitKbps") or 0
-                            if limit_kbps > 0 and item["speed"] > limit_kbps * 1024:
-                                time.sleep(0.05)
+                            self.consume_bandwidth(item, to_write, ctrl)
                             if seg["localCur"] > req_end:
                                 break
                     if seg["localCur"] == before:
@@ -4612,6 +5234,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     s["currentByte"] = st + s_dl
                     s["status"] = "completed" if s_dl >= sz_s else "downloading"
 
+        hook_state = {"last_dl": 0}
+
         def hook(d):
             if ctrl["aborted"]:
                 raise RuntimeError("Paused")
@@ -4621,6 +5245,10 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             if d["status"] == "downloading":
                 item["phase"] = "downloading"
                 dl_b = int(d.get("downloaded_bytes") or 0)
+                delta = max(0, dl_b - hook_state["last_dl"])
+                hook_state["last_dl"] = dl_b
+                if delta > 0:
+                    self.consume_bandwidth(item, delta, ctrl)
                 tot_b = int(d.get("total_bytes") or d.get("total_bytes_estimate") or 0)
                 frag_idx = int(d.get("fragment_index") or 0)
                 frag_cnt = int(d.get("fragment_count") or 0)
@@ -4663,7 +5291,6 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "progress_hooks": [hook],
             "quiet": True,
             "no_warnings": True,
-            "nocheckcertificate": True,
             "concurrent_fragment_downloads": frag_ports,
             "logger": QuietYtdlpLogger(),
         }
@@ -4942,7 +5569,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 hdrs = {"User-Agent": BROWSER_UA}
                 if item.get("referer"):
                     hdrs["Referer"] = item["referer"]
-                resp = requests.get(src, headers=hdrs, timeout=15, allow_redirects=True, verify=False)
+                resp = requests.get(src, headers=hdrs, timeout=15, allow_redirects=True)
                 if resp.url.lower().startswith("magnet:?"):
                     src = resp.url
                 elif resp.status_code == 200 and resp.content:
@@ -4960,8 +5587,11 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
             files_resolved = False
             def effective_limit() -> int:
-                lims = [int(item.get("speedLimitKbps") or 0), int(self.settings.get("globalSpeedLimitKbps") or 0)]
-                lims = [x for x in lims if x > 0]
+                per_item = int(item.get("speedLimitKbps") or 0)
+                glob = int(self.settings.get("globalSpeedLimitKbps") or 0)
+                active_other = max(1, len(self.controllers))
+                shared_glob = max(1, glob // active_other) if glob > 0 else 0
+                lims = [x for x in (per_item, shared_glob) if x > 0]
                 return min(lims) if lims else 0
 
             last_limit = -1
@@ -5106,8 +5736,10 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         except Exception:
                             pass
                     final_path = self._move_torrent_output(bt_dir, item["saveDir"], files)
-                    if final_path:
-                        item["filePath"] = final_path
+                    if not final_path or not os.path.exists(final_path):
+                        raise RuntimeError("تعذر نقل ملفات التورنت إلى مجلد الحفظ.")
+                    item["filePath"] = final_path
+                    if len([e for e in (files or []) if str(e.get("selected", "true")).lower() != "false"]) == 1:
                         item["filename"] = os.path.basename(final_path)
                     for s in item.get("segments") or []:
                         s["status"] = "completed"
@@ -5151,7 +5783,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     pass
 
     def _move_torrent_output(self, bt_dir: str, save_dir: str, files: list) -> str:
-        """Delete unselected leftovers, move finished torrent data into save_dir. Returns the main output path."""
+        """Delete unselected leftovers, move finished torrent data into save_dir. Raises on failure with rollback."""
         for f_ in files or []:
             if str(f_.get("selected", "true")).lower() == "false" and f_.get("path"):
                 try:
@@ -5159,24 +5791,31 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         os.remove(f_["path"])
                 except Exception:
                     pass
-        moved = []
+        os.makedirs(save_dir, exist_ok=True)
+        entries = [e for e in os.listdir(bt_dir) if not e.lower().endswith(".aria2")]
+        if not entries:
+            raise RuntimeError("لم يتم العثور على مخرجات التورنت لنقلها.")
+        moved_pairs = []
         try:
-            entries = [e for e in os.listdir(bt_dir) if not e.lower().endswith(".aria2")]
-        except Exception:
-            entries = []
-        for name in entries:
-            src_p = os.path.join(bt_dir, name)
-            base, ext = os.path.splitext(name) if os.path.isfile(src_p) else (name, "")
-            dest = os.path.join(save_dir, name)
-            n = 1
-            while os.path.exists(dest):
-                dest = os.path.join(save_dir, f"{base} ({n}){ext}")
-                n += 1
-            try:
+            for name in entries:
+                src_p = os.path.join(bt_dir, name)
+                base, ext = os.path.splitext(name) if os.path.isfile(src_p) else (name, "")
+                dest = os.path.join(save_dir, name)
+                n = 1
+                while os.path.exists(dest):
+                    dest = os.path.join(save_dir, f"{base} ({n}){ext}")
+                    n += 1
                 shutil.move(src_p, dest)
-                moved.append(dest)
-            except Exception:
-                pass
+                moved_pairs.append((src_p, dest))
+        except Exception as err:
+            for orig_src, dest in reversed(moved_pairs):
+                try:
+                    if os.path.exists(dest) and not os.path.exists(orig_src):
+                        shutil.move(dest, orig_src)
+                except Exception:
+                    pass
+            raise RuntimeError(f"فشل نقل مخرجات التورنت إلى مجلد الحفظ: {err}") from err
+        moved = [dest for _, dest in moved_pairs]
         # Remove empty folders left behind by unselected files
         for d in moved:
             if os.path.isdir(d):
@@ -5188,7 +5827,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                             pass
         if len(moved) == 1:
             return moved[0]
-        return save_dir if moved else ""
+        return save_dir
 
     def _finalize(self, item: dict, ctrl: dict):
         try:
@@ -5200,9 +5839,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 if ext:
                     item["filename"] = f"{item.get('filename') or 'download_file'}{ext}"
                     item["category"] = detect_category(item["filename"])
-                    item["saveDir"] = os.path.join(self.settings["downloadsRoot"], item["category"])
+                    if not item.get("customSaveDir"):
+                        item["saveDir"] = os.path.join(self.settings["downloadsRoot"], item["category"])
                     os.makedirs(item["saveDir"], exist_ok=True)
                     item["filePath"] = os.path.join(item["saveDir"], item["filename"])
+            segs = item.get("segments") or []
+            if any(s.get("status") != "completed" for s in segs):
+                raise RuntimeError("بعض أجزاء التنزيل لم تكتمل بنجاح. أعد المحاولة.")
             actual_size = os.path.getsize(item["tempFilePath"])
             if item.get("totalSize") and actual_size != item["totalSize"]:
                 raise RuntimeError("الملف لم يصل بحجمه الكامل. أعد المحاولة.")
@@ -6448,12 +7091,28 @@ class SettingsDialog(QDialog):
         self.T = T
         s = engine.settings
         self.setWindowTitle(T("الإعدادات — Scorpion IDM", "Settings — Scorpion IDM"))
-        self.resize(640, 610)
+        self.setMinimumSize(460, 300)
+        try:
+            avail = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+            self.resize(min(640, max(460, avail.width() - 40)), min(640, max(320, avail.height() - 40)))
+        except Exception:
+            self.resize(640, 610)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if self.is_ar else Qt.LayoutDirection.LeftToRight)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(12)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }")
+        content = QWidget()
+        content_lay = QVBoxLayout(content)
+        content_lay.setContentsMargins(0, 0, 4, 0)
+        content_lay.setSpacing(12)
+        scroll.setWidget(content)
+        self._scroll_area = scroll
 
         def card(title: str):
             fr = QFrame()
@@ -6466,7 +7125,7 @@ class SettingsDialog(QDialog):
             hdr = QLabel(title)
             hdr.setStyleSheet("font-size: 14px; font-weight: 700;")
             lay.addWidget(hdr, 0, 0, 1, 3)
-            root.addWidget(fr)
+            content_lay.addWidget(fr)
             return lay
 
         # --- Downloads ---
@@ -6539,7 +7198,8 @@ class SettingsDialog(QDialog):
         self.chk_sched.toggled.connect(self.time_sched.setEnabled)
         g3.addWidget(self.time_sched, 1, 2)
 
-        root.addStretch()
+        content_lay.addStretch()
+        root.addWidget(scroll, 1)
         btns = QHBoxLayout()
         btns.addStretch()
         cancel = QPushButton(T("إلغاء", "Cancel"))
@@ -7707,7 +8367,7 @@ class ScorpionMainWindow(QMainWindow):
 
         # UI refresh timer (250ms)
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.refresh_all)
+        self.timer.timeout.connect(self._on_refresh_tick)
         self.timer.start(250)
 
         self.engine.signals.completed.connect(self.on_download_completed)
@@ -7867,12 +8527,13 @@ class ScorpionMainWindow(QMainWindow):
         self.tree.setFixedWidth(230)
         self.tree.setRootIsDecorated(False)
         self.tree.setIndentation(16)
-        self.tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.tree.header().setStretchLastSection(False)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self.tree.header().resizeSection(1, 44)
         self.tree.itemClicked.connect(self.on_tree_clicked)
+        self.tree.currentItemChanged.connect(lambda cur, _prev: self.on_tree_clicked(cur))
         bl.addWidget(self.tree)
 
         self.stack = QStackedWidget()
@@ -7883,7 +8544,7 @@ class ScorpionMainWindow(QMainWindow):
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
-        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.table.setIconSize(QSize(20, 20))
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(44)
@@ -7897,7 +8558,6 @@ class ScorpionMainWindow(QMainWindow):
         self.table.setItemDelegateForColumn(2, ProgressDelegate(self.table))
         self.table.itemSelectionChanged.connect(self._sync_toolbar_selection)
         self.table.cellDoubleClicked.connect(self.on_row_double_clicked)
-        # The table takes no focus, so leave the search box on click; otherwise Delete/Enter keep going to it
         self.table.cellPressed.connect(lambda _r, _c: self.txt_search.clearFocus())
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.on_table_context_menu)
@@ -7983,39 +8643,47 @@ class ScorpionMainWindow(QMainWindow):
         ]
         for btn, text, icon, color in labels:
             btn.setProperty("fullText", text)
+            btn.setAccessibleName(text)
             btn.setText(text)
             btn.setIcon(glyph_icon(ICONS[icon], color or c["text"]))
+        self.txt_search.setAccessibleName(T("بحث في التحميلات", "Search downloads"))
+        self.tree.setAccessibleName(T("تصنيفات التحميلات", "Download categories"))
+        self.table.setAccessibleName(T("قائمة التحميلات", "Downloads list"))
         if getattr(self, "_search_act", None) is not None:
             self._search_act.setIcon(glyph_icon(ICONS["search"], c["muted"], 14))
         self._apply_layout_mode(force=True)
 
-        self.tree.clear()
-        self.nav_items = {}
+        self._rebuilding_tree = True
+        try:
+            self.tree.clear()
+            self.nav_items = {}
 
-        def nav(parent, key, text, data):
-            it = QTreeWidgetItem(parent, [text, ""])
-            it.setData(0, Qt.ItemDataRole.UserRole, data)
-            it.setTextAlignment(1, Qt.AlignmentFlag.AlignCenter)
-            it.setForeground(1, QColor(c["muted"]))
-            self.nav_items[key] = it
-            return it
+            def nav(parent, key, text, data):
+                it = QTreeWidgetItem(parent, [text, ""])
+                it.setData(0, Qt.ItemDataRole.UserRole, data)
+                it.setTextAlignment(1, Qt.AlignmentFlag.AlignCenter)
+                it.setForeground(1, QColor(c["muted"]))
+                self.nav_items[key] = it
+                return it
 
-        root_all = nav(self.tree, "all", T("كل التحميلات", "All downloads"), ("all", "ALL"))
-        for cat_id, ar, en in [
-            ("Video", "فيديو", "Video"),
-            ("Music", "صوتيات", "Music"),
-            ("Programs", "برامج", "Programs"),
-            ("Compressed", "ملفات مضغوطة", "Compressed"),
-            ("Documents", "مستندات", "Documents"),
-            ("General", "أخرى", "Other"),
-        ]:
-            nav(root_all, cat_id, T(ar, en), ("all", cat_id))
-        root_all.setExpanded(True)
-        nav(self.tree, "unfinished", T("غير مكتمل", "Unfinished"), ("unfinished", "ALL"))
-        nav(self.tree, "completed", T("مكتمل", "Completed"), ("completed", "ALL"))
-        for key, it in self.nav_items.items():
-            if it.data(0, Qt.ItemDataRole.UserRole) == (self.filter_state, self.filter_cat):
-                self.tree.setCurrentItem(it)
+            root_all = nav(self.tree, "all", T("كل التحميلات", "All downloads"), ("all", "ALL"))
+            for cat_id, ar, en in [
+                ("Video", "فيديو", "Video"),
+                ("Music", "صوتيات", "Music"),
+                ("Programs", "برامج", "Programs"),
+                ("Compressed", "ملفات مضغوطة", "Compressed"),
+                ("Documents", "مستندات", "Documents"),
+                ("General", "أخرى", "Other"),
+            ]:
+                nav(root_all, cat_id, T(ar, en), ("all", cat_id))
+            root_all.setExpanded(True)
+            nav(self.tree, "unfinished", T("غير مكتمل", "Unfinished"), ("unfinished", "ALL"))
+            nav(self.tree, "completed", T("مكتمل", "Completed"), ("completed", "ALL"))
+            for key, it in self.nav_items.items():
+                if it.data(0, Qt.ItemDataRole.UserRole) == (self.filter_state, self.filter_cat):
+                    self.tree.setCurrentItem(it)
+        finally:
+            self._rebuilding_tree = False
 
         self.table.setHorizontalHeaderLabels(
             [T("اسم الملف", "File name"), T("الحجم", "Size"), T("التقدم", "Progress"),
@@ -8034,6 +8702,8 @@ class ScorpionMainWindow(QMainWindow):
               "No downloads here yet\n\nClick “Add URL” or use the download button in your browser")
         )
         self._row_ids = []
+        self._row_states = {}
+        self._last_nav_counts = None
         self.refresh_all()
 
     def _restyle_cards(self):
@@ -8138,6 +8808,8 @@ class ScorpionMainWindow(QMainWindow):
         self.clipboard.setText(url)
 
     def on_tree_clicked(self, item: QTreeWidgetItem):
+        if getattr(self, "_rebuilding_tree", False) or item is None:
+            return
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if data:
             self.filter_state, self.filter_cat = data
@@ -8579,6 +9251,24 @@ class ScorpionMainWindow(QMainWindow):
         self.engine.pause_all()
         self.app.quit()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self.refresh_all)
+
+    def _on_refresh_tick(self):
+        visible = self.isVisible()
+        self.engine._ui_visible = visible
+        if not visible:
+            if getattr(self, "cards", None) and (self.cards.cards or getattr(self.engine, "controllers", None)):
+                with self.engine.lock:
+                    raw_items = list(self.engine.downloads.values())
+                try:
+                    self._update_status_surfaces(raw_items)
+                except Exception:
+                    pass
+            return
+        self.refresh_all()
+
     def refresh_all(self):
         self.engine._ui_visible = self.isVisible()
         is_ar = self.lang == "ar"
@@ -8606,9 +9296,11 @@ class ScorpionMainWindow(QMainWindow):
                 counts[cat] += 1
             counts["completed" if st_val == "completed" else "unfinished"] = counts.get(
                 "completed" if st_val == "completed" else "unfinished", 0) + 1
-        for key, nav_it in self.nav_items.items():
-            n = counts.get(key, 0)
-            nav_it.setText(1, str(n) if n else "")
+        if counts != getattr(self, "_last_nav_counts", None):
+            for key, nav_it in self.nav_items.items():
+                n = counts.get(key, 0)
+                nav_it.setText(1, str(n) if n else "")
+            self._last_nav_counts = dict(counts)
 
         query = self.txt_search.text().strip().lower()
         filtered = []
@@ -8633,6 +9325,8 @@ class ScorpionMainWindow(QMainWindow):
             )
         sel_id = self.get_selected_id()
         ids = [it["id"] for it in filtered]
+        prev_states = getattr(self, "_row_states", {})
+        new_states = {}
         if ids != getattr(self, "_row_ids", []):
             self.table.setRowCount(len(filtered))
             self._row_ids = ids
@@ -8649,12 +9343,24 @@ class ScorpionMainWindow(QMainWindow):
             total = int(it.get("totalSize") or 0)
             done = int(it.get("downloadedBytes") or 0)
             downloading = st_val == "downloading" and mode == "active"
+            spd = int(it.get("speed") or 0) if downloading else 0
+            eta = it.get("timeLeft") if downloading else None
+            pct = round(float(it.get("progress") or 0), 2)
+            raw_name = it.get("filename", "")
+            file_path = it.get("filePath", "")
+            err_msg = (it.get("errorMsg") or "").strip() if st_val == "error" else ""
+            row_sig = (it["id"], st_val, mode, total, done, pct, spd, eta, raw_name, file_path, err_msg)
+            new_states[r] = row_sig
+            if prev_states.get(r) == row_sig and self.table.item(r, 5) is not None:
+                if it["id"] == sel_id and self.table.currentRow() != r:
+                    self.table.setCurrentCell(r, 0)
+                continue
             cells = [
-                bidi_filename(it.get("filename", "")),
+                bidi_filename(raw_name),
                 L(format_bytes(total)) if total else (L(format_bytes(done)) if done else "—"),
                 "",
-                L(format_speed(it.get("speed", 0))) if downloading else "—",
-                L(format_eta(it.get("timeLeft"))) if downloading else "—",
+                L(format_speed(spd)) if downloading else "—",
+                L(format_eta(eta)) if downloading else "—",
                 item_status_text(it, is_ar),
             ]
             for col, text in enumerate(cells):
@@ -8669,13 +9375,13 @@ class ScorpionMainWindow(QMainWindow):
                 if cell.text() != text:
                     cell.setText(text)
                 if col == 0:
-                    raw_name = it.get("filename", "")
                     if cell.data(ROLE_ID) != it["id"]:
                         cell.setData(ROLE_ID, it["id"])
                         cell.setIcon(file_type_icon(raw_name))
                     if cell.data(ROLE_RAW_NAME) != raw_name:
                         cell.setData(ROLE_RAW_NAME, raw_name)
-                    cell.setToolTip(it.get("filePath", ""))
+                    if cell.toolTip() != file_path:
+                        cell.setToolTip(file_path)
                 elif col == 2:
                     cell.setData(ROLE_PCT, float(it.get("progress") or 0))
                     cell.setData(ROLE_MODE, mode)
@@ -8683,19 +9389,25 @@ class ScorpionMainWindow(QMainWindow):
                     cell.setForeground(QColor(mode_color(mode) if mode != "connecting" else c["muted"]))
                     tip = ""
                     if st_val == "error":
-                        raw_reason = (it.get("errorMsg") or "").strip()
-                        reason = localize_error_msg(raw_reason, is_ar) if raw_reason else ("سبب غير معروف" if is_ar else "Unknown reason")
+                        reason = localize_error_msg(err_msg, is_ar) if err_msg else ("سبب غير معروف" if is_ar else "Unknown reason")
                         tip = f"{'سبب الفشل' if is_ar else 'Failure reason'}: {reason}"
                     if cell.toolTip() != tip:
                         cell.setToolTip(tip)
             if it["id"] == sel_id and self.table.currentRow() != r:
                 self.table.setCurrentCell(r, 0)
+        self._row_states = new_states
 
         self._completed_count = counts.get("completed", 0)
         self._sync_toolbar_selection()
 
-        bridge = (("المتصفح متصل" if is_ar else "Browser connected") if self.engine.rpc_alive
-                  else ("المتصفح غير متصل" if is_ar else "Browser not connected"))
+        connected = self.engine.active_connected_browsers(12.0) if hasattr(self.engine, "active_connected_browsers") else []
+        rpc_ok = getattr(self.engine, "rpc_alive", False)
+        if not rpc_ok:
+            bridge = "الجسر المحلي متوقف" if is_ar else "Local bridge offline"
+        elif connected:
+            bridge = f"المتصفح متصل ({', '.join(connected)})" if is_ar else f"Browser connected ({', '.join(connected)})"
+        else:
+            bridge = "بانتظار إضافة المتصفح" if is_ar else "Waiting for browser extension"
         sep = "      •      "
         if is_ar:
             parts = [f"السرعة الكلية {L(format_speed(total_spd))}", f"تحميلات نشطة {L(active_n)}",
@@ -8732,15 +9444,19 @@ if __name__ == "__main__":
     try:
         r = requests.get("http://127.0.0.1:19615/ping", timeout=0.6)
         if r.status_code == 200:
+            cli_headers = {
+                BRIDGE_CLIENT_HEADER: "1",
+                BRIDGE_TOKEN_HEADER: load_or_create_bridge_token(),
+            }
             if open_target:
                 requests.post(
                     "http://127.0.0.1:19615/capture",
                     json=_target_payload(open_target),
-                    headers={BRIDGE_CLIENT_HEADER: "1"},
+                    headers=cli_headers,
                     timeout=2,
                 )
             elif not start_in_tray:
-                requests.get("http://127.0.0.1:19615/focus", headers={BRIDGE_CLIENT_HEADER: "1"}, timeout=0.6)
+                requests.get("http://127.0.0.1:19615/focus", headers=cli_headers, timeout=0.6)
             sys.exit(0)
     except Exception:
         pass

@@ -26,8 +26,13 @@ if ([IO.Path]::GetFullPath($work) -ne [IO.Path]::GetFullPath((Join-Path $PSScrip
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $work, $out, "$work\setup_dist" | Out-Null
 
-# Publish the same extension files bundled in the installer, including shared media helpers.
-Compress-Archive -Path "$root\browser-extension\*" -DestinationPath "$out\Scorpion-Browser-Extension.zip" -Force
+# Publish the same extension files bundled in the installer (never package per-install local bridge-auth.json).
+$extPkgStage = Join-Path $work "ext_pkg"
+New-Item -ItemType Directory -Force -Path $extPkgStage | Out-Null
+Get-ChildItem -Path "$root\browser-extension" -Force | Where-Object { $_.Name -ne "bridge-auth.json" } | ForEach-Object {
+    Copy-Item $_.FullName (Join-Path $extPkgStage $_.Name) -Recurse -Force
+}
+Compress-Archive -Path "$extPkgStage\*" -DestinationPath "$out\Scorpion-Browser-Extension.zip" -Force
 
 # 1) Ensure pinned, checksum-verified Python runtime & tools exist
 $runtimeZip = Join-Path $root "build\runtime\python-embed.zip"
@@ -46,14 +51,14 @@ $appDir = Join-Path $work "dist\ScorpionIDM"
 New-Item -ItemType Directory -Force -Path $appDir, "$appDir\app", "$appDir\site-packages", "$appDir\build" | Out-Null
 Expand-Archive -Path $runtimeZip -DestinationPath $appDir -Force
 
-# Rename signed pythonw.exe -> ScorpionIDM.exe without touching a single byte (preserves PSF Authenticode signature)
+# Rename signed pythonw.exe -> ScorpionIDM.exe without touching a single byte (preserves PSF Authenticode signature on the Python host)
 Move-Item (Join-Path $appDir "pythonw.exe") (Join-Path $appDir "ScorpionIDM.exe") -Force
 Remove-Item (Join-Path $appDir "python.exe") -Force -ErrorAction SilentlyContinue
 $sig = Get-AuthenticodeSignature (Join-Path $appDir "ScorpionIDM.exe")
 if ($sig.Status -ne "Valid") {
-    throw "ScorpionIDM.exe digital signature is invalid ($($sig.Status))"
+    throw "ScorpionIDM.exe PSF host digital signature is invalid ($($sig.Status))"
 }
-Write-Output "Verified ScorpionIDM.exe signature: $($sig.Status) ($($sig.SignerCertificate.Subject))"
+Write-Output "Verified PSF host signature on ScorpionIDM.exe: $($sig.Status) ($($sig.SignerCertificate.Subject)); bundled .py scripts and Setup .exe are verified via SHA-256"
 
 $pthContent = @(
     "python$pyNoDot.zip",
@@ -65,7 +70,7 @@ $pthContent = @(
 Set-Content -Path (Join-Path $appDir "python$pyNoDot._pth") -Value $pthContent -Encoding ascii
 
 Copy-Item "$root\native_app\scorpion_qt.py", "$root\native_app\sitecustomize.py", "$root\native_app\media_transfer.py" "$appDir\app" -Force
-Copy-Item "$root\browser-extension" "$appDir\browser-extension" -Recurse -Force
+Copy-Item "$extPkgStage" "$appDir\browser-extension" -Recurse -Force
 Copy-Item "$root\build\icon.ico", "$root\build\icon.png", "$root\build\tray.png", "$root\build\aria2c.exe" "$appDir\build" -Force
 
 # Install pinned dependencies into site-packages
@@ -137,6 +142,12 @@ def sha256(path):
             h.update(chunk)
     return h.hexdigest()
 
+src_hash = hashlib.sha256()
+for rel in ("native_app/scorpion_qt.py", "native_app/sitecustomize.py", "native_app/media_transfer.py"):
+    src_hash.update((rel + "\0").encode("utf-8"))
+    with open(os.path.join(root, rel), "rb") as sf:
+        src_hash.update(sf.read())
+
 h = sq.CHANGELOG_HISTORY[0]
 pack = os.path.join(out, "Scorpion-Tools.zip")
 m = {
@@ -144,6 +155,7 @@ m = {
     "publishedAt": h["date"],
     "packageFile": "Scorpion-Update-Payload.zip",
     "sha256": sha256(os.path.join(out, "Scorpion-Update-Payload.zip")),
+    "sourceSha256": src_hash.hexdigest(),
     "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
     "title_ar": h["title_ar"],
     "title_en": h["title_en"],

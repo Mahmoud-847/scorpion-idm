@@ -109,9 +109,9 @@ document.addEventListener('DOMContentLoaded', () => {
       },
     });
     if (syncRemoteLang) {
-      fetch(`http://127.0.0.1:19615/ping?set_lang=${encodeURIComponent(currentLang)}`, {
-        headers: { 'X-Scorpion-Client': '1' },
-      }).catch(() => {});
+      try {
+        chrome.runtime.sendMessage({ action: 'SCORPION_SET_APP_LANG', lang: currentLang }, () => void chrome.runtime.lastError);
+      } catch (_) {}
     }
   }
 
@@ -128,8 +128,8 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs && tabs[0];
       if (!tab || !tab.url) return;
-      chrome.tabs.sendMessage(tab.id, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' }, (res) => {
-        if (chrome.runtime.lastError || !res || !res.ok) {
+      const handleGrabReply = (res) => {
+        if (!res || !res.ok) {
           const code = res && res.error === 'drmProtected' ? 'drmProtected' : 'noVideo';
           lastError = { code, at: Date.now() };
           chrome.storage.session.set({ scorpionDownloadError: lastError }).catch(() => {});
@@ -137,6 +137,15 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         window.close();
+      };
+      chrome.runtime.sendMessage({ action: 'SCORPION_GRAB_TAB_MEDIA', tabId: tab.id, tabUrl: tab.url }, (bgRes) => {
+        if (!chrome.runtime.lastError && bgRes && bgRes.handled) {
+          handleGrabReply(bgRes);
+          return;
+        }
+        chrome.tabs.sendMessage(tab.id, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' }, (res) => {
+          handleGrabReply(chrome.runtime.lastError ? null : res);
+        });
       });
     });
   });

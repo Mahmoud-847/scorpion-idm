@@ -63,9 +63,13 @@ WATCH_TARGETS = [
     os.path.join(PROJECT_ROOT, "build_installer.ps1"),
     os.path.join(PROJECT_ROOT, "requirements.txt"),
     os.path.join(PROJECT_ROOT, "tests", "test_media_transfer.py"),
+    os.path.join(PROJECT_ROOT, "tests", "test_ui_runtime.py"),
+    os.path.join(PROJECT_ROOT, "tests", "test_audit_findings.py"),
     os.path.join(PROJECT_ROOT, "tests", "browser-transfer.test.cjs"),
     os.path.join(PROJECT_ROOT, "tests", "content-panel.test.cjs"),
     os.path.join(PROJECT_ROOT, "tests", "popup.test.cjs"),
+    os.path.join(PROJECT_ROOT, "README.md"),
+    os.path.join(PROJECT_ROOT, "VIDEO_DOWNLOADS.md"),
     os.path.join(PROJECT_ROOT, "PRIVACY.md"),
     os.path.join(PROJECT_ROOT, "tests", "test_publisher_startup.py"),
     os.path.join(PROJECT_ROOT, "tests", "package.json"),
@@ -287,11 +291,43 @@ def ensure_on_up_to_date_main():
         raise RuntimeError(f"فرع main المحلي مختلف عن GitHub ولا يمكن تحديثه تلقائياً: {pull.stderr.strip()[:160]}")
 
 
-def stop_running_scorpion():
-    """Requests ScorpionIDM.exe to quit cleanly via RPC and waits until its files are unlocked."""
+def read_local_bridge_token() -> str:
+    token_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ScorpionIDM", "bridge_token")
     try:
-        # The bridge only accepts /quit as a GET carrying the trusted-client header
-        req = urllib.request.Request("http://127.0.0.1:19615/quit", headers={"X-Scorpion-Client": "1"})
+        if os.path.isfile(token_path):
+            with open(token_path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+    except Exception:
+        pass
+    return ""
+
+
+def bridge_auth_headers() -> dict:
+    hdrs = {"X-Scorpion-Client": "1"}
+    tok = read_local_bridge_token()
+    if tok:
+        hdrs["X-Scorpion-Token"] = tok
+    return hdrs
+
+
+def active_downloads_count() -> int:
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:19615/ping", timeout=1) as resp:
+            data = json.load(resp)
+        return int(data.get("activeCount") or 0)
+    except Exception:
+        return 0
+
+
+def stop_running_scorpion(force: bool = False):
+    """Requests ScorpionIDM.exe to quit cleanly via authenticated RPC and waits until its files are unlocked."""
+    if not force and active_downloads_count() > 0:
+        raise RuntimeError(
+            "توجد تحميلات نشطة حالياً في Scorpion IDM — تم إيقاف النشر لتجنب قطعها (مرّر --force-stop للتجاوز)"
+        )
+    try:
+        # The bridge requires X-Scorpion-Client and the local per-install X-Scorpion-Token
+        req = urllib.request.Request("http://127.0.0.1:19615/quit", headers=bridge_auth_headers())
         urllib.request.urlopen(req, timeout=2).read()
     except Exception:
         pass
@@ -536,6 +572,7 @@ class AutoPublisherWindow(QMainWindow):
                 ensure_on_up_to_date_main()
                 self.signals.progress.emit(9, "جاري اختبار إصلاحات الفيديو والإضافة قبل البناء والنشر...")
                 validate_release_sources(self.signals.log.emit)
+                tested_snapshot = compute_snapshot()
                 cur_ver = read_current_version()
                 new_ver = bump_patch_version(cur_ver) if do_bump else cur_ver
                 if do_bump or note_ar:
@@ -548,9 +585,13 @@ class AutoPublisherWindow(QMainWindow):
                     self.last_snapshot = compute_snapshot()
                     self.signals.log.emit(f"==> Version updated: v{cur_ver} -> v{new_ver}")
 
+                if compute_snapshot() != tested_snapshot:
+                    raise RuntimeError("تغيرت ملفات المصدر أثناء التحقق — أعد تشغيل الاختبارات قبل البناء والنشر")
+
                 self.signals.progress.emit(20, "جاري إغلاق النسخة المفتوحة وبناء البرنامج وحزمة التحديث...")
                 self.signals.log.emit("==> Stopping running ScorpionIDM instance & running build_installer.ps1 ...")
-                stop_running_scorpion()
+                force_stop = "--force-stop" in sys.argv
+                stop_running_scorpion(force=force_stop)
 
                 build_script = os.path.join(PROJECT_ROOT, "build_installer.ps1")
                 # Python launched from PowerShell 7 can inherit its Core-only module paths. Let
@@ -581,23 +622,33 @@ class AutoPublisherWindow(QMainWindow):
                 proc.wait()
                 if proc.returncode != 0:
                     raise RuntimeError("فشل بناء البرنامج وملف التسطيب (راجع السجل بالأعلى)")
+                if compute_snapshot() != tested_snapshot:
+                    raise RuntimeError("تعدّلت ملفات المصدر أثناء البناء — تم إيقاف النشر حتى يعاد اختبارها بالكامل")
                 if not setup_path or not os.path.isfile(setup_path):
                     raise RuntimeError("تم البناء لكن لم يتم حفظ ملف التسطيب الجديد في مجلد التنزيلات")
                 self.signals.log.emit(f"==> New setup saved: {setup_path}")
 
                 self.signals.progress.emit(65, "جاري تحديث النسخة المثبتة على هذا الجهاز بأمان...")
-                stop_running_scorpion()
+                stop_running_scorpion(force=force_stop)
                 src_dist = os.path.join(PROJECT_ROOT, "native_app", "_build", "dist", "ScorpionIDM")
                 dst_app = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ScorpionIDM")
                 shutil.rmtree(os.path.join(dst_app, "_internal"), ignore_errors=True)
                 copy_tree_safely(src_dist, dst_app)
 
                 ext_src = os.path.join(PROJECT_ROOT, "browser-extension")
-                for ext_dst in (
+                bridge_tok = read_local_bridge_token()
+                user_dl_ext = os.path.join(os.path.expanduser("~"), "Downloads", "Scorpion-Browser-Extension")
+                ext_targets = [
                     os.path.join(dst_app, "browser-extension"),
                     os.path.join(os.environ.get("LOCALAPPDATA", ""), "ScorpionIDM", "browser-extension"),
-                ):
+                ]
+                if os.path.isdir(user_dl_ext):
+                    ext_targets.append(user_dl_ext)
+                for ext_dst in ext_targets:
                     copy_tree_safely(ext_src, ext_dst)
+                    if bridge_tok:
+                        with open(os.path.join(ext_dst, "bridge-auth.json"), "w", encoding="utf-8") as bf:
+                            json.dump({"token": bridge_tok}, bf)
 
                 exe_p = os.path.join(dst_app, "ScorpionIDM.exe")
                 if os.path.isfile(exe_p):
@@ -605,7 +656,7 @@ class AutoPublisherWindow(QMainWindow):
                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     wait_for_desktop_app(new_ver)
                     if os.name == "nt" and current_desktop_name().lower() != "default":
-                        stop_running_scorpion()
+                        stop_running_scorpion(force=True)
                         self.signals.log.emit("==> Verified startup in non-interactive desktop; stopped test instance so port 19615 stays free for user desktop.")
 
                 # Clients refuse packages without a matching checksum, so never publish one that would fail
@@ -615,6 +666,13 @@ class AutoPublisherWindow(QMainWindow):
                     pkg_sha = hashlib.sha256(f.read()).hexdigest()
                 if manifest.get("version") != new_ver or manifest.get("sha256") != pkg_sha:
                     raise RuntimeError("ملف update.json لا يطابق حزمة التحديث (الإصدار أو بصمة SHA-256) — تم إيقاف الرفع")
+                expected_src_hash = hashlib.sha256()
+                for rel in ("native_app/scorpion_qt.py", "native_app/sitecustomize.py", "native_app/media_transfer.py"):
+                    expected_src_hash.update((rel + "\0").encode("utf-8"))
+                    with open(os.path.join(PROJECT_ROOT, rel), "rb") as sf:
+                        expected_src_hash.update(sf.read())
+                if manifest.get("sourceSha256") != expected_src_hash.hexdigest():
+                    raise RuntimeError("بصمة المصادر في update.json لا تطابق الملفات المصدريّة — تم إيقاف الرفع")
                 if not tools_version or not os.path.isfile(tools_pack) or (manifest.get("tools") or {}).get("version") != tools_version:
                     raise RuntimeError("حزمة الأدوات (ffmpeg / QuickJS) غير جاهزة أو لا تطابق update.json — تم إيقاف الرفع")
                 self.signals.progress.emit(75, "جاري رفع حزمة الأدوات إن كانت جديدة...")
@@ -631,9 +689,10 @@ class AutoPublisherWindow(QMainWindow):
                         "release/update.json", "release/Scorpion-Update-Payload.zip", "release/Scorpion-Browser-Extension.zip",
                         "native_app/media_transfer.py", "browser-extension/media.js", "browser-extension/browser-transfer.js",
                         "browser-extension/telegram-reader.js",
-                        "VIDEO_DOWNLOADS.md", "PRIVACY.md",
+                        "README.md", "VIDEO_DOWNLOADS.md", "PRIVACY.md",
                         "tests/test_media_transfer.py", "tests/browser-transfer.test.cjs", "tests/test_publisher_startup.py",
-                        "tests/test_ui_runtime.py", "tests/content-panel.test.cjs", "tests/popup.test.cjs", "tests/package.json", "tests/package-lock.json",
+                        "tests/test_ui_runtime.py", "tests/test_audit_findings.py", "tests/content-panel.test.cjs", "tests/popup.test.cjs",
+                        "tests/package.json", "tests/package-lock.json",
                     ) if os.path.exists(os.path.join(PROJECT_ROOT, p))]),
                     ("commit", "-m", f"Release Scorpion IDM v{new_ver}", "--allow-empty"),
                     ("push", "-u", "origin", "main"),

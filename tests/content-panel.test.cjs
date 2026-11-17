@@ -728,3 +728,109 @@ test('direct MP4 on dropbox.com is not misclassified as x.com', () => {
     assert.equal(sent[0].url, 'https://uc.dropbox.com/raw/demo.mp4');
   } finally { p.dom.window.close(); }
 });
+
+test('embedded iframe handles SCORPION_DOWNLOAD_CURRENT_MEDIA while ignoring SCORPION_GET_TITLE', () => {
+  const handlers = [];
+  const sentMessages = [];
+  const p = page('https://player.test/embed/99', {
+    beforeScripts: ({ window }) => {
+      Object.defineProperty(window, 'self', { value: {} });
+      window.chrome.runtime.onMessage.addListener = (cb) => handlers.push(cb);
+    },
+    beforeContent: ({ window }) => {
+      const origSend = window.chrome.runtime.sendMessage;
+      window.chrome.runtime.sendMessage = (msg, cb) => {
+        sentMessages.push(msg);
+        return origSend(msg, cb);
+      };
+    },
+  });
+  try {
+    assert.equal(handlers.length, 1);
+    let titleReply;
+    assert.equal(handlers[0]({ action: 'SCORPION_GET_TITLE' }, {}, (r) => { titleReply = r; }), false);
+    assert.equal(titleReply, undefined);
+    fire(p, p.videos[0], 'pointerenter');
+    assert.ok(sentMessages.some((m) => m.action === 'SCORPION_MARK_ACTIVE_FRAME'));
+    let cmdReply;
+    handlers[0]({ action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' }, {}, (r) => { cmdReply = r; });
+    assert.equal(cmdReply.ok, true);
+    assert.equal(downloads(p).length, 1);
+  } finally { p.dom.window.close(); }
+});
+
+test('explicit quality badge request does not reuse empty cookie-free prefetch cache', async () => {
+  const requests = [];
+  const p = page(undefined, {
+    beforeContent: ({ window }) => {
+      const orig = window.chrome.runtime.sendMessage;
+      window.chrome.runtime.sendMessage = (msg, cb) => {
+        if (msg.action === 'SCORPION_LIST_QUALITIES') {
+          requests.push(msg.allowCookies);
+          const payload = msg.allowCookies
+            ? { ok: true, qualities: [{ quality: '1080p', label: '1080p', size: 1000000 }] }
+            : { ok: true, qualities: [] };
+          queueMicrotask(() => cb(payload));
+        } else {
+          orig(msg, cb);
+        }
+      };
+    },
+  });
+  try {
+    p.timers.find((tm) => tm.ms === 600).fn();
+    await new Promise(setImmediate);
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    await new Promise(setImmediate);
+    await new Promise(setImmediate);
+    assert.deepEqual(requests, [false, true]);
+    assert.ok(p.panel.querySelector('.scorpion-idm-dropdown').textContent.includes('1080p'));
+  } finally { p.dom.window.close(); }
+});
+
+test('unrelated encrypted video does not block downloading a selected non-DRM video', () => {
+  const handlers = [];
+  const p = page(undefined, {
+    videos: [{ src: 'https://cdn.test/drm.mp4' }, { src: 'https://cdn.test/open.mp4' }],
+    beforeContent: ({ window, videos }) => {
+      Object.defineProperty(videos[0], 'mediaKeys', { value: {} });
+      window.chrome.runtime.onMessage.addListener = (cb) => handlers.push(cb);
+    },
+  });
+  try {
+    fire(p, p.videos[1], 'pointerenter');
+    let reply;
+    handlers[0]({ action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' }, {}, (r) => { reply = r; });
+    assert.equal(reply.ok, true);
+    assert.equal(downloads(p).at(-1).payload.url, 'https://cdn.test/open.mp4');
+  } finally { p.dom.window.close(); }
+});
+
+test('panel trigger and quality badge are keyboard-focusable buttons with menu ARIA and Escape/Arrow keys', () => {
+  const p = page();
+  try {
+    const trigger = p.panel.querySelector('.scorpion-idm-trigger');
+    const badge = p.panel.querySelector('.scorpion-idm-badge');
+    const dropdown = p.panel.querySelector('.scorpion-idm-dropdown');
+    assert.equal(trigger.tagName, 'BUTTON');
+    assert.equal(badge.tagName, 'BUTTON');
+    assert.ok(trigger.tabIndex >= 0);
+    assert.ok(badge.tabIndex >= 0);
+    assert.equal(dropdown.getAttribute('role'), 'menu');
+    assert.equal(badge.getAttribute('aria-haspopup'), 'menu');
+    assert.equal(badge.getAttribute('aria-expanded'), 'false');
+
+    badge.click();
+    assert.equal(badge.getAttribute('aria-expanded'), 'true');
+    const items = Array.from(dropdown.querySelectorAll('.scorpion-idm-option'));
+    assert.ok(items.length > 0);
+    assert.equal(items[0].getAttribute('role'), 'menuitem');
+
+    p.panel.dispatchEvent(new p.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    assert.equal(p.window.document.activeElement, items[0]);
+    p.panel.dispatchEvent(new p.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.equal(dropdown.classList.contains('open'), false);
+    assert.equal(badge.getAttribute('aria-expanded'), 'false');
+    assert.equal(p.window.document.activeElement, badge);
+  } finally { p.dom.window.close(); }
+});

@@ -156,3 +156,100 @@ test('an authorized Telegram transfer survives DOM removal but cannot change sou
   assert.equal(reads.length, 4);
   assert.ok(posts.at(-1).error);
 });
+
+function loadBackgroundHarness(fetchHandler) {
+  const captured = [], cookieQueries = [], cancelled = [], erased = [], sentToTabs = [];
+  const listeners = { onCreated: null, onMessage: null, onRemoved: null, onReplaced: null, onUpdated: null };
+  const event = (slot) => ({ addListener: (cb) => { if (slot) listeners[slot] = cb; } });
+  const chrome = {
+    storage: {
+      local: { get: (_, cb) => cb({ scorpionConfig: { interceptAllDownloads: true, lang: 'ar' } }), set() {} },
+      session: { set: async () => {}, get: async () => ({}), remove: async () => {} },
+      onChanged: event(),
+    },
+    runtime: {
+      lastError: null,
+      getURL: (rel) => `chrome-extension://test-ext/${rel}`,
+      onInstalled: event(),
+      onStartup: event(),
+      onMessage: event('onMessage'),
+    },
+    contextMenus: { removeAll: (cb) => cb(), create() {}, onClicked: event() },
+    tabs: {
+      onCreated: event(),
+      onActivated: event(),
+      onUpdated: event('onUpdated'),
+      onRemoved: event('onRemoved'),
+      onReplaced: event('onReplaced'),
+      sendMessage: (tabId, msg, opts, cb) => {
+        const callback = typeof opts === 'function' ? opts : cb;
+        const frameId = typeof opts === 'object' && opts ? opts.frameId : 0;
+        sentToTabs.push({ tabId, msg, frameId });
+        if (callback) callback({ ok: false });
+      },
+    },
+    downloads: {
+      onCreated: event('onCreated'),
+      cancel: (id, cb) => { cancelled.push(id); if (cb) cb(); },
+      erase: ({ id }) => erased.push(id),
+    },
+    cookies: {
+      getAllCookieStores: async () => [],
+      getAll: async (q) => {
+        cookieQueries.push(q);
+        return [{ domain: 'files.test', path: '/', name: 'SESSION', value: 'tok-regular' }];
+      },
+    },
+    webRequest: { onHeadersReceived: event(), onSendHeaders: event() },
+  };
+  const context = {
+    chrome,
+    ScorpionMedia: require(path.join(__dirname, '../browser-extension/media.js')),
+    importScripts() {},
+    navigator: { userAgent: 'Unit test UA', languages: ['en-US'] },
+    URL, AbortController, AbortSignal, setTimeout: () => 0, clearTimeout() {}, setInterval() {}, console,
+    fetch: async (url, opts) => {
+      if (url.endsWith('bridge-auth.json')) {
+        return { ok: true, json: async () => ({ token: 'unit-bridge-secret' }) };
+      }
+      if (url.includes('/ping')) return { ok: true, json: async () => ({ lang: 'ar' }) };
+      return fetchHandler(url, opts, captured);
+    },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/background.js'), 'utf8'), context);
+  return { context, listeners, captured, cookieQueries, cancelled, erased, sentToTabs };
+}
+
+test('duplicate captures wait for server acceptance and do not cancel downloads on rejection', async () => {
+  let resolveCapture;
+  const h = loadBackgroundHarness((url, opts, captured) => {
+    captured.push({ url, headers: opts.headers, body: JSON.parse(opts.body) });
+    return new Promise((r) => { resolveCapture = r; });
+  });
+  const base = { url: 'https://files.test/a.zip', filename: 'a.zip', state: 'in_progress', mime: 'application/zip', fileSize: 500000, incognito: false };
+  const p1 = h.listeners.onCreated({ ...base, id: 101 });
+  await new Promise(setImmediate);
+  const p2 = h.listeners.onCreated({ ...base, id: 102 });
+  await new Promise(setImmediate);
+  assert.equal(h.captured.length, 1);
+  assert.equal(h.captured[0].headers['X-Scorpion-Token'], 'unit-bridge-secret');
+  assert.deepEqual(h.cancelled, []);
+  resolveCapture({ ok: false });
+  await Promise.all([p1, p2]);
+  assert.deepEqual(h.cancelled, []);
+  assert.deepEqual(h.erased, []);
+});
+
+test('incognito browser downloads are skipped without querying regular cookies or posting to desktop', async () => {
+  const h = loadBackgroundHarness(async (url, opts, captured) => {
+    captured.push(JSON.parse(opts.body));
+    return { ok: true };
+  });
+  await h.listeners.onCreated({
+    id: 201, url: 'https://files.test/private.zip', filename: 'private.zip',
+    state: 'in_progress', mime: 'application/zip', fileSize: 500000, incognito: true,
+  });
+  assert.equal(h.cookieQueries.length, 0);
+  assert.equal(h.captured.length, 0);
+  assert.deepEqual(h.cancelled, []);
+});

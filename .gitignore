@@ -37,3 +37,6 @@ build/runtime/
 build/tools/
 release/Scorpion-Tools.zip
 release/Scorpion-Tools.version
+
+# Local review outputs (keep untracked outside commits)
+review_artifacts/

@@ -1,20 +1,23 @@
 {
-  "version": "2.1.25",
+  "version": "2.1.26",
   "publishedAt": "2026-11-17",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "6c389c7d6b813f5681d3f853ec391d374d175da67855dbb6c7eaadcc44e53c41",
+  "sha256": "4fbbbbf13981ed401c8be6f80dc19c8a20cb3560a50c7014df713d852d96dc32",
+  "sourceSha256": "1f33f85af76089cb011f0788a566d501e0b2907ad8966678015bc7bae6878e96",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.25 — إصلاح تحميل مشغلات البث المدمجة وأسماء الملفات المباشرة وترجمة الأخطاء",
-  "title_en": "Version 2.1.25 — Embedded HLS Stream Extraction, Direct Media Filenames & Error Localization",
+  "title_ar": "الإصدار 2.1.26 — تثبيت سلامة الملفات والأمان وجودة تكامل المتصفح",
+  "title_en": "Version 2.1.26 — Data Integrity, Security Hardening & Browser Reliability",
   "changelog_ar": [
-    "تمرير ترويسات المتصفح الحقيقية (User-Agent و Accept-Language) مع إعادة استخراج الروابط من الإطار المدمج تلقائياً لمنع أخطاء 403 في مشغلات HLS مثل wecima و lplaygo.",
-    "الاحتفاظ بالاسم الحقيقي للملف عند التقاط روابط فيديو أو صوت مباشرة (.mp4 / .mp3) بدلاً من الاسم المؤقت Scorpion_Video.mp4.",
-    "ترجمة جميع رسائل الخطأ العربية إلى الإنجليزية عند تفعيل الواجهة الإنجليزية وتنقية عرض تفاصيل المنافذ عند فشل التحضير."
+    "حصر التنظيف التلقائي في مجلد التطبيق المؤقت فقط وعدم المساس بمجلد التنزيلات العام، وضمان حفظ مخرجات التورنت قبل حذف الملفات المؤقتة.",
+    "تحقق صارم من تطابق Content-Range و ETag / Last-Modified عند الاستكمال، وحفظ السجل بأقفال متسلسلة مع نسخة احتياطية .bak، وتحديث آمن مع استرجاع تلقائي عند الفشل.",
+    "تفعيل التحقق الكامل من شهادات SSL/TLS، وحفظ قيود الكوكيز (Secure / hostOnly / Expiration)، وعزل تنزيلات التصفح الخفي، وتوثيق الجسر المحلي بمفتاح اقتران.",
+    "انتظار تأكيد القبول الحقيقي في الإضافة قبل إلغاء تنزيل المتصفح، ودعم أوامر الإطارات iframe ولوحة المفاتيح وأسماء الوصول، وفحص الروابط خارج خيط الواجهة، وتوحيد محدد السرعة."
   ],
   "changelog_en": [
-    "Forward real browser User-Agent & Accept-Language headers and automatically re-scrape embedded player iframes on expired/token-bound HLS links (fixing 403 errors on sites like wecima / lplaygo).",
-    "Preserve real filenames from direct media URLs (.mp4 / .mp3) instead of defaulting to Scorpion_Video.mp4.",
-    "Translate all download & validation error messages cleanly in English UI mode and refine pre-transfer error metadata."
+    "Confined startup/item cleanup strictly to app temp directories, and prevented torrent temp deletion or false completion if output move fails.",
+    "Added strict Content-Range byte-bounds + ETag/Last-Modified resume verification, monotonic thread-safe state saves with .bak recovery, and staged rollback-capable updates.",
+    "Enabled TLS certificate verification across all requests, preserved Secure/hostOnly/expiry cookie constraints, isolated Incognito downloads, and paired the local bridge via a per-install secret token.",
+    "Fixed premature duplicate cancellation, iframe command routing, session-aware quality caching, scoped DRM checks, non-blocking Add URL probing, custom folder retention, full keyboard accessibility, accurate handshake status, scrollable settings, and unified bandwidth throttling."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",

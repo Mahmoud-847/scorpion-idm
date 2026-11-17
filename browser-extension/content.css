@@ -55,13 +55,16 @@
 }
 
 .scorpion-idm-trigger {
+  all: unset !important;
   display: inline-flex !important;
   align-items: center !important;
   gap: 7px !important;
   padding: 2px 4px !important;
   min-width: 0 !important;
+  font: inherit !important;
   cursor: pointer !important;
   color: #f8fafc !important;
+  border-radius: 6px !important;
 }
 
 .scorpion-btn-text {
@@ -72,6 +75,10 @@
 }
 
 .scorpion-idm-badge {
+  all: unset !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
   cursor: pointer !important;
   margin-inline-start: 2px !important;
   background: #f59e0b !important;
@@ -82,6 +89,16 @@
   border-radius: 5px !important;
   font-family: Consolas, monospace !important;
   line-height: 1.2 !important;
+}
+
+.scorpion-idm-trigger:focus-visible,
+.scorpion-idm-badge:focus-visible,
+.scorpion-idm-lang-btn:focus-visible,
+.scorpion-idm-close-btn:focus-visible,
+.scorpion-idm-drag-handle:focus-visible,
+.scorpion-idm-option:focus-visible {
+  outline: 2px solid #22d3ee !important;
+  outline-offset: 2px !important;
 }
 
 .scorpion-idm-lang-btn {

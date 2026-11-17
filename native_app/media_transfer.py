@@ -149,6 +149,8 @@ class BrowserTransferMixin:
                 fh.seek(offset)
                 fh.write(chunk)
                 item["downloadedBytes"] += len(chunk)
+                if hasattr(self, "consume_bandwidth"):
+                    self.consume_bandwidth(item, len(chunk), ctrl)
                 seg = item["segments"][0]
                 seg["downloaded"] = item["downloadedBytes"]
                 seg["currentByte"] = item["downloadedBytes"]
