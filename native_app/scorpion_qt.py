@@ -184,7 +184,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.23"
+APP_VERSION = "2.1.24"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -308,6 +308,22 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.24",
+        "date": "2026-11-17",
+        "title_ar": "الإصدار 2.1.24 — إظهار التحميلات الفوري وتأكيد الإلغاء فوق جميع النوافذ",
+        "title_en": "Version 2.1.24 — Instant Main-Window Download Reveal & Topmost Confirmations",
+        "ar": [
+            "ضمان ظهور كل تحميل جديد أو ملتقط من المتصفح فوراً في جدول النافذة الرئيسية مع ضبط الفلاتر والتمرير التلقائي إليه.",
+            "إصلاح ظهور نافذة تأكيد الإلغاء خلف بطاقة التحميل المنبثقة: تُخفى البطاقة مؤقتاً وتفتح رسالة التأكيد دائماً في المقدمة بمنتصف الشاشة.",
+            "تحصين تحديث الجدول ضد الحقول الناقصة وتزامن الخيوط ومنع فقدان مقبض النافذة عند إظهار البرنامج من شريط المهام.",
+        ],
+        "en": [
+            "Ensure every new or browser-captured download appears immediately in the main table, clearing hiding filters and scrolling to it.",
+            "Fixed cancel confirmation appearing behind the always-on-top DownloadCard; the card temporarily hides and the prompt opens centered on top.",
+            "Hardened refresh_all thread snapshotting and null handling, and preserved native window handle in bring_to_front().",
+        ],
+    },
     {
         "version": "2.1.23",
         "date": "2026-11-17",
@@ -1212,6 +1228,37 @@ class FluentComboBox(QComboBox):
         p.drawText(arrow_r, Qt.AlignmentFlag.AlignCenter, ICONS["chevron"])
 
 
+def confirm_action_dialog(title: str, text: str, is_ar: bool, yes_label: str = "", no_label: str = "") -> bool:
+    """Modal confirmation guaranteed to appear centered and above always-on-top cards."""
+    box = QMessageBox(QMessageBox.Icon.Question, title, text, QMessageBox.StandardButton.NoButton, None)
+    box.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+    box.setLayoutDirection(Qt.LayoutDirection.RightToLeft if is_ar else Qt.LayoutDirection.LeftToRight)
+    yes_btn = box.addButton(
+        yes_label or ("نعم، إلغاء وحذف" if is_ar else "Yes, cancel & delete"),
+        QMessageBox.ButtonRole.YesRole,
+    )
+    yes_btn.setObjectName("DangerBtn")
+    no_btn = box.addButton(
+        no_label or ("تراجع" if is_ar else "Keep download"),
+        QMessageBox.ButtonRole.NoRole,
+    )
+    box.setDefaultButton(no_btn)
+    box.adjustSize()
+    scr = QApplication.primaryScreen()
+    if scr is not None:
+        avail = scr.availableGeometry()
+        box.move(
+            avail.center().x() - box.width() // 2,
+            avail.center().y() - box.height() // 2,
+        )
+    raise_timer = QTimer(box)
+    raise_timer.setSingleShot(True)
+    raise_timer.timeout.connect(lambda: (box.raise_(), box.activateWindow()))
+    raise_timer.start(0)
+    box.exec()
+    return box.clickedButton() is yes_btn
+
+
 # ==============================================================================
 # IDM-STYLE PROGRESS WINDOW (INDEPENDENT TOP-LEVEL WINDOW PER DOWNLOAD)
 # ==============================================================================
@@ -1682,13 +1729,16 @@ class IDMProgressDialog(QDialog):
         self.refresh_ui()
 
     def cancel_download(self):
-        ans = QMessageBox.question(
-            self,
+        if confirm_action_dialog(
             self.T("إلغاء التحميل", "Cancel download"),
             self.T("هل تريد إلغاء هذا التحميل وحذفه من القائمة؟", "Cancel this download and remove it?"),
-        )
-        if ans == QMessageBox.StandardButton.Yes:
+            self.is_ar,
+        ):
             self.engine.delete_download(self.dl_id)
+            if self.main_window is not None:
+                self.main_window.open_progress_dialogs.pop(self.dl_id, None)
+                self.main_window.cards.remove(self.dl_id)
+                self.main_window.refresh_all()
             self.close()
 
     def apply_speed_limit(self):
@@ -6081,6 +6131,8 @@ class FilenameDelegate(QStyledItemDelegate):
             avail_w = max(60, opt.rect.width() - icon_pad - 20)
             elided = opt.fontMetrics.elidedText(str(raw), Qt.TextElideMode.ElideMiddle, avail_w)
             opt.text = bidi_filename(elided)
+        elif not opt.text:
+            opt.text = bidi_filename(str(index.data(Qt.ItemDataRole.DisplayRole) or ""))
         style = opt.widget.style() if opt.widget else QApplication.style()
         style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
 
@@ -7292,16 +7344,30 @@ class DownloadCardManager(QObject):
         elif act == "pause":
             eng.pause_download(dl_id)
         elif act == "cancel":
+            if getattr(self, "_confirming_cancel", False):
+                return
             if item.get("status") not in ("completed", "error") and int(item.get("downloadedBytes") or 0) > 0:
                 is_ar = self.win.lang == "ar"
-                parent_w = self.cards.get(dl_id) or self.win
-                ans = QMessageBox.question(
-                    parent_w,
-                    "إلغاء التحميل" if is_ar else "Cancel download",
-                    (f"إلغاء وحذف «{item.get('filename', '')}»؟\nسيتم حذف الأجزاء المحمّلة." if is_ar
-                     else f"Cancel and remove “{item.get('filename', '')}”?\nDownloaded parts will be discarded."),
-                )
-                if ans != QMessageBox.StandardButton.Yes:
+                card = self.cards.get(dl_id)
+                self._confirming_cancel = True
+                try:
+                    if card is not None:
+                        card.hide()
+                    confirmed = confirm_action_dialog(
+                        "إلغاء التحميل" if is_ar else "Cancel download",
+                        (
+                            f"إلغاء وحذف «{item.get('filename', '')}»؟\nسيتم حذف الأجزاء المحمّلة."
+                            if is_ar
+                            else f"Cancel and remove “{item.get('filename', '')}”?\nDownloaded parts will be discarded."
+                        ),
+                        is_ar,
+                    )
+                finally:
+                    self._confirming_cancel = False
+                if not confirmed:
+                    if card is not None and dl_id in self.cards:
+                        card.show()
+                        card.raise_()
                     return
             dlg = self.win.open_progress_dialogs.pop(dl_id, None)
             if dlg is not None:
@@ -7470,12 +7536,23 @@ class ScorpionMainWindow(QMainWindow):
         self.tray_icon.setContextMenu(tray_menu)
 
     def bring_to_front(self):
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        self.showNormal()
+        self.show()
+        self.setWindowState((self.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
         self.raise_()
         self.activateWindow()
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
-        self.show()
+        if os.name == "nt":
+            try:
+                import ctypes
+
+                hwnd = int(self.winId())
+                u32 = ctypes.windll.user32
+                swp = 0x0001 | 0x0002 | 0x0040  # SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW
+                u32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, swp)
+                u32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, swp)
+                u32.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
+        self.refresh_all()
 
     def setup_ui(self):
         central = QWidget()
@@ -7785,7 +7862,7 @@ class ScorpionMainWindow(QMainWindow):
         row = self.table.rowAt(pos.y())
         if row < 0:
             return
-        self.table.selectRow(row)
+        self.table.setCurrentCell(row, 0)
         dl_id = self.get_selected_id()
         item = self.engine.downloads.get(dl_id) if dl_id else None
         if not item:
@@ -7870,7 +7947,9 @@ class ScorpionMainWindow(QMainWindow):
 
     def on_browser_captured(self, payload: dict):
         if payload.get("browserTransferId"):
-            self.show_download_started(payload["browserTransferId"])
+            tid = payload["browserTransferId"]
+            self.reveal_download_in_table(tid)
+            self.show_download_started(tid)
             return
         url = (payload.get("url") or "").strip()
         if not url:
@@ -7903,6 +7982,7 @@ class ScorpionMainWindow(QMainWindow):
         cap_type = "torrent" if is_torrent else ("audio" if is_audio else ("video" if is_video else "file"))
         existing_id = self.engine.should_ignore_duplicate_capture(url, cap_quality, cap_type)
         if existing_id:
+            self.reveal_download_in_table(existing_id)
             self.show_download_started(existing_id)
             return
         title = (payload.get("title") or "").strip()
@@ -7935,6 +8015,7 @@ class ScorpionMainWindow(QMainWindow):
                 "videoQuality": cap_quality,
             }
             item = self.engine.add_download(opts)
+            self.reveal_download_in_table(item["id"])
             self.show_download_started(item["id"])
         else:
             dlg = AddDownloadDialog(self.engine, url, is_video and quality != "direct", self.lang, self, is_torrent=is_torrent)
@@ -7949,6 +8030,7 @@ class ScorpionMainWindow(QMainWindow):
                     "_captureType": cap_type,
                 })
                 item = self.engine.add_download(dlg.result_opts)
+                self.reveal_download_in_table(item["id"])
                 if dlg.result_opts.get("startImmediately", True):
                     self.show_download_started(item["id"])
 
@@ -7956,8 +8038,40 @@ class ScorpionMainWindow(QMainWindow):
         dlg = AddDownloadDialog(self.engine, initial_url, is_video, self.lang, self, is_torrent=is_torrent)
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_opts:
             item = self.engine.add_download(dlg.result_opts)
+            self.reveal_download_in_table(item["id"])
             if dlg.result_opts.get("startImmediately"):
                 self.show_download_started(item["id"])
+
+    def reveal_download_in_table(self, dl_id: str):
+        """Ensure an added/captured download is never hidden by active filters and scroll to it."""
+        item = self.engine.downloads.get(dl_id)
+        if not item:
+            self.refresh_all()
+            return
+        st = item.get("status")
+        cat = item.get("category") or "General"
+        hidden_state = (
+            (self.filter_state == "unfinished" and st == "completed")
+            or (self.filter_state == "completed" and st != "completed")
+        )
+        hidden_cat = self.filter_cat != "ALL" and cat != self.filter_cat
+        if hidden_state or hidden_cat:
+            self.filter_state = "all"
+            self.filter_cat = "ALL"
+            if "all" in getattr(self, "nav_items", {}):
+                self.tree.setCurrentItem(self.nav_items["all"])
+        q = self.txt_search.text().strip().lower()
+        if q and q not in (item.get("filename") or "").lower() and q not in (item.get("url") or "").lower():
+            self.txt_search.blockSignals(True)
+            self.txt_search.clear()
+            self.txt_search.blockSignals(False)
+        self.refresh_all()
+        for r in range(self.table.rowCount()):
+            cell = self.table.item(r, 0)
+            if cell is not None and cell.data(ROLE_ID) == dl_id:
+                self.table.scrollToItem(cell, QTableWidget.ScrollHint.PositionAtTop)
+                self.table.setCurrentCell(r, 0)
+                break
 
     def show_download_started(self, dl_id: str):
         mode = self.engine.settings.get("onStartShow", "card")
@@ -7992,6 +8106,7 @@ class ScorpionMainWindow(QMainWindow):
         dl_id = self.get_selected_id()
         if dl_id:
             self.engine.start_download(dl_id)
+            self.refresh_all()
             self.show_download_started(dl_id)
 
     def pause_selected(self):
@@ -8006,13 +8121,17 @@ class ScorpionMainWindow(QMainWindow):
         item = self.engine.downloads.get(dl_id) or {}
         if item.get("status") != "completed":
             is_ar = self.lang == "ar"
-            ans = QMessageBox.question(
-                self,
+            if not confirm_action_dialog(
                 "حذف التحميل" if is_ar else "Delete download",
-                (f"حذف «{item.get('filename', '')}»؟\nسيتم حذف الأجزاء التي تم تحميلها." if is_ar
-                 else f"Delete “{item.get('filename', '')}”?\nThe downloaded parts will be discarded."),
-            )
-            if ans != QMessageBox.StandardButton.Yes:
+                (
+                    f"حذف «{item.get('filename', '')}»؟\nسيتم حذف الأجزاء التي تم تحميلها."
+                    if is_ar
+                    else f"Delete “{item.get('filename', '')}”?\nThe downloaded parts will be discarded."
+                ),
+                is_ar,
+                yes_label="نعم، حذف" if is_ar else "Yes, delete",
+                no_label="إلغاء" if is_ar else "Cancel",
+            ):
                 return
         dlg = self.open_progress_dialogs.pop(dl_id, None)
         if dlg is not None:
@@ -8226,23 +8345,29 @@ class ScorpionMainWindow(QMainWindow):
         self.engine._ui_visible = self.isVisible()
         is_ar = self.lang == "ar"
         c = pal()
-        items = sorted(self.engine.downloads.values(), key=lambda x: x.get("createdAt", 0), reverse=True)
-        self._update_status_surfaces(items)
+        with self.engine.lock:
+            raw_items = list(self.engine.downloads.values())
+        items = sorted(raw_items, key=lambda x: int(x.get("createdAt") or 0), reverse=True)
+        try:
+            self._update_status_surfaces(items)
+        except Exception:
+            pass
 
         # sidebar counts
         counts = {k: 0 for k in self.nav_items}
         total_spd = 0
         active_n = 0
         for it in items:
-            if it["status"] == "downloading":
-                total_spd += it.get("speed", 0) or 0
+            st_val = it.get("status") or "paused"
+            if st_val == "downloading":
+                total_spd += int(it.get("speed") or 0)
                 active_n += 1
             counts["all"] = counts.get("all", 0) + 1
             cat = it.get("category") or "General"
             if cat in counts:
                 counts[cat] += 1
-            counts["completed" if it["status"] == "completed" else "unfinished"] = counts.get(
-                "completed" if it["status"] == "completed" else "unfinished", 0) + 1
+            counts["completed" if st_val == "completed" else "unfinished"] = counts.get(
+                "completed" if st_val == "completed" else "unfinished", 0) + 1
         for key, nav_it in self.nav_items.items():
             n = counts.get(key, 0)
             nav_it.setText(1, str(n) if n else "")
@@ -8250,9 +8375,10 @@ class ScorpionMainWindow(QMainWindow):
         query = self.txt_search.text().strip().lower()
         filtered = []
         for it in items:
-            if self.filter_state == "unfinished" and it["status"] == "completed":
+            st_val = it.get("status") or "paused"
+            if self.filter_state == "unfinished" and st_val == "completed":
                 continue
-            if self.filter_state == "completed" and it["status"] != "completed":
+            if self.filter_state == "completed" and st_val != "completed":
                 continue
             if self.filter_cat != "ALL" and (it.get("category") or "General") != self.filter_cat:
                 continue
@@ -8280,10 +8406,11 @@ class ScorpionMainWindow(QMainWindow):
             | Qt.AlignmentFlag.AlignVCenter
         )
         for r, it in enumerate(filtered):
+            st_val = it.get("status") or "paused"
             mode = item_mode(it)
-            total = it.get("totalSize") or 0
-            done = it.get("downloadedBytes") or 0
-            downloading = it["status"] == "downloading" and mode == "active"
+            total = int(it.get("totalSize") or 0)
+            done = int(it.get("downloadedBytes") or 0)
+            downloading = st_val == "downloading" and mode == "active"
             cells = [
                 bidi_filename(it.get("filename", "")),
                 L(format_bytes(total)) if total else (L(format_bytes(done)) if done else "—"),
@@ -8317,14 +8444,14 @@ class ScorpionMainWindow(QMainWindow):
                 elif col == 5:
                     cell.setForeground(QColor(mode_color(mode) if mode != "connecting" else c["muted"]))
                     tip = ""
-                    if it["status"] == "error":
+                    if st_val == "error":
                         raw_reason = (it.get("errorMsg") or "").strip()
                         reason = localize_error_msg(raw_reason, is_ar) if raw_reason else ("سبب غير معروف" if is_ar else "Unknown reason")
                         tip = f"{'سبب الفشل' if is_ar else 'Failure reason'}: {reason}"
                     if cell.toolTip() != tip:
                         cell.setToolTip(tip)
             if it["id"] == sel_id and self.table.currentRow() != r:
-                self.table.selectRow(r)
+                self.table.setCurrentCell(r, 0)
 
         self._completed_count = counts.get("completed", 0)
         self._sync_toolbar_selection()

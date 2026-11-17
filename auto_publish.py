@@ -212,6 +212,25 @@ def find_gh() -> str:
     return ""
 
 
+def current_desktop_name() -> str:
+    """Returns the Win32 desktop name ('Default' on interactive user desktop, or sandbox desktop name)."""
+    if os.name != "nt":
+        return "Default"
+    try:
+        from ctypes import wintypes
+
+        u32 = ctypes.windll.user32
+        k32 = ctypes.windll.kernel32
+        hdesk = u32.GetThreadDesktop(k32.GetCurrentThreadId())
+        buf = ctypes.create_unicode_buffer(256)
+        needed = wintypes.DWORD()
+        if hdesk and u32.GetUserObjectInformationW(hdesk, 2, buf, ctypes.sizeof(buf), ctypes.byref(needed)):
+            return buf.value or "Default"
+    except Exception:
+        pass
+    return "Default"
+
+
 def desktop_app_environment():
     """The publisher's headless Qt platform must never leak into the desktop app."""
     return {key: value for key, value in os.environ.items() if key.upper() != "QT_QPA_PLATFORM"}
@@ -585,6 +604,9 @@ class AutoPublisherWindow(QMainWindow):
                     subprocess.Popen([exe_p], cwd=dst_app, env=desktop_app_environment(),
                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     wait_for_desktop_app(new_ver)
+                    if os.name == "nt" and current_desktop_name().lower() != "default":
+                        stop_running_scorpion()
+                        self.signals.log.emit("==> Verified startup in non-interactive desktop; stopped test instance so port 19615 stays free for user desktop.")
 
                 # Clients refuse packages without a matching checksum, so never publish one that would fail
                 with open(os.path.join(PROJECT_ROOT, "release", "update.json"), "r", encoding="utf-8") as f:
@@ -611,7 +633,7 @@ class AutoPublisherWindow(QMainWindow):
                         "browser-extension/telegram-reader.js",
                         "VIDEO_DOWNLOADS.md", "PRIVACY.md",
                         "tests/test_media_transfer.py", "tests/browser-transfer.test.cjs", "tests/test_publisher_startup.py",
-                        "tests/content-panel.test.cjs", "tests/popup.test.cjs", "tests/package.json", "tests/package-lock.json",
+                        "tests/test_ui_runtime.py", "tests/content-panel.test.cjs", "tests/popup.test.cjs", "tests/package.json", "tests/package-lock.json",
                     ) if os.path.exists(os.path.join(PROJECT_ROOT, p))]),
                     ("commit", "-m", f"Release Scorpion IDM v{new_ver}", "--allow-empty"),
                     ("push", "-u", "origin", "main"),

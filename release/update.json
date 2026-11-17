@@ -1,22 +1,20 @@
 {
-  "version": "2.1.23",
+  "version": "2.1.24",
   "publishedAt": "2026-11-17",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "6c6679b131ff53783ded57c635a9891e117d2edbf82d575bee002119c6865400",
+  "sha256": "264f13a0903c6ad24f5ab1adf1ce1fbe60880d0d4372abeb3ad9714cb8990865",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.23 — ترقية الواجهة في جميع المراحل وتجربة RTL المتكاملة",
-  "title_en": "Version 2.1.23 — Full-Lifecycle UI Polish & Enhanced RTL/LTR Experience",
+  "title_ar": "الإصدار 2.1.24 — إظهار التحميلات الفوري وتأكيد الإلغاء فوق جميع النوافذ",
+  "title_en": "Version 2.1.24 — Instant Main-Window Download Reveal & Topmost Confirmations",
   "changelog_ar": [
-    "إعادة تصميم بطاقة التحميل المنبثقة بمسافات مريحة، ترتيب أزرار طبيعي (الإجراء الرئيسي أولاً)، وحركة سلسة أثناء الاتصال والتحميل، مع زر إغلاق عند الاكتمال.",
-    "إعادة تصميم نافذة إضافة رابط ببطاقات حديثة وفحص غير متزامن للروابط مع تحذير فوري لمحتوى DRM وتعريب التصنيفات.",
-    "تحسين نافذة التقدم الـ 32 بورت بإلغاء الفراغ الزائد في الوضع المدمج وعرض رسائل الأخطاء وDRM كاملة متعددة الأسطر مع استجابة فورية لتبديل الثيم.",
-    "تحسين نافذة الإضافة والشريط العائم وتوضيح رسائل التنبيه داخل بطاقة التنبيه دون التأثير على شارة الاتصال."
+    "ضمان ظهور كل تحميل جديد أو ملتقط من المتصفح فوراً في جدول النافذة الرئيسية مع ضبط الفلاتر والتمرير التلقائي إليه.",
+    "إصلاح ظهور نافذة تأكيد الإلغاء خلف بطاقة التحميل المنبثقة: تُخفى البطاقة مؤقتاً وتفتح رسالة التأكيد دائماً في المقدمة بمنتصف الشاشة.",
+    "تحصين تحديث الجدول ضد الحقول الناقصة وتزامن الخيوط ومنع فقدان مقبض النافذة عند إظهار البرنامج من شريط المهام."
   ],
   "changelog_en": [
-    "Refined floating DownloadCard proportions, natural primary-first button hierarchy, smooth 25fps progress shimmer, and a Close action on completion.",
-    "Redesigned AddDownloadDialog with layered cards, non-blocking async URL probe, instant DRM warnings, and localized category labels.",
-    "Eliminated excess blank space in compact IDMProgressDialog, enabled wrapped readable error/DRM explanations, and synced live theme switching.",
-    "Polished UpdateDialog (non-blocking update check) and browser extension popup/floating panel alignment."
+    "Ensure every new or browser-captured download appears immediately in the main table, clearing hiding filters and scrolling to it.",
+    "Fixed cancel confirmation appearing behind the always-on-top DownloadCard; the card temporarily hides and the prompt opens centered on top.",
+    "Hardened refresh_all thread snapshotting and null handling, and preserved native window handle in bring_to_front()."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",

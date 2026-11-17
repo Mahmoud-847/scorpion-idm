@@ -80,6 +80,11 @@ class PublisherStartupTests(unittest.TestCase):
             (crx_root / "1.8.6_0").mkdir()
             self.assertTrue(scorpion_qt.is_edge_store_extension_installed(tmp))
 
+    def test_current_desktop_name_returns_non_empty_string(self):
+        name = auto_publish.current_desktop_name()
+        self.assertIsInstance(name, str)
+        self.assertTrue(len(name.strip()) > 0)
+
 
 if __name__ == "__main__":
     unittest.main()
