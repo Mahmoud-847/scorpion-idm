@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
-async function popup(error) {
+async function popup(error, tabReply = { ok: false }) {
   const html = fs.readFileSync(path.join(__dirname, '../browser-extension/popup.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'https://extension.test/popup.html', runScripts: 'outside-only' });
   const { window } = dom;
@@ -12,8 +12,16 @@ async function popup(error) {
   window.fetch = async () => ({ ok: true });
   window.chrome = {
     storage: {
-      session: { get: async () => ({ scorpionDownloadError: error }), remove: async (key) => removed.push(key) },
+      session: {
+        get: async () => ({ scorpionDownloadError: error }),
+        set: async () => {},
+        remove: async (key) => removed.push(key),
+      },
       local: { set() {} },
+    },
+    tabs: {
+      query: (_, callback) => callback([{ id: 7, url: 'https://example.com/watch' }]),
+      sendMessage: (_id, _msg, callback) => callback(tabReply),
     },
     runtime: { sendMessage: (_, callback) => callback({ alive: true, config: { lang: 'ar' } }) },
   };
@@ -63,4 +71,24 @@ test('expired, future and unknown errors are never displayed in the popup', asyn
       assert.equal(p.document.getElementById('downloadErrorMessage').textContent, '');
     } finally { p.dom.window.close(); }
   }
+});
+
+test('grabCurrentPageBtn shows noVideo inside errorCard without mutating statusBadge', async () => {
+  const p = await popup(null, { ok: false });
+  try {
+    const badge = p.document.getElementById('statusBadge');
+    const card = p.document.getElementById('downloadErrorCard');
+    const message = p.document.getElementById('downloadErrorMessage');
+    p.document.getElementById('grabCurrentPageBtn').click();
+    assert.equal(card.hidden, false);
+    assert.match(message.textContent, /قف على الفيديو المطلوب/);
+    assert.match(badge.textContent, /متصل بالبرنامج 🟢/);
+    p.document.getElementById('langToggleBtn').click();
+    assert.match(message.textContent, /Point to the video or scroll to it/);
+    assert.match(badge.textContent, /Connected 🟢/);
+    p.document.getElementById('dismissErrorBtn').click();
+    assert.equal(card.hidden, true);
+    assert.equal(message.textContent, '');
+    assert.ok(p.removed.includes('scorpionDownloadError'));
+  } finally { p.dom.window.close(); }
 });

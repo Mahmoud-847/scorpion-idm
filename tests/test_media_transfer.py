@@ -545,6 +545,29 @@ class MediaRegressionTests(unittest.TestCase):
             if ctrl and ctrl.get("file"):
                 ctrl["file"].close()
 
+    def test_bidi_filename_and_localized_errors_and_stage_modes(self):
+        xlsx = sq.bidi_filename("تقرير_الإنتاجية_الرئيسي_2026.xlsx")
+        self.assertTrue(xlsx.startswith("تقرير_الإنتاجية_الرئيسي_"))
+        self.assertTrue(xlsx.endswith("\u2066\u200e2026.xlsx\u2069"))
+        mp3 = sq.bidi_filename("أحمد عدوية - يا بنت السلطان.mp3")
+        self.assertTrue(mp3.endswith("\u2066\u200e.mp3\u2069"))
+        self.assertEqual(sq.bidi_filename("ubuntu-24.04.iso"), "\u2066ubuntu-24.04.iso\u2069")
+
+        en_drm = sq.localize_error_msg("هذا المحتوى محمي بتشفير DRM (مثل Netflix)", False)
+        self.assertIn("DRM-protected", en_drm)
+        ar_drm = sq.localize_error_msg("ERROR: This video is DRM protected", True)
+        self.assertIn("تشفير DRM", ar_drm)
+
+        self.assertEqual(sq.item_mode({"status": "downloading", "phase": "merging", "downloadedBytes": 100}), "merging")
+        self.assertEqual(sq.item_status_text({"status": "downloading", "phase": "merging", "downloadedBytes": 100}, True), "جاري الدمج...")
+        self.assertEqual(sq.item_status_text({"status": "downloading", "phase": "merging", "downloadedBytes": 100}, False), "Merging...")
+        self.assertEqual(sq.item_status_text({"status": "downloading", "phase": "connecting", "category": "Music", "downloadedBytes": 0}, True), "تجهيز الصوت...")
+        self.assertEqual(sq.item_status_text({"status": "downloading", "phase": "connecting", "category": "Music", "downloadedBytes": 0}, False), "Preparing audio...")
+        self.assertEqual(sq.item_status_text({"status": "downloading", "phase": "connecting", "isVideo": True, "downloadedBytes": 0}, True), "تجهيز الفيديو...")
+        self.assertEqual(sq.item_status_text({"status": "downloading", "phase": "connecting", "isVideo": True, "downloadedBytes": 0}, False), "Preparing video...")
+        self.assertEqual(sq.item_status_text({"status": "queued"}, True), "في الانتظار")
+        self.assertEqual(sq.item_status_text({"status": "queued"}, False), "Queued")
+
 
 if __name__ == "__main__":
     unittest.main()

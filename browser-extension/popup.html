@@ -4,7 +4,8 @@
     <meta charset="UTF-8" />
     <style>
       body {
-        width: 340px;
+        width: 356px;
+        box-sizing: border-box;
         margin: 0;
         padding: 14px;
         background: #090d16;
@@ -26,17 +27,22 @@
         font-weight: 800;
         font-size: 14px;
         color: #fbbf24;
+        white-space: nowrap;
+        flex-shrink: 0;
       }
       .header-actions {
         display: flex;
         align-items: center;
         gap: 6px;
+        flex-shrink: 0;
       }
       .status {
         font-size: 11px;
         padding: 3px 8px;
         border-radius: 99px;
         font-weight: 700;
+        white-space: nowrap;
+        flex-shrink: 0;
       }
       .status.online {
         background: rgba(16, 185, 129, 0.18);
@@ -71,9 +77,13 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 8px;
         font-size: 12px;
         margin: 6px 0;
         cursor: pointer;
+      }
+      .row input[type="checkbox"] {
+        flex-shrink: 0;
       }
       .btn {
         width: 100%;
@@ -89,6 +99,26 @@
       }
       .btn:hover {
         opacity: 0.92;
+      }
+      .btn-secondary {
+        width: 100%;
+        margin-top: 8px;
+        padding: 7px;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        background: #1e293b;
+        color: #e2e8f0;
+        font-weight: 700;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .btn-secondary:hover {
+        border-color: #22d3ee;
+        color: #22d3ee;
+      }
+      .alert-card {
+        background: rgba(245, 158, 11, 0.10);
+        border: 1px solid rgba(245, 158, 11, 0.40);
       }
       .privacy-link { display: block; margin-top: 12px; color: #fbbf24; text-align: center; font-size: 12px; }
       .error-message { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
@@ -116,12 +146,12 @@
     </div>
 
     <button id="grabCurrentPageBtn" class="btn">
-      🎬 سحب فيديو الصفحة الحالية الآن
+      🎬 تحميل الفيديو المحدد الآن
     </button>
 
-    <div id="downloadErrorCard" class="card" hidden>
+    <div id="downloadErrorCard" class="card alert-card" hidden>
       <p id="downloadErrorMessage" class="error-message"></p>
-      <button id="dismissErrorBtn" class="btn" type="button">إخفاء الرسالة</button>
+      <button id="dismissErrorBtn" class="btn-secondary" type="button">إخفاء الرسالة</button>
     </div>
 
     <a id="privacyLink" class="privacy-link" href="https://github.com/Mahmoud-847/scorpion-idm/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">سياسة الخصوصية</a>

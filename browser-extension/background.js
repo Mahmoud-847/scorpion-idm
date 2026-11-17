@@ -10,7 +10,7 @@ let config = {
   lang: 'ar',
 };
 
-const VALID_ERROR_CODES = new Set(['connection', 'drmProtected', 'telegramSource', 'telegramAudio', 'transfer']);
+const VALID_ERROR_CODES = new Set(['connection', 'drmProtected', 'noVideo', 'telegramSource', 'telegramAudio', 'transfer']);
 const DRM_VIDEO_HOST_RE = /(^|\.)(netflix\.com|disneyplus\.com|primevideo\.com|shahid\.mbc\.net|watchit\.com|osnplus\.com|tv\.apple\.com|hulu\.com|max\.com|peacocktv\.com|paramountplus\.com|tod\.tv|starzplay\.com)$/i;
 const NO_COOKIE_MUSIC_HOST_RE = /(^|\.)(open\.spotify\.com|spotify\.com|music\.apple\.com|deezer\.com|anghami\.com)$/i;
 

@@ -10,6 +10,7 @@ if sys.stderr is None:
 
 import json
 import copy
+import html
 import re
 import time
 import uuid
@@ -91,6 +92,7 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QStyle,
     QStyleOptionViewItem,
+    QTextBrowser,
 )
 
 # ==============================================================================
@@ -98,15 +100,17 @@ from PyQt6.QtWidgets import (
 # ==============================================================================
 PALETTES = {
     "light": {
-        "bg": "#f4f5f7", "surface": "#ffffff", "surface2": "#f1f3f6", "border": "#e2e5ea",
-        "text": "#1f2430", "muted": "#6b7280", "accent": "#2563eb", "accent_hover": "#1d4ed8",
-        "accent_soft": "#e8effd", "danger": "#dc2626", "success": "#16a34a", "warn": "#d97706",
-        "track": "#e7eaef",
+        "bg": "#f4f5f7", "surface": "#ffffff", "surface2": "#f1f3f6", "border": "#dce0e7",
+        "text": "#181d27", "muted": "#525866", "accent": "#1d4ed8", "accent_hover": "#1e40af",
+        "primary_bg": "#1d4ed8", "primary_hover": "#1e40af",
+        "accent_soft": "#e8effd", "danger": "#b91c1c", "success": "#15803d", "warn": "#b45309",
+        "track": "#e2e6ed",
     },
     "dark": {
         "bg": "#0f1115", "surface": "#171a21", "surface2": "#1e222b", "border": "#2a2f3a",
-        "text": "#e6e8ec", "muted": "#8f98a8", "accent": "#3b82f6", "accent_hover": "#60a5fa",
-        "accent_soft": "#1b2742", "danger": "#f87171", "success": "#4ade80", "warn": "#fbbf24",
+        "text": "#e6e8ec", "muted": "#94a0b2", "accent": "#60a5fa", "accent_hover": "#93c5fd",
+        "primary_bg": "#2563eb", "primary_hover": "#1d4ed8",
+        "accent_soft": "#17223b", "danger": "#f87171", "success": "#4ade80", "warn": "#fbbf24",
         "track": "#262b35",
     },
 }
@@ -126,29 +130,51 @@ def L(text) -> str:
     return "\u200e" + str(text) + "\u200e"
 
 
+def bidi_filename(name: str) -> str:
+    """Isolate file extensions/numeric suffixes from RTL stems so .xlsx / .mp3 never visually reverse."""
+    s = str(name or "")
+    if not s:
+        return ""
+    if not re.search(r"[\u0600-\u06FF]", s):
+        return "\u2066" + s + "\u2069"
+    m = re.search(r"([0-9A-Za-z.-]*\.[A-Za-z0-9]{1,8})$", s)
+    if m:
+        return f"{s[:m.start()]}\u2066\u200e{m.group(1)}\u2069"
+    return s
+
+
 def mode_color(mode: str) -> str:
     p = pal()
-    return {"done": p["success"], "error": p["danger"], "paused": p["warn"]}.get(mode, p["accent"])
+    return {
+        "done": p["success"],
+        "error": p["danger"],
+        "paused": p["warn"],
+        "merging": p["accent"],
+    }.get(mode, p["accent"])
 
 
 _ICON_FONT = None
 
 
-def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
-    """Monochrome icon drawn from the built-in Windows icon font (Segoe Fluent / MDL2)."""
+def _icon_font_family() -> str:
     global _ICON_FONT
     if _ICON_FONT is None:
         from PyQt6.QtGui import QFontDatabase
 
         fams = QFontDatabase.families()
         _ICON_FONT = "Segoe Fluent Icons" if "Segoe Fluent Icons" in fams else "Segoe MDL2 Assets"
+    return _ICON_FONT
+
+
+def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
+    """Monochrome icon drawn from the built-in Windows icon font (Segoe Fluent / MDL2)."""
     from PyQt6.QtGui import QPixmap
 
     pm = QPixmap(size * 2, size * 2)
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    f = QFont(_ICON_FONT)
+    f = QFont(_icon_font_family())
     f.setPixelSize(int(size * 1.6))
     p.setFont(f)
     p.setPen(QColor(color or pal()["text"]))
@@ -158,7 +184,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.22"
+APP_VERSION = "2.1.23"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -218,18 +244,40 @@ def needs_login(err) -> bool:
                                    "rate-limit reached or login", "requires authentication"))
 
 
-def friendly_video_error(err) -> str:
-    """Why a video failed, in words the user can act on (same rules for every site)."""
-    text = str(err).replace("ERROR:", "").strip()
-    if any(k in text.lower() for k in ("drm protected", "this video is drm", "widevine", "playready", "encrypted media", "تشفير drm")):
-        return "هذا المحتوى محمي بتشفير DRM (مثل Netflix / Shahid) ولا يدعم التنزيل الخارجي. استخدم ميزة التنزيل داخل التطبيق الرسمي للمنصة."
-    if needs_login(text):
-        return ("الفيديو ده محتاج تسجيل دخول في الموقع. افتح الموقع في Chrome وسجّل دخول، "
-                "وبعدين اضغط زر التحميل اللي فوق الفيديو تاني.")
-    if "unsupported url" in text.lower():
-        return ("العنوان ده مش لفيديو واحد (زي صفحة بروفايل أو فيد). شغّل الفيديو نفسه واضغط زر التحميل اللي فوقه، "
-                "أو افتح المنشور لوحده وانسخ عنوانه.")
+def localize_error_msg(msg, is_ar: bool) -> str:
+    """Translate known user-facing download errors cleanly between Arabic and English."""
+    text = str(msg or "").replace("ERROR:", "").strip()
+    low = text.lower()
+    if any(k in low for k in ("drm protected", "this video is drm", "widevine", "playready", "encrypted media", "تشفير drm")):
+        return (
+            "هذا المحتوى محمي بتشفير DRM (مثل Netflix / Shahid) ولا يدعم التنزيل الخارجي. استخدم ميزة التنزيل داخل التطبيق الرسمي للمنصة."
+            if is_ar
+            else "DRM-protected content (e.g. Netflix / Shahid) cannot be downloaded externally. Use the official app's download feature."
+        )
+    if needs_login(text) or "محتاج تسجيل دخول" in text:
+        return (
+            "الفيديو ده محتاج تسجيل دخول في الموقع. افتح الموقع في المتصفح وسجّل دخول، وبعدين اضغط زر التحميل اللي فوق الفيديو تاني."
+            if is_ar
+            else "This video requires signing in on the site. Log in in your browser, then click the floating download button again."
+        )
+    if "unsupported url" in low or "مش لفيديو واحد" in text:
+        return (
+            "العنوان ده مش لفيديو واحد (زي صفحة بروفايل أو فيد). شغّل الفيديو نفسه واضغط زر التحميل اللي فوقه، أو افتح المنشور لوحده وانسخ عنوانه."
+            if is_ar
+            else "This URL is not a single video (it may be a profile or feed page). Play the video itself and use its button, or copy the post URL."
+        )
+    if "لم ينتج التنزيل ملف فيديو" in text:
+        return (
+            text
+            if is_ar
+            else "No video file was produced by the download. Please retry from the player."
+        )
     return text
+
+
+def friendly_video_error(err, is_ar: bool = True) -> str:
+    """Why a video failed, in words the user can act on (same rules for every site)."""
+    return localize_error_msg(err, is_ar)
 
 
 def video_format_for(quality: str, has_ffmpeg: bool = True) -> str:
@@ -260,6 +308,24 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.23",
+        "date": "2026-11-17",
+        "title_ar": "الإصدار 2.1.23 — ترقية الواجهة في جميع المراحل وتجربة RTL المتكاملة",
+        "title_en": "Version 2.1.23 — Full-Lifecycle UI Polish & Enhanced RTL/LTR Experience",
+        "ar": [
+            "إعادة تصميم بطاقة التحميل المنبثقة بمسافات مريحة، ترتيب أزرار طبيعي (الإجراء الرئيسي أولاً)، وحركة سلسة أثناء الاتصال والتحميل، مع زر إغلاق عند الاكتمال.",
+            "إعادة تصميم نافذة إضافة رابط ببطاقات حديثة وفحص غير متزامن للروابط مع تحذير فوري لمحتوى DRM وتعريب التصنيفات.",
+            "تحسين نافذة التقدم الـ 32 بورت بإلغاء الفراغ الزائد في الوضع المدمج وعرض رسائل الأخطاء وDRM كاملة متعددة الأسطر مع استجابة فورية لتبديل الثيم.",
+            "تحسين نافذة الإضافة والشريط العائم وتوضيح رسائل التنبيه داخل بطاقة التنبيه دون التأثير على شارة الاتصال.",
+        ],
+        "en": [
+            "Refined floating DownloadCard proportions, natural primary-first button hierarchy, smooth 25fps progress shimmer, and a Close action on completion.",
+            "Redesigned AddDownloadDialog with layered cards, non-blocking async URL probe, instant DRM warnings, and localized category labels.",
+            "Eliminated excess blank space in compact IDMProgressDialog, enabled wrapped readable error/DRM explanations, and synced live theme switching.",
+            "Polished UpdateDialog (non-blocking update check) and browser extension popup/floating panel alignment.",
+        ],
+    },
     {
         "version": "2.1.22",
         "date": "2026-11-17",
@@ -558,6 +624,7 @@ ICONS = {
     "delete": "\uE74D", "clear": "\uE894", "browser": "\uE774", "moon": "\uE708", "sun": "\uE706",
     "lang": "\uE8C1", "folder": "\uE838", "open": "\uE8A7", "close": "\uE711", "hide": "\uE921",
     "download": "\uE896", "settings": "\uE713", "update": "\uE777",
+    "search": "\uE721", "chevron": "\uE70D", "probe": "\uE773", "clock": "\uE823",
 }
 
 
@@ -580,17 +647,19 @@ QPushButton {{ background: {p['surface']}; border: 1px solid {p['border']}; bord
 QPushButton:hover {{ background: {p['surface2']}; }}
 QPushButton:pressed {{ background: {p['track']}; }}
 QPushButton:disabled {{ color: {p['muted']}; background: {p['surface2']}; }}
-QPushButton#PrimaryBtn, QPushButton#SuccessBtn {{ background: {p['accent']}; border-color: {p['accent']}; color: #ffffff; }}
-QPushButton#PrimaryBtn:hover, QPushButton#SuccessBtn:hover {{ background: {p['accent_hover']}; border-color: {p['accent_hover']}; }}
+QPushButton#PrimaryBtn, QPushButton#SuccessBtn {{ background: {p['primary_bg']}; border-color: {p['primary_bg']}; color: #ffffff; }}
+QPushButton#PrimaryBtn:hover, QPushButton#SuccessBtn:hover {{ background: {p['primary_hover']}; border-color: {p['primary_hover']}; }}
+QPushButton#PrimaryBtn:pressed, QPushButton#SuccessBtn:pressed {{ background: {p['primary_hover']}; border-color: {p['primary_hover']}; }}
 QPushButton#PrimaryBtn:disabled, QPushButton#SuccessBtn:disabled {{ background: {p['surface2']}; border-color: {p['border']}; color: {p['muted']}; }}
 QPushButton#DangerBtn {{ color: {p['danger']}; }}
-QPushButton#DangerBtn:hover {{ border-color: {p['danger']}; }}
+QPushButton#DangerBtn:hover {{ background: rgba(220, 38, 38, 0.10); border-color: {p['danger']}; }}
 QPushButton#ToolBtn {{ background: transparent; border: 1px solid transparent; padding: 7px 11px; }}
 QPushButton#ToolBtn:hover {{ background: {p['surface2']}; border-color: {p['border']}; }}
 QPushButton#ToolBtn:disabled {{ background: transparent; color: {p['muted']}; }}
-QLineEdit, QComboBox, QSpinBox {{ background: {p['surface']}; border: 1px solid {p['border']}; border-radius: 7px; padding: 6px 10px; selection-background-color: {p['accent']}; selection-color: #ffffff; }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {p['accent']}; }}
-QComboBox QAbstractItemView {{ background: {p['surface']}; border: 1px solid {p['border']}; selection-background-color: {p['accent_soft']}; selection-color: {p['text']}; }}
+QLineEdit, QComboBox, QSpinBox, QTimeEdit {{ background: {p['surface']}; border: 1px solid {p['border']}; border-radius: 7px; padding: 6px 10px; selection-background-color: {p['primary_bg']}; selection-color: #ffffff; }}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTimeEdit:focus {{ border-color: {p['accent']}; }}
+QSpinBox::up-button, QSpinBox::down-button, QTimeEdit::up-button, QTimeEdit::down-button {{ width: 16px; border: none; background: transparent; }}
+QComboBox QAbstractItemView {{ background: {p['surface']}; border: 1px solid {p['border']}; selection-background-color: {p['accent_soft']}; selection-color: {p['text']}; padding: 4px; }}
 QTreeWidget, QTableWidget {{ background: {p['surface']}; border: 1px solid {p['border']}; border-radius: 10px; outline: 0; gridline-color: transparent; alternate-background-color: {p['surface']}; }}
 QTreeWidget::item {{ padding: 8px 6px; border: none; }}
 QTreeWidget::item:hover {{ background: {p['surface2']}; }}
@@ -599,8 +668,8 @@ QTableWidget::item {{ padding: 0px 8px; border: none; border-bottom: 1px solid {
 QTableWidget::item:hover {{ background: {p['surface2']}; }}
 QTableWidget::item:selected {{ background: {p['accent_soft']}; color: {p['text']}; }}
 QHeaderView {{ background: transparent; border: none; }}
-QHeaderView::section {{ background: {p['surface']}; color: {p['muted']}; font-size: 12px; font-weight: 600; padding: 9px 8px; border: none; border-bottom: 1px solid {p['border']}; }}
-QTableCornerButton::section {{ background: {p['surface']}; border: none; }}
+QHeaderView::section {{ background: transparent; color: {p['muted']}; font-size: 12px; font-weight: 600; padding: 9px 8px; border: none; border-bottom: 1px solid {p['border']}; }}
+QTableCornerButton::section {{ background: transparent; border: none; }}
 QTabWidget::pane {{ border: 1px solid {p['border']}; border-radius: 10px; background: {p['surface']}; top: -1px; }}
 QTabBar::tab {{ background: transparent; color: {p['muted']}; padding: 9px 18px; border: none; border-bottom: 2px solid transparent; font-weight: 600; }}
 QTabBar::tab:selected {{ color: {p['accent']}; border-bottom: 2px solid {p['accent']}; }}
@@ -838,16 +907,21 @@ class RingProgress(QWidget):
         self.shown = 0.0
         self.mode = "connecting"
         self.angle = 0
+        self._has_state = False
 
     def set_state(self, pct: float, mode: str):
         self.target = max(0.0, min(100.0, float(pct or 0)))
+        if not self._has_state or mode in ("paused", "done", "error", "merging") or self.mode != mode:
+            self.shown = self.target
         self.mode = mode
+        self._has_state = True
+        self.update()
 
     def tick(self):
         self.shown += (self.target - self.shown) * 0.15
         if abs(self.target - self.shown) < 0.05:
             self.shown = self.target
-        if self.mode in ("active", "connecting"):
+        if self.mode in ("active", "connecting", "merging"):
             self.angle = (self.angle + 6) % 360
         self.update()
 
@@ -869,22 +943,27 @@ class RingProgress(QWidget):
         if self.mode == "connecting" and self.shown < 0.5:
             p.drawArc(r, int((90 - self.angle) * 16), int(-80 * 16))
         else:
-            span = 100.0 if self.mode == "done" else self.shown
+            if self.mode == "done":
+                span = 100.0
+            elif self.mode == "merging" and self.target >= 99.0:
+                span = 100.0
+            else:
+                span = self.shown
             if span > 0:
                 p.drawArc(r, 90 * 16, int(-span * 3.6 * 16))
-            if self.mode == "active" and span < 100:
+            if self.mode in ("active", "merging") and (self.mode == "merging" or span < 100):
                 # small moving glow dot on the track to show activity
                 glow = QColor(col)
-                glow.setAlpha(90)
+                glow.setAlpha(110)
                 p.setPen(QPen(glow, stroke))
-                p.drawArc(r, int((90 - self.angle) * 16), int(-10 * 16))
+                p.drawArc(r, int((90 - self.angle) * 16), int(-12 * 16))
 
         if self.mode == "done":
             txt, size = "✓", 26
         elif self.mode == "error":
             txt, size = "!", 26
         else:
-            txt, size = f"{self.shown:.0f}%", 18
+            txt, size = f"{self.target:.0f}%", 18
         f = QFont("Segoe UI", 1, QFont.Weight.DemiBold)
         f.setPixelSize(size)
         p.setFont(f)
@@ -901,10 +980,15 @@ class SlimProgressBar(QWidget):
         self.target = 0.0
         self.shown = 0.0
         self.mode = "connecting"
+        self._has_state = False
 
     def set_state(self, pct: float, mode: str):
         self.target = max(0.0, min(100.0, float(pct or 0)))
+        if not self._has_state or mode in ("paused", "done", "error", "merging") or self.mode != mode:
+            self.shown = self.target
         self.mode = mode
+        self._has_state = True
+        self.update()
 
     def tick(self):
         self.shown += (self.target - self.shown) * 0.15
@@ -930,7 +1014,7 @@ class SlimProgressBar(QWidget):
             return
         fw = w * (100.0 if self.mode == "done" else self.shown) / 100.0
         p.fillRect(QRectF(0, 0, fw, h), col)
-        if self.mode == "active" and fw > 20:
+        if self.mode in ("active", "merging") and fw > 20:
             sw = 80
             x = -sw + (fw + sw) * ((time.time() * 0.5) % 1.0)
             g = QLinearGradient(x, 0, x + sw, 0)
@@ -953,12 +1037,14 @@ class SegmentMapWidget(QWidget):
         self.total = 0
         self.progress = 0.0
         self.done = False
+        self.mode = "active"
 
-    def set_data(self, segments, total: int, progress: float, done: bool):
+    def set_data(self, segments, total: int, progress: float, done: bool, mode: str = "active"):
         self.segments = segments or []
         self.total = int(total or 0)
         self.progress = float(progress or 0)
         self.done = done
+        self.mode = mode
         self.update()
 
     def paintEvent(self, event):
@@ -972,7 +1058,7 @@ class SegmentMapWidget(QWidget):
         empty = QColor(c["track"])
         p.fillPath(path, empty)
         p.setClipPath(path)
-        got = QColor(c["success"] if self.done else c["accent"])
+        got = QColor(mode_color("done" if self.done else self.mode))
         known = self.total > 0 and all(s.get("endByte", -1) >= s.get("startByte", 0) for s in self.segments)
         if not known:
             p.fillRect(QRectF(0, 0, w * min(100.0, self.progress) / 100.0, h), got)
@@ -985,7 +1071,7 @@ class SegmentMapWidget(QWidget):
                 x0, x1 = cur * scale, (end + 1) * scale
                 p.fillRect(QRectF(x0, 0, max(0.0, x1 - x0), h), empty)
                 if s.get("status") == "downloading":
-                    p.fillRect(QRectF(max(0.0, x0 - 2), 0, 2, h), QColor(c["warn"]))
+                    p.fillRect(QRectF(min(max(0.0, w - 2.0), max(0.0, x0)), 0, 2, h), QColor(c["warn"]))
         sep = QColor(c["surface"])
         p.setPen(QPen(sep, 1))
         for s in self.segments:
@@ -1015,7 +1101,6 @@ class SpeedGraphWidget(QWidget):
             p.drawLine(QPointF(0, y), QPointF(w, y))
         if len(self.history) < 2:
             return
-        _mirror_if_rtl(self, p)
         max_spd = max(max(self.history), 102400)
         pts = []
         for i, val in enumerate(self.history):
@@ -1064,11 +1149,67 @@ def _vsep():
     return s
 
 
-def _set_elided(label: QLabel, text: str):
+def _set_elided(label: QLabel, text: str, mode=Qt.TextElideMode.ElideMiddle):
     label.setToolTip(text)
     fm = label.fontMetrics()
     width = max(80, label.width() - 4)
-    label.setText(fm.elidedText(text, Qt.TextElideMode.ElideMiddle, width))
+    label.setText(fm.elidedText(text, mode, width))
+
+
+def _elide_filename(label: QLabel, raw_name: str):
+    """Elide raw filename cleanly before inserting BiDi isolation marks."""
+    raw = str(raw_name or "")
+    label.setToolTip(bidi_filename(raw))
+    fm = label.fontMetrics()
+    width = max(80, label.width() - 4)
+    elided = fm.elidedText(raw, Qt.TextElideMode.ElideMiddle, width)
+    label.setText(bidi_filename(elided))
+
+
+class FluentComboBox(QComboBox):
+    """QComboBox whose display text obeys RTL/LTR leading alignment even under QSS."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(34)
+
+    def showPopup(self):
+        view = self.view()
+        if view is not None:
+            view.setLayoutDirection(self.layoutDirection())
+        super().showPopup()
+
+    def paintEvent(self, event):
+        c = pal()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor(c["accent"] if self.hasFocus() else c["border"]), 1.0))
+        p.setBrush(QColor(c["surface"]))
+        p.drawRoundedRect(r, 7, 7)
+
+        rtl = self.layoutDirection() == Qt.LayoutDirection.RightToLeft
+        pad_side = 10
+        arrow_w = 24
+        if rtl:
+            arrow_r = QRectF(pad_side - 2, 0, arrow_w, self.height())
+            text_r = QRectF(pad_side + arrow_w, 0, max(10.0, self.width() - (2 * pad_side + arrow_w)), self.height())
+            align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter
+        else:
+            arrow_r = QRectF(self.width() - pad_side - arrow_w + 2, 0, arrow_w, self.height())
+            text_r = QRectF(pad_side, 0, max(10.0, self.width() - (2 * pad_side + arrow_w)), self.height())
+            align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter
+
+        p.setFont(self.font())
+        p.setPen(QColor(c["text"] if self.isEnabled() else c["muted"]))
+        txt = self.fontMetrics().elidedText(self.currentText(), Qt.TextElideMode.ElideRight, int(text_r.width()))
+        p.drawText(text_r, align, txt)
+
+        f_ico = QFont(_icon_font_family())
+        f_ico.setPixelSize(11)
+        p.setFont(f_ico)
+        p.setPen(QColor(c["muted"]))
+        p.drawText(arrow_r, Qt.AlignmentFlag.AlignCenter, ICONS["chevron"])
 
 
 # ==============================================================================
@@ -1123,7 +1264,7 @@ class IDMProgressDialog(QDialog):
         self.lbl_url.setObjectName("Url")
         self.lbl_url.setMinimumWidth(1)
         # Latin-only text (file names, hosts) would otherwise hug the left edge in Arabic mode
-        lead = (Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute) if self.is_ar else Qt.AlignmentFlag.AlignLeft
+        lead = (Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute) if self.is_ar else (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute)
         self.lbl_filename.setAlignment(lead | Qt.AlignmentFlag.AlignVCenter)
         self.lbl_url.setAlignment(lead | Qt.AlignmentFlag.AlignVCenter)
         pill_row = QHBoxLayout()
@@ -1202,6 +1343,7 @@ class IDMProgressDialog(QDialog):
         self.seg_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.seg_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.seg_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.seg_table.setMinimumHeight(155)
         sl.addWidget(self.seg_table, 1)
         self.tabs.addTab(seg_tab, T("الأجزاء", "Segments"))
 
@@ -1279,6 +1421,16 @@ class IDMProgressDialog(QDialog):
         self.data_timer = QTimer(self)
         self.data_timer.timeout.connect(self.refresh_ui)
         self.refresh_ui()
+        avail = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        if self.tabs.isHidden():
+            self.adjustSize()
+            self.resize(max(640, self.width()), self.minimumSizeHint().height())
+        else:
+            self.resize(max(700, self.width()), min(780, avail.height() - 30))
+
+    def apply_theme(self):
+        self._apply_icons()
+        self.refresh_ui()
 
     def _update_details_button(self):
         opened = not self.tabs.isHidden()
@@ -1292,7 +1444,7 @@ class IDMProgressDialog(QDialog):
         self._update_details_button()
         avail = (self.screen() or QApplication.primaryScreen()).availableGeometry()
         if opened:
-            self.resize(max(self.width(), 700), min(700, avail.height() - 40))
+            self.resize(max(self.width(), 700), min(780, avail.height() - 30))
         else:
             width = max(640, self.width())
             self.adjustSize()
@@ -1354,11 +1506,13 @@ class IDMProgressDialog(QDialog):
         elif phase == "selecting":
             mode, st = "connecting", T("في انتظار اختيار ملفات التورنت", "Waiting for file selection")
         elif phase == "merging":
-            mode, st = "connecting", T("جاري دمج الصوت والصورة", "Merging audio & video")
+            mode, st = "merging", T("جاري دمج الصوت والصورة", "Merging audio & video")
         elif phase == "connecting" or done == 0:
             mode = "connecting"
             if item.get("isTorrent"):
                 st = T("جاري البحث عن Peers", "Finding peers")
+            elif item.get("category") == "Music" or item.get("videoQuality") == "audio":
+                st = T("جاري تجهيز المقطع الصوتي", "Preparing audio")
             else:
                 st = T("جاري تجهيز الفيديو", "Preparing video") if is_video else T("جاري الاتصال", "Connecting")
         else:
@@ -1375,12 +1529,20 @@ class IDMProgressDialog(QDialog):
             "border-radius: 10px; padding: 3px 12px; font-size: 12px; font-weight: 600;"
         )
 
-        self.setWindowTitle(f"{pct:.0f}% — {item.get('filename', '')}")
-        _set_elided(self.lbl_filename, item.get("filename", ""))
+        self.setWindowTitle(f"{pct:.0f}% — {bidi_filename(item.get('filename', ''))}")
+        _elide_filename(self.lbl_filename, item.get("filename", ""))
         if status == "error" and item.get("errorMsg"):
-            _set_elided(self.lbl_url, str(item.get("errorMsg")))
+            err_msg = localize_error_msg(item.get("errorMsg"), self.is_ar)
+            self.lbl_url.setWordWrap(True)
+            self.lbl_url.setText(err_msg)
+            self.lbl_url.setToolTip(err_msg)
             self.lbl_url.setStyleSheet(f"color: {pal()['danger']}; font-size: 12px;")
+            if self.tabs.isHidden():
+                hint_h = self.minimumSizeHint().height()
+                if self.height() < hint_h:
+                    self.resize(self.width(), hint_h)
         else:
+            self.lbl_url.setWordWrap(False)
             host = urllib.parse.urlparse(item.get("url", "")).netloc or item.get("url", "")
             _set_elided(self.lbl_url, host)
             self.lbl_url.setStyleSheet("")
@@ -1408,13 +1570,16 @@ class IDMProgressDialog(QDialog):
         resume = (T("الاستكمال مدعوم", "Resumable") if (item.get("supportsRange") or is_video)
                   else T("الاستكمال غير مدعوم", "Not resumable"))
         sep = "     •     "
-        self.lbl_meta.setText(sep.join([
-            T(f"الوقت المنقضي {L(elapsed)}", f"Elapsed {elapsed}"),
-            T(f"الاتصالات {L(f'{active}/{len(segs)}')}", f"Connections {active}/{len(segs)}"),
-            resume,
-        ]))
+        meta_parts = [T(f"الوقت المنقضي {L(elapsed)}", f"Elapsed {elapsed}")]
+        if status == "downloading" and segs:
+            meta_parts.append(T(f"الاتصالات {L(f'{active}/{len(segs)}')}", f"Connections {active}/{len(segs)}"))
+        elif segs:
+            meta_parts.append(T(f"البورتات {L(len(segs))}", f"Ports {len(segs)}"))
+        if status != "error":
+            meta_parts.append(resume)
+        self.lbl_meta.setText(sep.join(meta_parts))
 
-        self.seg_map.set_data(segs, total, pct, status == "completed")
+        self.seg_map.set_data(segs, total, pct, status == "completed", mode)
         hist = item.get("speedHistory", [])
         self.speed_graph.set_history(hist)
         peak = max(hist) if hist else 0
@@ -1422,14 +1587,36 @@ class IDMProgressDialog(QDialog):
         self._fill_segment_table(segs)
 
         finished = status == "completed"
+        browser_owned = bool(item.get("browserTransfer"))
+        is_drm_err = status == "error" and (
+            is_drm_video_url(item.get("url", "")) or "drm" in str(item.get("errorMsg", "")).lower()
+        )
         self.btn_open_file.setVisible(finished)
-        self.btn_toggle.setVisible(not finished)
+        self.btn_toggle.setVisible(
+            (not finished)
+            and (not is_drm_err)
+            and (not browser_owned or status not in ("downloading", "error"))
+        )
+        self.btn_toggle.setEnabled(phase != "merging")
         self.btn_cancel.setVisible(not finished)
+        self.btn_open_folder.setEnabled(
+            any(os.path.exists(pth) for pth in (item.get("filePath") or "", item.get("tempFilePath") or "", item.get("saveDir") or "") if pth)
+        )
+        want_obj = "" if status == "downloading" else "PrimaryBtn"
+        if self.btn_toggle.objectName() != want_obj:
+            self.btn_toggle.setObjectName(want_obj)
+            self.btn_toggle.style().unpolish(self.btn_toggle)
+            self.btn_toggle.style().polish(self.btn_toggle)
         if status == "downloading":
             self.btn_toggle.setText(T("إيقاف مؤقت", "Pause"))
-            self.btn_toggle.setIcon(glyph_icon(ICONS["pause"], "#ffffff"))
+            self.btn_toggle.setIcon(glyph_icon(ICONS["pause"], pal()["muted"] if phase == "merging" else pal()["text"]))
         else:
-            self.btn_toggle.setText(T("استئناف", "Resume") if status != "error" else T("إعادة المحاولة", "Retry"))
+            if status in ("queued", "scheduled"):
+                self.btn_toggle.setText(T("تشغيل الآن", "Start now"))
+            elif status == "error":
+                self.btn_toggle.setText(T("إعادة المحاولة", "Retry"))
+            else:
+                self.btn_toggle.setText(T("استئناف", "Resume"))
             self.btn_toggle.setIcon(glyph_icon(ICONS["play"], "#ffffff"))
 
         if item.get("checksumSha256"):
@@ -1459,7 +1646,7 @@ class IDMProgressDialog(QDialog):
             else:
                 size = dl
             part_pct = 100.0 if s.get("status") == "completed" else ((dl / size * 100.0) if size > 0 else 0.0)
-            label = s.get("label") or f"#{s.get('id')}"
+            label = re.sub(r"#(\d+)", lambda m: L("#" + m.group(1)), str(s.get("label") or f"#{s.get('id')}"))
             st_txt, st_col = status_map.get(s.get("status"), (s.get("status", ""), c["muted"]))
             values = [
                 (label, None),
@@ -1534,6 +1721,7 @@ class IDMProgressDialog(QDialog):
 # ==============================================================================
 class AddDownloadDialog(QDialog):
     qualities_ready = pyqtSignal(str, dict)
+    probe_ready = pyqtSignal(str, dict)
 
     def __init__(self, engine, initial_url: str = "", is_video: bool = False, lang: str = "ar", parent=None, is_torrent: bool = False):
         super().__init__(parent)
@@ -1542,96 +1730,141 @@ class AddDownloadDialog(QDialog):
         self.is_torrent = is_torrent
         self.is_ar = lang == "ar"
         self.result_opts = None
+        c = pal()
 
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         if is_torrent:
-            title_ar = "🧲 تحميل تورنت أو رابط Magnet — Scorpion IDM"
-            title_en = "🧲 Add Torrent / Magnet Link — Scorpion IDM"
+            title_ar = "تحميل تورنت أو رابط Magnet — Scorpion IDM"
+            title_en = "Add Torrent / Magnet Link — Scorpion IDM"
         elif is_video:
-            title_ar = "🎬 سحب فيديو ذكي (32 بورت) — Scorpion IDM"
-            title_en = "🎬 Smart Video Grabber (32 Ports) — Scorpion IDM"
+            title_ar = "سحب فيديو ذكي (32 بورت) — Scorpion IDM"
+            title_en = "Smart Video Grabber (32 Ports) — Scorpion IDM"
         else:
-            title_ar = "📥 إضافة رابط تحميل جديد (32 بورت) — Scorpion IDM"
-            title_en = "📥 Add New Download (32 Ports) — Scorpion IDM"
+            title_ar = "إضافة رابط تحميل جديد (32 بورت) — Scorpion IDM"
+            title_en = "Add New Download (32 Ports) — Scorpion IDM"
         self.setWindowTitle(title_ar if self.is_ar else title_en)
-        self.resize(600, 355)
+        self.resize(660, 420)
+        self.setMinimumWidth(560)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if self.is_ar else Qt.LayoutDirection.LeftToRight)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
 
-        # URL Input + Probe + Browse .torrent
-        layout.addWidget(
-            QLabel(
-                "رابط التحميل، أو رابط ماجنت، أو مسار ملف تورنت:"
-                if self.is_ar
-                else "Download URL, Magnet URI, or .torrent File Path:"
-            )
+        # Card 1: Source URL + Probe + Torrent File Picker
+        src_card = QFrame()
+        src_card.setObjectName("CardFrame")
+        sv = QVBoxLayout(src_card)
+        sv.setContentsMargins(16, 14, 16, 14)
+        sv.setSpacing(8)
+        hdr_lbl = QLabel(
+            "رابط التحميل، أو رابط ماجنت، أو مسار ملف تورنت:"
+            if self.is_ar
+            else "Download URL, Magnet URI, or .torrent File Path:"
         )
+        hdr_lbl.setStyleSheet("font-weight: 700;")
+        sv.addWidget(hdr_lbl)
+
         url_row = QHBoxLayout()
+        url_row.setSpacing(8)
         self.txt_url = QLineEdit(initial_url)
+        self.txt_url.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.txt_url.setPlaceholderText("https://...  |  magnet:?xt=urn:btih:...  |  C:\\...\\file.torrent")
         self.txt_url.textChanged.connect(self._on_url_text_changed)
         url_row.addWidget(self.txt_url, 1)
 
-        btn_torrent_file = QPushButton("🧲 ملف تورنت" if self.is_ar else "🧲 .torrent File")
+        btn_torrent_file = QPushButton("ملف تورنت" if self.is_ar else ".torrent")
+        btn_torrent_file.setIcon(glyph_icon(ICONS["torrent"], c["text"]))
         btn_torrent_file.clicked.connect(self.browse_torrent_file)
         url_row.addWidget(btn_torrent_file)
 
-        btn_probe = QPushButton("🔍 فحص الرابط" if self.is_ar else "🔍 Probe")
-        btn_probe.clicked.connect(self.probe_now)
-        url_row.addWidget(btn_probe)
-        layout.addLayout(url_row)
+        self.btn_probe = QPushButton("فحص الرابط" if self.is_ar else "Probe")
+        self.btn_probe.setIcon(glyph_icon(ICONS["probe"], c["text"]))
+        self.btn_probe.clicked.connect(self.probe_now)
+        url_row.addWidget(self.btn_probe)
+        sv.addLayout(url_row)
 
         self.lbl_probe_info = QLabel("")
-        self.lbl_probe_info.setStyleSheet("color: #059669; font-weight: bold;")
-        layout.addWidget(self.lbl_probe_info)
+        self.lbl_probe_info.setWordWrap(True)
+        self.lbl_probe_info.setStyleSheet(f"color: {c['muted']}; font-size: 12px; font-weight: 600;")
+        sv.addWidget(self.lbl_probe_info)
+        layout.addWidget(src_card)
 
-        # Filename & Category
+        # Card 2: File Name, Category, Save Folder, Quality / Connections
+        det_card = QFrame()
+        det_card.setObjectName("CardFrame")
+        dv = QVBoxLayout(det_card)
+        dv.setContentsMargins(16, 14, 16, 14)
         form_grid = QGridLayout()
+        form_grid.setHorizontalSpacing(10)
+        form_grid.setVerticalSpacing(10)
+
         form_grid.addWidget(QLabel("اسم الملف:" if self.is_ar else "File Name:"), 0, 0)
         self.txt_filename = QLineEdit()
         form_grid.addWidget(self.txt_filename, 0, 1)
 
         form_grid.addWidget(QLabel("التصنيف:" if self.is_ar else "Category:"), 0, 2)
-        self.cmb_cat = QComboBox()
-        self.cmb_cat.addItems(["Programs", "Compressed", "Video", "Music", "Documents", "General"])
+        self.cmb_cat = FluentComboBox()
+        for key, ar_lbl, en_lbl in (
+            ("Programs", "برامج", "Programs"),
+            ("Compressed", "ملفات مضغوطة", "Compressed"),
+            ("Video", "فيديو", "Video"),
+            ("Music", "صوتيات", "Music"),
+            ("Documents", "مستندات", "Documents"),
+            ("General", "عام", "General"),
+        ):
+            self.cmb_cat.addItem(ar_lbl if self.is_ar else en_lbl, key)
         if is_video or is_torrent:
-            self.cmb_cat.setCurrentText("Video")
+            self._set_category("Video")
+        else:
+            self._set_category("General")
+        self.cmb_cat.currentIndexChanged.connect(self._on_category_changed)
         form_grid.addWidget(self.cmb_cat, 0, 3)
 
         form_grid.addWidget(QLabel("مجلد الحفظ:" if self.is_ar else "Save Folder:"), 1, 0)
         self.txt_savedir = QLineEdit(self.engine.settings["downloadsRoot"])
-        form_grid.addWidget(self.txt_savedir, 1, 1)
-        btn_browse = QPushButton("📁 تصفح" if self.is_ar else "📁 Browse")
+        self.txt_savedir.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.txt_savedir.setCursorPosition(0)
+        form_grid.addWidget(self.txt_savedir, 1, 1, 1, 2)
+        btn_browse = QPushButton("تصفح" if self.is_ar else "Browse")
+        btn_browse.setIcon(glyph_icon(ICONS["folder"], c["text"]))
         btn_browse.clicked.connect(self.browse_dir)
-        form_grid.addWidget(btn_browse, 1, 2)
+        form_grid.addWidget(btn_browse, 1, 3)
 
+        self.probe_ready.connect(self._on_probe_ready)
         if is_video:
             form_grid.addWidget(QLabel("جودة الفيديو:" if self.is_ar else "Video Quality:"), 2, 0)
-            self.cmb_quality = QComboBox()
+            self.cmb_quality = FluentComboBox()
             self.qualities_ready.connect(self._on_qualities_ready)
             self._fill_qualities([])
-            form_grid.addWidget(self.cmb_quality, 2, 1)
+            form_grid.addWidget(self.cmb_quality, 2, 1, 1, 3)
         else:
-            form_grid.addWidget(QLabel("عدد البورتات (الأجزاء):" if self.is_ar else "Parallel Ports:"), 2, 0)
-            self.cmb_conn = QComboBox()
+            form_grid.addWidget(QLabel("عدد البورتات:" if self.is_ar else "Parallel Ports:"), 2, 0)
+            self.cmb_conn = FluentComboBox()
             self.cmb_conn.addItems(["1", "4", "8", "16", "32", "64"])
             self.cmb_conn.setCurrentText("32")
             form_grid.addWidget(self.cmb_conn, 2, 1)
 
-        layout.addLayout(form_grid)
+        form_grid.setColumnStretch(1, 2)
+        dv.addLayout(form_grid)
+        layout.addWidget(det_card)
         layout.addStretch()
 
-        # IDM 3 Action Buttons
+        # Action Buttons
         btn_row = QHBoxLayout()
-        btn_start = QPushButton("🚀 بدء التحميل الآن" if self.is_ar else "🚀 Start Download Now")
+        btn_row.setSpacing(8)
+        btn_start = QPushButton("بدء التحميل الآن" if self.is_ar else "Start Download Now")
         btn_start.setObjectName("PrimaryBtn")
+        btn_start.setIcon(glyph_icon(ICONS["download"], "#ffffff"))
+        btn_start.setMinimumWidth(160)
         btn_start.clicked.connect(lambda: self.accept_download(True))
         btn_row.addWidget(btn_start)
 
-        btn_later = QPushButton("🕒 التحميل لاحقاً" if self.is_ar else "🕒 Download Later")
+        btn_later = QPushButton("التحميل لاحقاً" if self.is_ar else "Download Later")
+        btn_later.setIcon(glyph_icon(ICONS["clock"], c["text"]))
         btn_later.clicked.connect(lambda: self.accept_download(False))
         btn_row.addWidget(btn_later)
+        btn_row.addStretch()
 
         btn_cancel = QPushButton("إلغاء" if self.is_ar else "Cancel")
         btn_cancel.clicked.connect(self.reject)
@@ -1643,10 +1876,24 @@ class AddDownloadDialog(QDialog):
         elif is_torrent:
             QTimer.singleShot(150, self.browse_torrent_file)
 
+    def _set_category(self, key: str):
+        idx = self.cmb_cat.findData(key)
+        if idx >= 0:
+            self.cmb_cat.setCurrentIndex(idx)
+
+    def _on_category_changed(self):
+        cat = self.cmb_cat.currentData() or "General"
+        dl_root = os.path.normpath(self.engine.settings.get("downloadsRoot") or "")
+        cur_dir = os.path.normpath(self.txt_savedir.text().strip() or dl_root)
+        if dl_root and (cur_dir == dl_root or os.path.dirname(cur_dir) == dl_root):
+            self.txt_savedir.setText(os.path.join(dl_root, cat))
+            self.txt_savedir.setCursorPosition(0)
+
     def browse_dir(self):
         d = QFileDialog.getExistingDirectory(self, "Select Save Folder", self.txt_savedir.text())
         if d:
-            self.txt_savedir.setText(d)
+            self.txt_savedir.setText(os.path.normpath(d))
+            self.txt_savedir.setCursorPosition(0)
 
     def browse_torrent_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1660,8 +1907,9 @@ class AddDownloadDialog(QDialog):
             self.txt_url.setText(path)
             base_name = os.path.splitext(os.path.basename(path))[0]
             self.txt_filename.setText(base_name)
+            self.lbl_probe_info.setStyleSheet(f"color: {pal()['success']}; font-size: 12px; font-weight: 600;")
             self.lbl_probe_info.setText(
-                f"✅ ملف تورنت جاهز للتحميل بأقصى سرعة (DHT + Trackers + 32 Ports): {base_name}"
+                f"✅ ملف تورنت جاهز للتحميل بأقصى سرعة (DHT + Trackers + {L('32 Ports')}): {bidi_filename(base_name)}"
                 if self.is_ar
                 else f"✅ Torrent file ready for full-speed download (DHT + Trackers + 32 Ports): {base_name}"
             )
@@ -1673,6 +1921,7 @@ class AddDownloadDialog(QDialog):
             dn = self.engine.extract_magnet_name(u)
             if dn and not self.txt_filename.text().strip():
                 self.txt_filename.setText(dn)
+            self.lbl_probe_info.setStyleSheet(f"color: {pal()['success']}; font-size: 12px; font-weight: 600;")
             self.lbl_probe_info.setText(
                 f"🧲 رابط Magnet تورنت جاهز للتحميل ({dn})"
                 if self.is_ar
@@ -1687,13 +1936,20 @@ class AddDownloadDialog(QDialog):
     def probe_now(self):
         url = self.txt_url.text().strip()
         if not url:
+            self.txt_url.setFocus()
             return
         if url.lower().startswith("magnet:?") or (os.path.isfile(url) and url.lower().endswith(".torrent")):
             self._on_url_text_changed(url)
             return
         if not url.startswith("http"):
             return
+        if is_drm_video_url(url):
+            self.lbl_probe_info.setStyleSheet(f"color: {pal()['danger']}; font-size: 12px; font-weight: 600;")
+            self.lbl_probe_info.setText(localize_error_msg("drm protected", self.is_ar))
+            return
+        self.btn_probe.setEnabled(False)
         if self.is_video:
+            self.lbl_probe_info.setStyleSheet(f"color: {pal()['accent']}; font-size: 12px; font-weight: 600;")
             self.lbl_probe_info.setText("⏳ جاري قراءة الجودات المتاحة..." if self.is_ar else "⏳ Reading available qualities...")
 
             def worker():
@@ -1705,24 +1961,52 @@ class AddDownloadDialog(QDialog):
 
             threading.Thread(target=worker, daemon=True).start()
             return
+        self.lbl_probe_info.setStyleSheet(f"color: {pal()['accent']}; font-size: 12px; font-weight: 600;")
         self.lbl_probe_info.setText("⏳ جاري فحص الرابط..." if self.is_ar else "⏳ Probing URL...")
-        QApplication.processEvents()
-        try:
-            res = self.engine.probe_url(url)
+
+        def probe_worker():
+            try:
+                res = self.engine.probe_url(url)
+                self.probe_ready.emit(url, {"ok": True, "data": res})
+            except Exception as e:
+                self.probe_ready.emit(url, {"ok": False, "error": str(e)})
+
+        threading.Thread(target=probe_worker, daemon=True).start()
+
+    def _on_probe_ready(self, url: str, payload: dict):
+        self.btn_probe.setEnabled(True)
+        if url != self.txt_url.text().strip():
+            return
+        if payload.get("ok"):
+            res = payload["data"]
             self.txt_filename.setText(res["filename"])
-            self.cmb_cat.setCurrentText(res["category"])
+            self._set_category(res["category"])
             self.txt_savedir.setText(res["saveDir"])
-            sz = format_bytes(res["totalSize"]) if res["totalSize"] > 0 else "Stream"
-            rng = "Yes (يدعم التقسيم إلى 32 بورت والاستكمال)" if res["supportsRange"] else "Direct Stream"
-            self.lbl_probe_info.setText(f"✅ الحجم: {sz} | الاستكمال: {rng}")
-        except Exception as e:
-            self.lbl_probe_info.setText(f"ℹ جاهز للتحميل ({str(e)[:40]})")
+            self.txt_savedir.setCursorPosition(0)
+            sz = format_bytes(res["totalSize"]) if res["totalSize"] > 0 else ("بث مباشر" if self.is_ar else "Stream")
+            if res["supportsRange"]:
+                rng = "يدعم 32 بورت والاستكمال" if self.is_ar else "Supports 32-port resume"
+            else:
+                rng = "اتصال مباشر" if self.is_ar else "Direct stream"
+            self.lbl_probe_info.setStyleSheet(f"color: {pal()['success']}; font-size: 12px; font-weight: 600;")
+            self.lbl_probe_info.setText(
+                f"✅ الحجم: {L(sz)}  •  {rng}" if self.is_ar else f"✅ Size: {sz}  •  {rng}"
+            )
+        else:
+            self.lbl_probe_info.setStyleSheet(f"color: {pal()['warn']}; font-size: 12px; font-weight: 600;")
+            self.lbl_probe_info.setText(
+                f"ℹ جاهز للتحميل ({str(payload.get('error', ''))[:50]})"
+                if self.is_ar
+                else f"ℹ Ready to download ({str(payload.get('error', ''))[:50]})"
+            )
 
     def _fill_qualities(self, qualities: list):
         """Best (plays everywhere) first, then every quality the video offers, then audio only."""
         keep = self.cmb_quality.currentData()
         self.cmb_quality.clear()
-        self.cmb_quality.addItem("أفضل جودة تشتغل على أي جهاز (MP4)" if self.is_ar else "Best quality that plays everywhere (MP4)", "best")
+        self.cmb_quality.addItem(
+            f"أفضل جودة متوافقة {L('(MP4)')}" if self.is_ar else "Best compatible quality (MP4)", "best"
+        )
         for q in qualities:
             size = q.get("size") or 0
             size_txt = f"  ~{L(format_bytes(size))}" if size else ""
@@ -1732,6 +2016,7 @@ class AddDownloadDialog(QDialog):
         self.cmb_quality.setCurrentIndex(max(0, idx))
 
     def _on_qualities_ready(self, url: str, res: dict):
+        self.btn_probe.setEnabled(True)
         if url != self.txt_url.text().strip():
             return  # the link changed while reading
         qualities = res.get("qualities") or []
@@ -1739,12 +2024,23 @@ class AddDownloadDialog(QDialog):
         if res.get("title") and not self.txt_filename.text().strip():
             self.txt_filename.setText(sanitize_filename(res["title"]))
         if qualities:
-            self.lbl_probe_info.setText(
-                # Leading RLM: the line starts with a number, which would otherwise make it left-to-right
-                f"‏✅ {L(len(qualities))} جودة متاحة — أعلاها {L(qualities[0]['label'])}" if self.is_ar
-                else f"✅ {len(qualities)} qualities available — up to {qualities[0]['label']}"
-            )
+            n_q = len(qualities)
+            if self.is_ar:
+                if n_q == 1:
+                    q_count = f"{L(1)} جودة متاحة"
+                elif n_q == 2:
+                    q_count = "جودتان متاحتان"
+                elif 3 <= n_q <= 10:
+                    q_count = f"{L(n_q)} جودات متاحة"
+                else:
+                    q_count = f"{L(n_q)} جودة متاحة"
+                self.lbl_probe_info.setStyleSheet(f"color: {pal()['success']}; font-size: 12px; font-weight: 600;")
+                self.lbl_probe_info.setText(f"‏✅ {q_count} — أعلاها {L(qualities[0]['label'])}")
+            else:
+                self.lbl_probe_info.setStyleSheet(f"color: {pal()['success']}; font-size: 12px; font-weight: 600;")
+                self.lbl_probe_info.setText(f"✅ {n_q} qualities available — up to {qualities[0]['label']}")
         else:
+            self.lbl_probe_info.setStyleSheet(f"color: {pal()['warn']}; font-size: 12px; font-weight: 600;")
             self.lbl_probe_info.setText(
                 "ℹ تعذر قراءة الجودات — اختر أفضل جودة" if self.is_ar else "ℹ Couldn't read the qualities — choose Best quality"
             )
@@ -1752,6 +2048,10 @@ class AddDownloadDialog(QDialog):
     def accept_download(self, start_immediately: bool):
         url = self.txt_url.text().strip()
         if not url:
+            self.txt_url.setFocus()
+            return
+        if is_drm_video_url(url):
+            self.probe_now()
             return
         q_val = "best"
         if self.is_video:
@@ -1765,7 +2065,7 @@ class AddDownloadDialog(QDialog):
         self.result_opts = {
             "url": url,
             "filename": self.txt_filename.text().strip(),
-            "category": self.cmb_cat.currentText(),
+            "category": self.cmb_cat.currentData() or "General",
             "saveDir": self.txt_savedir.text().strip(),
             "connections": 32 if (self.is_video or is_tor) else int(self.cmb_conn.currentText()),
             "startImmediately": start_immediately,
@@ -3679,7 +3979,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     loc_end = (sz - 1) if (p_i == n_ports - 1) else ((p_i + 1) * chunk_sz - 1)
                     new_segs.append({
                         "id": seg_id,
-                        "label": f"{s_spec['kind']} #{seg_id}",
+                        "label": f"{s_spec['kind']} {L('#' + str(seg_id))}",
                         "size": max(0, loc_end - loc_start + 1),
                         "downloaded": 0,
                         "startByte": global_offset + loc_start,
@@ -4146,7 +4446,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         {
                             "id": i,
                             "formatId": "",
-                            "label": f"{kind_lbl} #{i}",
+                            "label": f"{kind_lbl} {L('#' + str(i))}",
                             "size": per_p,
                             "downloaded": 0,
                             "startByte": (i - 1) * per_p,
@@ -4257,7 +4557,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         item["segments"] = [
             {
                 "id": i,
-                "label": f"{port_lbl} #{i}",
+                "label": f"{port_lbl} {L('#' + str(i))}",
                 "size": 0,
                 "downloaded": 0,
                 "startByte": 0,
@@ -5047,8 +5347,8 @@ class BrowserStepDiagramWidget(QWidget):
             f_t.setPixelSize(13)
             painter.setFont(f_t)
             painter.drawText(
-                QRectF(x + 8, 124, card_w - 16, 24),
-                Qt.AlignmentFlag.AlignCenter,
+                QRectF(x + 6, 120, card_w - 12, 28),
+                Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
                 title,
             )
 
@@ -5210,7 +5510,7 @@ class BrowserSetupDialog(QDialog):
         for idx, pill in enumerate(self.step_pills):
             if idx == current_idx:
                 pill.setStyleSheet(
-                    f"background: {p['accent']}; color: #ffffff; font-weight: 700; font-size: 12px; "
+                    f"background: {p['primary_bg']}; color: #ffffff; font-weight: 700; font-size: 12px; "
                     f"padding: 4px 12px; border-radius: 12px;"
                 )
             elif idx < current_idx:
@@ -5287,6 +5587,7 @@ class BrowserSetupDialog(QDialog):
             name_lbl.setAlignment(align_side)
             name_lbl.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {p['text']};")
             status_lbl = QLabel()
+            status_lbl.setWordWrap(True)
             status_lbl.setAlignment(align_side)
             status_lbl.setStyleSheet(f"font-size: 12px; color: {p['muted']};")
             info_col.addWidget(name_lbl)
@@ -5719,7 +6020,7 @@ class BrowserSetupDialog(QDialog):
                 if is_edge_store_extension_installed():
                     self._transition_to_success("msedge")
                 return
-            if br_key == self.selected_browser_key or (time.time() - self.wait_started_at) >= 0:
+            if br_key == self.selected_browser_key:
                 self._transition_to_success(br_key)
         elif self.stack.currentIndex() == 0:
             self._refresh_screen_1_cards()
@@ -5765,6 +6066,23 @@ class BrowserSetupDialog(QDialog):
 ROLE_ID = Qt.ItemDataRole.UserRole
 ROLE_PCT = Qt.ItemDataRole.UserRole + 1
 ROLE_MODE = Qt.ItemDataRole.UserRole + 2
+ROLE_RAW_NAME = Qt.ItemDataRole.UserRole + 3
+
+
+class FilenameDelegate(QStyledItemDelegate):
+    """Elides raw filenames BEFORE BiDi isolation so compact columns never split isolate pairs."""
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        raw = index.data(ROLE_RAW_NAME)
+        if raw:
+            icon_pad = (opt.decorationSize.width() + 12) if not opt.icon.isNull() else 0
+            avail_w = max(60, opt.rect.width() - icon_pad - 20)
+            elided = opt.fontMetrics.elidedText(str(raw), Qt.TextElideMode.ElideMiddle, avail_w)
+            opt.text = bidi_filename(elided)
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
 
 
 class ProgressDelegate(QStyledItemDelegate):
@@ -5799,10 +6117,13 @@ class ProgressDelegate(QStyledItemDelegate):
         painter.fillPath(track, QColor(c["track"]))
         fw = bar.width() * (100.0 if mode == "done" else min(100.0, pct)) / 100.0
         if fw > 0:
+            painter.save()
+            painter.setClipPath(track)
             fill = QRectF(bar.right() - fw, bar.top(), fw, bar_h) if rtl else QRectF(bar.left(), bar.top(), fw, bar_h)
             fp = QPainterPath()
             fp.addRoundedRect(fill, bar_h / 2, bar_h / 2)
             painter.fillPath(fp, QColor(mode_color(mode)))
+            painter.restore()
 
         f = QFont(opt.font)
         f.setPixelSize(12)
@@ -5841,7 +6162,7 @@ class SettingsDialog(QDialog):
         self.T = T
         s = engine.settings
         self.setWindowTitle(T("الإعدادات — Scorpion IDM", "Settings — Scorpion IDM"))
-        self.resize(620, 560)
+        self.resize(640, 610)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if self.is_ar else Qt.LayoutDirection.LeftToRight)
 
         root = QVBoxLayout(self)
@@ -5855,6 +6176,7 @@ class SettingsDialog(QDialog):
             lay.setContentsMargins(16, 12, 16, 14)
             lay.setHorizontalSpacing(12)
             lay.setVerticalSpacing(10)
+            lay.setColumnStretch(1, 1)
             hdr = QLabel(title)
             hdr.setStyleSheet("font-size: 14px; font-weight: 700;")
             lay.addWidget(hdr, 0, 0, 1, 3)
@@ -5873,19 +6195,22 @@ class SettingsDialog(QDialog):
         g.addWidget(b, 1, 2)
 
         g.addWidget(QLabel(T("عدد الأجزاء الافتراضي:", "Default parts per download:")), 2, 0)
-        self.cmb_conn = QComboBox()
+        self.cmb_conn = FluentComboBox()
+        self.cmb_conn.setMaximumWidth(140)
         self.cmb_conn.addItems(["1", "4", "8", "16", "32", "64"])
         self.cmb_conn.setCurrentText(str(s.get("defaultConnections", 32)))
         g.addWidget(self.cmb_conn, 2, 1)
 
         g.addWidget(QLabel(T("أقصى عدد تحميلات في نفس الوقت:", "Max simultaneous downloads:")), 3, 0)
         self.spin_max = QSpinBox()
+        self.spin_max.setMaximumWidth(140)
         self.spin_max.setRange(1, 20)
         self.spin_max.setValue(int(s.get("maxConcurrent", 4)))
         g.addWidget(self.spin_max, 3, 1)
 
         g.addWidget(QLabel(T("حد السرعة الكلي (KB/s) — 0 بدون حد:", "Global speed limit (KB/s) — 0 = none:")), 4, 0)
         self.spin_glimit = QSpinBox()
+        self.spin_glimit.setMaximumWidth(160)
         self.spin_glimit.setRange(0, 10_000_000)
         self.spin_glimit.setValue(int(s.get("globalSpeedLimitKbps", 0)))
         g.addWidget(self.spin_glimit, 4, 1)
@@ -5905,7 +6230,7 @@ class SettingsDialog(QDialog):
         self.chk_assoc.setChecked(bool(s.get("associateTorrents", True)))
         g2.addWidget(self.chk_assoc, 4, 0, 1, 3)
         g2.addWidget(QLabel(T("عند بدء أي تحميل يظهر:", "When a download starts, show:")), 5, 0)
-        self.cmb_on_start = QComboBox()
+        self.cmb_on_start = FluentComboBox()
         for text, val in ((T("كارت صغير في ركن الشاشة", "A small card in the screen corner"), "card"),
                           (T("نافذة التقدم الكاملة", "The full progress window"), "window"),
                           (T("لا شيء", "Nothing"), "none")):
@@ -5920,9 +6245,12 @@ class SettingsDialog(QDialog):
         g3.addWidget(self.chk_sched, 1, 0, 1, 2)
         self.time_sched = QTimeEdit()
         self.time_sched.setDisplayFormat("HH:mm")
+        self.time_sched.setFixedWidth(105)
         hh, mm = (s.get("schedTime") or "02:00").split(":")[:2]
         self.time_sched.setTime(QTime(int(hh), int(mm)))
         self.time_sched.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.time_sched.setEnabled(self.chk_sched.isChecked())
+        self.chk_sched.toggled.connect(self.time_sched.setEnabled)
         g3.addWidget(self.time_sched, 1, 2)
 
         root.addStretch()
@@ -5942,6 +6270,7 @@ class SettingsDialog(QDialog):
         d = QFileDialog.getExistingDirectory(self, self.T("اختر مجلد الحفظ", "Choose save folder"), self.txt_root.text())
         if d:
             self.txt_root.setText(os.path.normpath(d))
+            self.txt_root.setCursorPosition(0)
 
     def _save(self):
         s = self.engine.settings
@@ -5992,7 +6321,7 @@ class UpdateDialog(QDialog):
         self.is_ar = lang == "ar"
         self.T = (lambda ar, en: ar) if self.is_ar else (lambda ar, en: en)
         self.just_updated = just_updated
-        self.info = update_info or self.engine.check_for_updates()
+        self.info = update_info or {"hasUpdate": False, "latestVersion": APP_VERSION, "publishedAt": CHANGELOG_HISTORY[0]["date"]}
         self._updating = False
 
         self.setWindowTitle(
@@ -6017,13 +6346,17 @@ class UpdateDialog(QDialog):
         bl.setContentsMargins(16, 14, 16, 14)
         bl.setSpacing(6)
 
+        lead = (Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute) if self.is_ar else (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute)
         self.lbl_headline = QLabel()
+        self.lbl_headline.setWordWrap(True)
+        self.lbl_headline.setAlignment(lead | Qt.AlignmentFlag.AlignVCenter)
         self.lbl_headline.setStyleSheet("font-size: 16px; font-weight: 700;")
         bl.addWidget(self.lbl_headline)
 
         self.lbl_sub = QLabel()
         self.lbl_sub.setObjectName("Muted")
         self.lbl_sub.setWordWrap(True)
+        self.lbl_sub.setAlignment(lead | Qt.AlignmentFlag.AlignVCenter)
         bl.addWidget(self.lbl_sub)
         root.addWidget(banner)
 
@@ -6035,21 +6368,17 @@ class UpdateDialog(QDialog):
         nl.setSpacing(8)
 
         self.lbl_notes_title = QLabel()
+        self.lbl_notes_title.setWordWrap(True)
+        self.lbl_notes_title.setAlignment(lead | Qt.AlignmentFlag.AlignVCenter)
         self.lbl_notes_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {c['accent']};")
         nl.addWidget(self.lbl_notes_title)
 
-        self.lbl_notes_body = QLabel()
-        self.lbl_notes_body.setWordWrap(True)
-        self.lbl_notes_body.setAlignment(
-            (Qt.AlignmentFlag.AlignRight if self.is_ar else Qt.AlignmentFlag.AlignLeft) | Qt.AlignmentFlag.AlignTop
-        )
-        self.lbl_notes_body.setStyleSheet("line-height: 1.5; font-size: 13px; background: transparent;")
-        notes_scroll = QScrollArea()
-        notes_scroll.setWidgetResizable(True)
-        notes_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        notes_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
-        notes_scroll.setWidget(self.lbl_notes_body)
-        nl.addWidget(notes_scroll, 1)
+        self.notes_view = QTextBrowser()
+        self.notes_view.setReadOnly(True)
+        self.notes_view.setOpenExternalLinks(True)
+        self.notes_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.notes_view.setStyleSheet("QTextBrowser { background: transparent; border: none; }")
+        nl.addWidget(self.notes_view, 1)
         root.addWidget(notes_card, 1)
 
         # 3) Live Update Progress Card (shown during download/install)
@@ -6092,6 +6421,8 @@ class UpdateDialog(QDialog):
         root.addLayout(btns)
 
         self._refresh_view()
+        if update_info is None and not just_updated:
+            QTimer.singleShot(80, self._check_now)
 
     def _save_prefs(self):
         self.engine.settings["autoCheckUpdates"] = True
@@ -6137,7 +6468,7 @@ class UpdateDialog(QDialog):
             )
         elif self.just_updated:
             headline, color = self.T(
-                f"🎉 تم تحديث البرنامج بنجاح إلى الإصدار {L('v' + APP_VERSION)}!",
+                f"🎉 تم تحديث البرنامج بنجاح إلى الإصدار {L('v' + APP_VERSION)}",
                 f"🎉 Successfully Updated to Version v{APP_VERSION}!",
             ), c["success"]
             sub = self.T("إليك ما الجديد في هذا الإصدار:", "Here is what's new in this version:")
@@ -6167,13 +6498,25 @@ class UpdateDialog(QDialog):
             notes_list = cur["ar" if self.is_ar else "en"]
             history = CHANGELOG_HISTORY[1:]
         self.lbl_notes_title.setText(self.T(f"📋 ما الجديد في {title_txt}:", f"📋 What's New in {title_txt}:"))
-        lines = [f"•  {line}" for line in notes_list]
+        dir_attr = "rtl" if self.is_ar else "ltr"
+        align_css = "right" if self.is_ar else "left"
+        blocks = [
+            f"<p style='margin: 0 0 7px 0;'>•&nbsp;&nbsp;{html.escape(str(line))}</p>"
+            for line in notes_list
+        ]
         for prev in history:
-            lines.append("")
-            lines.append(f"── {prev['title_ar' if self.is_ar else 'title_en']} ({L(prev['date'])}) ──")
+            hdr = html.escape(str(prev["title_ar" if self.is_ar else "title_en"]))
+            dt = html.escape(str(prev["date"]))
+            blocks.append(
+                f"<div style='margin: 14px 0 8px 0; padding-top: 10px; border-top: 1px solid {c['border']}; "
+                f"font-weight: 700; color: {c['accent']};'>{hdr} ({L(dt)})</div>"
+            )
             for pline in prev["ar" if self.is_ar else "en"]:
-                lines.append(f"•  {pline}")
-        self.lbl_notes_body.setText("\n".join(lines))
+                blocks.append(f"<p style='margin: 0 0 7px 0;'>•&nbsp;&nbsp;{html.escape(str(pline))}</p>")
+        self.notes_view.setHtml(
+            f"<div dir='{dir_attr}' style='text-align: {align_css}; font-family: \"Segoe UI\", Tahoma; "
+            f"font-size: 13px; color: {c['text']}; line-height: 165%;'>{''.join(blocks)}</div>"
+        )
 
     def _check_now(self):
         if self._updating:
@@ -6569,8 +6912,11 @@ def item_mode(it: dict) -> str:
         return "error"
     if st in ("paused", "queued", "scheduled"):
         return "paused"
-    if st == "downloading" and (it.get("phase") in ("connecting", "merging", "selecting") or not it.get("downloadedBytes")):
-        return "connecting"
+    if st == "downloading":
+        if it.get("phase") == "merging":
+            return "merging"
+        if it.get("phase") in ("connecting", "selecting") or not it.get("downloadedBytes"):
+            return "connecting"
     return "active"
 
 
@@ -6581,24 +6927,32 @@ def item_status_text(it: dict, is_ar: bool) -> str:
         return "في الانتظار" if is_ar else "Queued"
     if st == "scheduled":
         return "مجدول" if is_ar else "Scheduled"
-    if it.get("phase") == "merging" and m == "connecting":
-        return "جاري الدمج" if is_ar else "Merging"
+    if m == "merging":
+        return "جاري الدمج..." if is_ar else "Merging..."
     if it.get("phase") == "selecting":
         return "اختيار الملفات" if is_ar else "Select files"
+    if m == "connecting":
+        if it.get("isTorrent"):
+            return "البحث عن Peers" if is_ar else "Finding peers"
+        if it.get("category") == "Music" or it.get("videoQuality") == "audio":
+            return "تجهيز الصوت..." if is_ar else "Preparing audio..."
+        if it.get("isVideo"):
+            return "تجهيز الفيديو..." if is_ar else "Preparing video..."
+        return "جاري الاتصال..." if is_ar else "Connecting..."
     return {
         "done": ("مكتمل", "Completed"),
         "error": ("فشل", "Failed"),
         "paused": ("متوقف", "Paused"),
-        "connecting": ("جاري الاتصال", "Connecting"),
         "active": ("جاري التحميل", "Downloading"),
     }[m][0 if is_ar else 1]
+
 
 class DownloadCard(QWidget):
     """Small card in the screen corner for one download: live progress, then Open / Show in folder."""
 
     action = pyqtSignal(str, str)  # download id, action
 
-    W, H = 408, 134
+    W, H = 448, 176
 
     def __init__(self, dl_id: str, is_ar: bool):
         super().__init__(
@@ -6611,6 +6965,11 @@ class DownloadCard(QWidget):
         self.hovered = False
         self.dismiss_at = None
         self.state = None
+        self._lead_align = (
+            (Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
+            if is_ar
+            else (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute)
+        )
         self.setFixedSize(self.W, self.H)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if is_ar else Qt.LayoutDirection.LeftToRight)
         c = pal()
@@ -6623,22 +6982,18 @@ class DownloadCard(QWidget):
             f"#ToastCard {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 12px; }}"
             f"#ToastCard QLabel {{ background: transparent; }}"
         )
-        shadow = QGraphicsDropShadowEffect(self.body)
-        shadow.setBlurRadius(18)
-        shadow.setOffset(0, 3)
-        shadow.setColor(QColor(0, 0, 0, 70))
-        self.body.setGraphicsEffect(shadow)
         outer.addWidget(self.body)
 
         lay = QVBoxLayout(self.body)
-        lay.setContentsMargins(12, 9, 10, 9)
-        lay.setSpacing(5)
+        lay.setContentsMargins(14, 11, 14, 11)
+        lay.setSpacing(6)
         top = QHBoxLayout()
         top.setSpacing(8)
         self.icon = QLabel()
         self.icon.setFixedSize(22, 22)
         top.addWidget(self.icon)
         self.name = QLabel()
+        self.name.setAlignment(self._lead_align | Qt.AlignmentFlag.AlignVCenter)
         self.name.setStyleSheet("font-weight: 600;")
         top.addWidget(self.name, 1)
         self.btn_close = QPushButton()
@@ -6652,27 +7007,49 @@ class DownloadCard(QWidget):
 
         self.status = QLabel()
         self.status.setObjectName("Muted")
+        self.status.setMinimumHeight(20)
+        self.status.setAlignment(self._lead_align | Qt.AlignmentFlag.AlignVCenter)
         lay.addWidget(self.status)
         self.bar = SlimProgressBar()
-        self.bar.setFixedHeight(6)
+        self.bar.setFixedHeight(7)
         lay.addWidget(self.bar)
 
         btns = QHBoxLayout()
         btns.setSpacing(6)
-        btns.addStretch()
-        self.btn_c = QPushButton()
-        self.btn_b = QPushButton()
         self.btn_a = QPushButton()
-        for b in (self.btn_c, self.btn_b, self.btn_a):
+        self.btn_b = QPushButton()
+        self.btn_c = QPushButton()
+        for b in (self.btn_a, self.btn_b, self.btn_c):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setFixedHeight(30)
             b.setStyleSheet("padding: 2px 12px;")
-            btns.addWidget(b)
+        btns.addWidget(self.btn_a)
+        btns.addWidget(self.btn_b)
+        btns.addStretch()
+        btns.addWidget(self.btn_c)
         self.btn_a.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_a.property("act")))
         self.btn_b.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_b.property("act")))
         self.btn_c.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_c.property("act")))
         lay.addLayout(btns)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self._anim_timer = QTimer(self)
+        self._anim_timer.timeout.connect(self._tick_anim)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.body.geometry())
+        for expand, dy, alpha in ((6, 3, 4), (4, 2, 8), (2, 1, 14), (1, 1, 20)):
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(0, 0, 0, alpha))
+            p.drawRoundedRect(r.adjusted(-expand, -expand + dy, expand, expand + dy), 14, 14)
+
+    def _tick_anim(self):
+        if self.state in ("connecting", "active", "merging"):
+            self.bar.tick()
+        else:
+            self._anim_timer.stop()
 
     def _set_buttons(self, a: tuple, b: tuple, c: tuple | None = None, primary_a: bool = False, danger_c: bool = True):
         for btn, spec in ((self.btn_a, a), (self.btn_b, b), (self.btn_c, c)):
@@ -6701,61 +7078,105 @@ class DownloadCard(QWidget):
             self._full_name = name
             self._elide_name()
             self.icon.setPixmap(file_type_icon(name).pixmap(22, 22))
-        if mode == "done":
-            size = item.get("totalSize") or item.get("downloadedBytes") or 0
-            text = T("✓ اكتمل التحميل", "✓ Download complete") + (f"  •  {L(format_bytes(size))}" if size else "")
-        elif mode == "error":
-            reason = item.get("errorMsg") or T("سبب غير معروف", "Unknown reason")
+        if mode == "error":
+            reason = localize_error_msg(item.get("errorMsg") or T("سبب غير معروف", "Unknown reason"), self.is_ar)
             # An English reason inside an Arabic line keeps its own direction
             if self.is_ar and not re.search(r"[؀-ۿ]", reason):
                 reason = "⁦" + reason + "⁩"  # LRI ... PDI: isolated left-to-right run
             text = T("فشل: ", "Failed: ") + reason
-        elif mode == "active":
-            parts = [L(f"{pct:.0f}%"), L(format_speed(item.get("speed", 0)))]
-            if item.get("timeLeft"):
-                parts.append(T("متبقي ", "") + L(format_eta(item.get("timeLeft"))) + T("", " left"))
-            text = "  •  ".join(parts)
+            self.status.setWordWrap(True)
+            self.status.setMinimumHeight(38)
+            self.status.setAlignment(self._lead_align | Qt.AlignmentFlag.AlignTop)
+            self.status.setToolTip(text)
+            fm = self.status.fontMetrics()
+            max_w = max(240, (self.status.width() or (self.W - 56)) * 2 - 24)
+            self.status.setText(fm.elidedText(text, Qt.TextElideMode.ElideRight, max_w))
         else:
-            text = item_status_text(item, self.is_ar)
-        _set_elided(self.status, text)
+            self.status.setWordWrap(False)
+            self.status.setMinimumHeight(20)
+            self.status.setAlignment(self._lead_align | Qt.AlignmentFlag.AlignVCenter)
+            sep_dot = "  \u200f•\u200f  " if self.is_ar else "  •  "
+            if mode == "done":
+                size = item.get("totalSize") or item.get("downloadedBytes") or 0
+                text = T("✓ اكتمل التحميل", "✓ Download complete") + (f"{sep_dot}{L(format_bytes(size))}" if size else "")
+            elif mode == "active":
+                parts = [L(f"{pct:.0f}%"), L(format_speed(item.get("speed", 0)))]
+                if item.get("timeLeft"):
+                    parts.append(T("متبقي ", "") + L(format_eta(item.get("timeLeft"))) + T("", " left"))
+                text = sep_dot.join(parts)
+            elif mode == "paused" and pct > 0:
+                text = f"{item_status_text(item, self.is_ar)}{sep_dot}{L(f'{pct:.0f}%')}"
+            else:
+                text = item_status_text(item, self.is_ar)
+            _set_elided(self.status, text, Qt.TextElideMode.ElideRight)
         color = {"done": c["success"], "error": c["danger"]}.get(mode, c["muted"])
         self.status.setStyleSheet(f"color: {color};")
         self.bar.set_state(pct, mode)
         self.bar.tick()
 
+        is_drm_err = mode == "error" and (
+            is_drm_video_url(item.get("url", "")) or "drm" in str(item.get("errorMsg", "")).lower()
+        )
         if mode != self.state:
             self.state = mode
+            if self.isVisible() and mode in ("connecting", "active", "merging"):
+                if not self._anim_timer.isActive():
+                    self._anim_timer.start(40)
+            else:
+                self._anim_timer.stop()
             browser_owned = item.get("browserTransfer")
-            if browser_owned and mode == "error":
-                # Only the browser tab can restart it, so no Retry here
-                self._set_buttons((T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"))
+            if is_drm_err or (browser_owned and mode == "error"):
+                # DRM or browser-owned failure cannot be restarted directly
+                self._set_buttons(
+                    (T("التفاصيل", "Details"), "details"),
+                    None,
+                    (T("إغلاق", "Close"), "close"),
+                    primary_a=False,
+                    danger_c=False,
+                )
                 self.dismiss_at = time.time() + 15
             elif browser_owned and mode != "done":
-                self._set_buttons((T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"))
+                self._set_buttons((T("التفاصيل", "Details"), "details"), None, (T("إلغاء", "Cancel"), "cancel"))
                 self.dismiss_at = None
             elif mode == "done":
-                self._set_buttons((T("تشغيل", "Open"), "open"), (T("فتح المجلد", "Show in folder"), "folder"), None, True)
+                self._set_buttons(
+                    (T("تشغيل", "Open"), "open"),
+                    (T("فتح المجلد", "Show in folder"), "folder"),
+                    (T("إغلاق", "Close"), "close"),
+                    primary_a=True,
+                    danger_c=False,
+                )
                 self.dismiss_at = time.time() + 6
             elif mode == "error":
                 self._set_buttons((T("إعادة المحاولة", "Retry"), "retry"), (T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"), True)
                 self.dismiss_at = time.time() + 15
             elif mode == "paused":
-                self._set_buttons((T("استئناف", "Resume"), "resume"), (T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"))
+                self._set_buttons((T("استئناف", "Resume"), "resume"), (T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"), True)
                 self.dismiss_at = None
             else:
                 self._set_buttons((T("إيقاف مؤقت", "Pause"), "pause"), (T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"))
                 self.dismiss_at = None
+        if mode in ("connecting", "active", "merging"):
+            self.btn_a.setEnabled(mode != "merging")
+        else:
+            self.btn_a.setEnabled(True)
 
     def _elide_name(self):
         # Shortened to the label's width, which is only known once the card is laid out
         if self.name.width() > 20:
-            _set_elided(self.name, self._full_name)
+            _elide_filename(self.name, self._full_name)
         else:
-            self.name.setText(self._full_name)
+            self.name.setText(bidi_filename(self._full_name))
 
     def showEvent(self, event):
         super().showEvent(event)
         QTimer.singleShot(0, self._elide_name)
+        if self.state in ("connecting", "active", "merging") and not self._anim_timer.isActive():
+            self._anim_timer.start(40)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._anim_timer.stop()
 
     def due(self) -> bool:
         return bool(self.dismiss_at) and not self.hovered and time.time() >= self.dismiss_at
@@ -6871,6 +7292,17 @@ class DownloadCardManager(QObject):
         elif act == "pause":
             eng.pause_download(dl_id)
         elif act == "cancel":
+            if item.get("status") not in ("completed", "error") and int(item.get("downloadedBytes") or 0) > 0:
+                is_ar = self.win.lang == "ar"
+                parent_w = self.cards.get(dl_id) or self.win
+                ans = QMessageBox.question(
+                    parent_w,
+                    "إلغاء التحميل" if is_ar else "Cancel download",
+                    (f"إلغاء وحذف «{item.get('filename', '')}»؟\nسيتم حذف الأجزاء المحمّلة." if is_ar
+                     else f"Cancel and remove “{item.get('filename', '')}”?\nDownloaded parts will be discarded."),
+                )
+                if ans != QMessageBox.StandardButton.Yes:
+                    return
             dlg = self.win.open_progress_dialogs.pop(dl_id, None)
             if dlg is not None:
                 dlg.close()
@@ -7005,9 +7437,20 @@ class ScorpionMainWindow(QMainWindow):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self.tray_icon = None
             return
-        is_ar = self.lang == "ar"
         self.tray_icon = QSystemTrayIcon(self.app_icon, self)
         self.tray_icon.setToolTip(f"Scorpion Download Manager v{APP_VERSION}")
+        self._rebuild_tray_menu()
+        self.tray_icon.activated.connect(
+            lambda reason: self.bring_to_front()
+            if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick)
+            else None
+        )
+        self.tray_icon.show()
+
+    def _rebuild_tray_menu(self):
+        if getattr(self, "tray_icon", None) is None:
+            return
+        is_ar = self.lang == "ar"
         tray_menu = QMenu(self)
         for text, slot in [
             ("إظهار البرنامج" if is_ar else "Show Scorpion", self.bring_to_front),
@@ -7025,12 +7468,6 @@ class ScorpionMainWindow(QMainWindow):
             act.triggered.connect(slot)
             tray_menu.addAction(act)
         self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.activated.connect(
-            lambda reason: self.bring_to_front()
-            if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick)
-            else None
-        )
-        self.tray_icon.show()
 
     def bring_to_front(self):
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
@@ -7085,10 +7522,14 @@ class ScorpionMainWindow(QMainWindow):
         sep2.setFixedHeight(22)
         tb.addWidget(sep2)
         tool("btn_delete", self.delete_selected)
-        tool("btn_clear_done", self.engine.delete_completed)
+        tool("btn_clear_done", self.clear_completed)
         tb.addSpacing(10)
         self.txt_search = QLineEdit()
         self.txt_search.setClearButtonEnabled(True)
+        self._search_act = self.txt_search.addAction(
+            glyph_icon(ICONS["search"], pal()["muted"], 14),
+            QLineEdit.ActionPosition.LeadingPosition,
+        )
         # Shrinks on small screens instead of forcing a wider window
         self.txt_search.setMinimumWidth(130)
         self.txt_search.setMaximumWidth(240)
@@ -7130,6 +7571,7 @@ class ScorpionMainWindow(QMainWindow):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.setIconSize(QSize(20, 20))
         self.table.verticalHeader().setVisible(False)
@@ -7137,10 +7579,12 @@ class ScorpionMainWindow(QMainWindow):
         hh = self.table.horizontalHeader()
         hh.setHighlightSections(False)
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for col, width in ((1, 110), (2, 190), (3, 110), (4, 110), (5, 120)):
+        for col, width in ((1, 105), (2, 175), (3, 112), (4, 100), (5, 150)):
             hh.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
             hh.resizeSection(col, width)
+        self.table.setItemDelegateForColumn(0, FilenameDelegate(self.table))
         self.table.setItemDelegateForColumn(2, ProgressDelegate(self.table))
+        self.table.itemSelectionChanged.connect(self._sync_toolbar_selection)
         self.table.cellDoubleClicked.connect(self.on_row_double_clicked)
         # The table takes no focus, so leave the search box on click; otherwise Delete/Enter keep going to it
         self.table.cellPressed.connect(lambda _r, _c: self.txt_search.clearFocus())
@@ -7230,8 +7674,9 @@ class ScorpionMainWindow(QMainWindow):
             btn.setProperty("fullText", text)
             btn.setText(text)
             btn.setIcon(glyph_icon(ICONS[icon], color or c["text"]))
+        if getattr(self, "_search_act", None) is not None:
+            self._search_act.setIcon(glyph_icon(ICONS["search"], c["muted"], 14))
         self._apply_layout_mode(force=True)
-        self.txt_search.setPlaceholderText(T("🔍 بحث في التحميلات (Ctrl+F)", "🔍 Search downloads (Ctrl+F)"))
 
         self.tree.clear()
         self.nav_items = {}
@@ -7292,18 +7737,49 @@ class ScorpionMainWindow(QMainWindow):
         self.engine.save_state()
         self.apply_theme_and_lang()
         self._restyle_cards()
+        for dlg in list(self.open_progress_dialogs.values()):
+            if hasattr(dlg, "apply_theme"):
+                dlg.apply_theme()
+
+    def clear_completed(self):
+        for dl_id, dlg in list(self.open_progress_dialogs.items()):
+            it = self.engine.downloads.get(dl_id)
+            if not it or it.get("status") == "completed":
+                self.open_progress_dialogs.pop(dl_id, None)
+                dlg.close()
+        self.engine.delete_completed()
+        self.refresh_all()
+
+    def _sync_open_dialogs_lang(self):
+        is_ar = self.lang == "ar"
+        T = (lambda ar, en: ar) if is_ar else (lambda ar, en: en)
+        ldir = Qt.LayoutDirection.RightToLeft if is_ar else Qt.LayoutDirection.LeftToRight
+        lead = (Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute) if is_ar else (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute)
+        for dlg in list(self.open_progress_dialogs.values()):
+            dlg.is_ar = is_ar
+            dlg.T = T
+            dlg.setLayoutDirection(ldir)
+            dlg.lbl_filename.setAlignment(lead | Qt.AlignmentFlag.AlignVCenter)
+            dlg.lbl_url.setAlignment(lead | Qt.AlignmentFlag.AlignVCenter)
+            dlg._update_details_button()
+            dlg.refresh_ui()
 
     def toggle_lang(self):
         self.lang = "en" if self.lang == "ar" else "ar"
         self.engine.settings["lang"] = self.lang
         self.engine.save_state()
         self.apply_theme_and_lang()
+        self._rebuild_tray_menu()
+        self._sync_open_dialogs_lang()
         self._restyle_cards()
 
     def _on_remote_lang_changed(self, new_lang: str):
         if new_lang in ("ar", "en") and self.lang != new_lang:
             self.lang = new_lang
             self.apply_theme_and_lang()
+            self._rebuild_tray_menu()
+            self._sync_open_dialogs_lang()
+            self._restyle_cards()
 
     def on_table_context_menu(self, pos):
         row = self.table.rowAt(pos.y())
@@ -7538,6 +8014,10 @@ class ScorpionMainWindow(QMainWindow):
             )
             if ans != QMessageBox.StandardButton.Yes:
                 return
+        dlg = self.open_progress_dialogs.pop(dl_id, None)
+        if dlg is not None:
+            dlg.close()
+        self.cards.remove(dl_id)
         self.engine.delete_download(dl_id)
         self.refresh_all()
 
@@ -7624,17 +8104,35 @@ class ScorpionMainWindow(QMainWindow):
 
     def _apply_layout_mode(self, force: bool = False):
         """
-        Fits any screen, down to half of a laptop screen: toolbar buttons become icons (their text moves
-        to the tooltip), the sidebar narrows and less important columns shrink or hide.
+        Fits any screen, down to half of a laptop screen: toolbar buttons adapt from full -> standard ->
+        compact -> tiny (with full tooltips), the sidebar narrows and less important columns shrink or hide.
         """
+        is_ar = self.lang == "ar"
+        labeled_standard = {
+            self.btn_add,
+            self.btn_video,
+            self.btn_torrent,
+            self.btn_browser_setup,
+        }
+
         def set_texts(m):
             # Narrowest layout: tighter gaps and a smaller search box so every button still fits
             self._toolbar_frame.layout().setSpacing(1 if m == "tiny" else 4)
-            self.txt_search.setMinimumWidth(80 if m == "tiny" else 130)
-            self.txt_search.setMaximumWidth(150 if m == "tiny" else 240)
+            self.txt_search.setMinimumWidth(80 if m == "tiny" else (195 if m == "standard" else 130))
+            self.txt_search.setMaximumWidth(150 if m == "tiny" else 245)
+            if m == "tiny":
+                self.txt_search.setPlaceholderText("بحث..." if is_ar else "Search...")
+            elif m == "full":
+                self.txt_search.setPlaceholderText("بحث في التحميلات (Ctrl+F)" if is_ar else "Search downloads (Ctrl+F)")
+            else:
+                self.txt_search.setPlaceholderText("بحث في التحميلات..." if is_ar else "Search downloads...")
             for btn in self._toolbar_buttons:
                 full = btn.property("fullText") or ""
-                keep_text = m == "full" or (btn is self.btn_add and m == "compact")
+                keep_text = (
+                    (m == "full")
+                    or (m == "standard" and btn in labeled_standard)
+                    or (btn is self.btn_add and m == "compact")
+                )
                 btn.setText(full if keep_text else "")
                 btn.setToolTip("" if keep_text else full)
 
@@ -7642,22 +8140,27 @@ class ScorpionMainWindow(QMainWindow):
         key = (self.lang, tuple(b.property("fullText") or "" for b in self._toolbar_buttons))
         if force or getattr(self, "_mode_widths_key", None) != key:
             self._mode_widths = {}
-            for m in ("full", "compact", "tiny"):
+            for m in ("full", "standard", "compact", "tiny"):
                 set_texts(m)
                 self._mode_widths[m] = self._toolbar_frame.layout().sizeHint().width()
             self._mode_widths_key = key
             self._layout_mode = None
         w = self.width()
-        mode = "full" if self._mode_widths["full"] <= w else ("compact" if self._mode_widths["compact"] <= w else "tiny")
+        mode = (
+            "full" if self._mode_widths["full"] <= w
+            else ("standard" if self._mode_widths["standard"] <= w
+                  else ("compact" if self._mode_widths["compact"] <= w else "tiny"))
+        )
         if mode == getattr(self, "_layout_mode", None):
             return
         self._layout_mode = mode
         set_texts(mode)
-        self.tree.setFixedWidth({"full": 230, "compact": 190, "tiny": 150}[mode])
+        self.tree.setFixedWidth({"full": 220, "standard": 210, "compact": 190, "tiny": 168}[mode])
         widths = {
-            "full": (110, 190, 110, 110, 120),
-            "compact": (95, 150, 95, 90, 105),
-            "tiny": (85, 120, 85, 0, 95),
+            "full": (105, 185, 115, 105, 155),
+            "standard": (105, 175, 112, 100, 150),
+            "compact": (98, 148, 108, 92, 140),
+            "tiny": (88, 118, 102, 0, 126),
         }[mode]
         hh = self.table.horizontalHeader()
         for col, width in zip((1, 2, 3, 4, 5), widths):
@@ -7771,13 +8274,18 @@ class ScorpionMainWindow(QMainWindow):
             self._row_ids = ids
 
         center = Qt.AlignmentFlag.AlignCenter
+        lead_align = (
+            ((Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute) if is_ar
+             else (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute))
+            | Qt.AlignmentFlag.AlignVCenter
+        )
         for r, it in enumerate(filtered):
             mode = item_mode(it)
             total = it.get("totalSize") or 0
             done = it.get("downloadedBytes") or 0
             downloading = it["status"] == "downloading" and mode == "active"
             cells = [
-                it.get("filename", ""),
+                bidi_filename(it.get("filename", "")),
                 L(format_bytes(total)) if total else (L(format_bytes(done)) if done else "—"),
                 "",
                 L(format_speed(it.get("speed", 0))) if downloading else "—",
@@ -7786,19 +8294,22 @@ class ScorpionMainWindow(QMainWindow):
             ]
             for col, text in enumerate(cells):
                 cell = self.table.item(r, col)
+                desired_align = center if col else lead_align
                 if cell is None:
                     cell = QTableWidgetItem()
-                    if col:
-                        cell.setTextAlignment(center)
-                    else:
-                        cell.setTextAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignVCenter)
+                    cell.setTextAlignment(int(desired_align.value))
                     self.table.setItem(r, col, cell)
+                elif cell.textAlignment() != int(desired_align.value):
+                    cell.setTextAlignment(int(desired_align.value))
                 if cell.text() != text:
                     cell.setText(text)
                 if col == 0:
+                    raw_name = it.get("filename", "")
                     if cell.data(ROLE_ID) != it["id"]:
                         cell.setData(ROLE_ID, it["id"])
-                        cell.setIcon(file_type_icon(it.get("filename", "")))
+                        cell.setIcon(file_type_icon(raw_name))
+                    if cell.data(ROLE_RAW_NAME) != raw_name:
+                        cell.setData(ROLE_RAW_NAME, raw_name)
                     cell.setToolTip(it.get("filePath", ""))
                 elif col == 2:
                     cell.setData(ROLE_PCT, float(it.get("progress") or 0))
@@ -7807,12 +8318,16 @@ class ScorpionMainWindow(QMainWindow):
                     cell.setForeground(QColor(mode_color(mode) if mode != "connecting" else c["muted"]))
                     tip = ""
                     if it["status"] == "error":
-                        reason = (it.get("errorMsg") or "").strip() or ("سبب غير معروف" if is_ar else "Unknown reason")
+                        raw_reason = (it.get("errorMsg") or "").strip()
+                        reason = localize_error_msg(raw_reason, is_ar) if raw_reason else ("سبب غير معروف" if is_ar else "Unknown reason")
                         tip = f"{'سبب الفشل' if is_ar else 'Failure reason'}: {reason}"
                     if cell.toolTip() != tip:
                         cell.setToolTip(tip)
             if it["id"] == sel_id and self.table.currentRow() != r:
                 self.table.selectRow(r)
+
+        self._completed_count = counts.get("completed", 0)
+        self._sync_toolbar_selection()
 
         bridge = (("المتصفح متصل" if is_ar else "Browser connected") if self.engine.rpc_alive
                   else ("المتصفح غير متصل" if is_ar else "Browser not connected"))
@@ -7823,6 +8338,18 @@ class ScorpionMainWindow(QMainWindow):
         else:
             parts = [f"Total speed {format_speed(total_spd)}", f"Active {active_n}", f"Total {len(items)}", bridge]
         self.lbl_status_bar.setText(sep.join(parts))
+
+    def _sync_toolbar_selection(self):
+        dl_id = self.get_selected_id()
+        item = self.engine.downloads.get(dl_id) if dl_id else None
+        st = item.get("status") if item else ""
+        has_sel = item is not None
+        can_resume = has_sel and st in ("paused", "error", "queued", "scheduled")
+        can_pause = has_sel and st == "downloading" and item.get("phase") != "merging"
+        self.btn_resume.setEnabled(can_resume)
+        self.btn_pause.setEnabled(can_pause)
+        self.btn_delete.setEnabled(has_sel)
+        self.btn_clear_done.setEnabled(bool(getattr(self, "_completed_count", 0)))
 
 
 if __name__ == "__main__":

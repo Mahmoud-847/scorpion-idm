@@ -1,22 +1,22 @@
 {
-  "version": "2.1.22",
+  "version": "2.1.23",
   "publishedAt": "2026-11-17",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "5b932cd66a29acb27161cc57e4889437464bc200af979359ea06299300431c58",
+  "sha256": "6c6679b131ff53783ded57c635a9891e117d2edbf82d575bee002119c6865400",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.22 — حماية DRM ذكية، إصلاح SoundCloud/Spotify، وأسماء الملفات العربية",
-  "title_en": "Version 2.1.22 — Smart DRM Handling, SoundCloud/Spotify Audio Fixes & UTF-8 Filenames",
+  "title_ar": "الإصدار 2.1.23 — ترقية الواجهة في جميع المراحل وتجربة RTL المتكاملة",
+  "title_en": "Version 2.1.23 — Full-Lifecycle UI Polish & Enhanced RTL/LTR Experience",
   "changelog_ar": [
-    "إخفاء زر التحميل العائم في منصات الفيديو المحمية بـ DRM (مثل Netflix وShahid) وعرض تنبيه عربي واضح عند الطلب اليدوي.",
-    "إصلاح تنزيل SoundCloud (التقاط التراك الفعلي من /discover والبديل الصوتي للتراكات المحمية من المصدر).",
-    "تحسين استقرار البديل الصوتي لـ Spotify ومنع إرسال Referer خارجي أو رفض الملف لفرق ثوانٍ بسيطة.",
-    "استعادة أسماء الملفات العربية المشوّهة (UTF-8 Mojibake) من ترويسات السيرفرات وتوسيع استخراج روابط الصوت في التضمينات."
+    "إعادة تصميم بطاقة التحميل المنبثقة بمسافات مريحة، ترتيب أزرار طبيعي (الإجراء الرئيسي أولاً)، وحركة سلسة أثناء الاتصال والتحميل، مع زر إغلاق عند الاكتمال.",
+    "إعادة تصميم نافذة إضافة رابط ببطاقات حديثة وفحص غير متزامن للروابط مع تحذير فوري لمحتوى DRM وتعريب التصنيفات.",
+    "تحسين نافذة التقدم الـ 32 بورت بإلغاء الفراغ الزائد في الوضع المدمج وعرض رسائل الأخطاء وDRM كاملة متعددة الأسطر مع استجابة فورية لتبديل الثيم.",
+    "تحسين نافذة الإضافة والشريط العائم وتوضيح رسائل التنبيه داخل بطاقة التنبيه دون التأثير على شارة الاتصال."
   ],
   "changelog_en": [
-    "Auto-hide the floating video panel on DRM-protected platforms (Netflix, Shahid, etc.) and show a clear DRM notice on manual actions.",
-    "Fixed SoundCloud track URL extraction on /discover feeds and enabled public audio fallback for DRM-locked SoundCloud tracks.",
-    "Fixed Spotify track switching reactivity, Referer/cookie isolation, and audio fallback duration tolerance.",
-    "Recovered UTF-8 mojibake Arabic filenames from Content-Disposition headers and expanded embedded media scraper extensions."
+    "Refined floating DownloadCard proportions, natural primary-first button hierarchy, smooth 25fps progress shimmer, and a Close action on completion.",
+    "Redesigned AddDownloadDialog with layered cards, non-blocking async URL probe, instant DRM warnings, and localized category labels.",
+    "Eliminated excess blank space in compact IDMProgressDialog, enabled wrapped readable error/DRM explanations, and synced live theme switching.",
+    "Polished UpdateDialog (non-blocking update check) and browser extension popup/floating panel alignment."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",
