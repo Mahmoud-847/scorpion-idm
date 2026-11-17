@@ -628,3 +628,103 @@ test('standalone browser audio tab (<video> playing audio/*) is detected in audi
     assert.equal(sent[0].url, srcUrl);
   } finally { p.dom.window.close(); }
 });
+
+test('DRM video sites and EME-encrypted video players keep the floating bar hidden', () => {
+  const nf = page('https://www.netflix.com/watch/80057281');
+  try {
+    assert.equal(hidden(nf), true);
+  } finally { nf.dom.window.close(); }
+
+  const eme = page('https://cinema.example.com/watch/99', {
+    beforeScripts: ({ window, videos }) => {
+      Object.defineProperty(videos[0], 'mediaKeys', { configurable: true, get: () => ({}) });
+      window.__mark = true;
+    },
+  });
+  try {
+    assert.equal(hidden(eme), true);
+  } finally { eme.dom.window.close(); }
+});
+
+test('SoundCloud /discover resolves exact track permalink from bottom player bar and keeps audio fallback enabled', () => {
+  const p = page('https://soundcloud.com/discover', {
+    videos: [],
+    beforeScripts: ({ window }) => {
+      window.navigator.mediaSession = {
+        playbackState: 'playing',
+        metadata: { title: 'Ya Bent El Sultan', artist: 'Ahmed Adaweya' },
+      };
+      const badge = window.document.createElement('div');
+      badge.className = 'playbackSoundBadge';
+      const link = window.document.createElement('a');
+      link.className = 'playbackSoundBadge__titleLink';
+      link.href = 'https://soundcloud.com/lebbo-2/oclf8fwewllb?in=lebbo-2/sets/top';
+      link.textContent = 'Ya Bent El Sultan';
+      badge.appendChild(link);
+      window.document.body.appendChild(badge);
+    },
+  });
+  try {
+    assert.equal(hidden(p), false);
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    const sent = downloads(p).map((msg) => msg.payload || msg);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].url, 'https://soundcloud.com/lebbo-2/oclf8fwewllb');
+    assert.equal(sent[0].type, 'audio');
+    assert.equal(sent[0].strictTarget, false);
+    assert.equal((sent[0].candidates || []).includes('https://soundcloud.com/discover'), false);
+  } finally { p.dom.window.close(); }
+});
+
+test('Spotify virtual audio player updates active track when song changes in-place', async () => {
+  let trackHref = '/track/111first';
+  let trackTitle = 'First Song';
+  let linkEl;
+  const p = page('https://open.spotify.com/collection/tracks', {
+    videos: [],
+    beforeScripts: ({ window }) => {
+      const tEl = window.document.createElement('title');
+      tEl.textContent = 'First Song • Artist A';
+      window.document.head.appendChild(tEl);
+      window.navigator.mediaSession = {
+        playbackState: 'playing',
+        metadata: { title: trackTitle, artist: 'Artist A' },
+      };
+      linkEl = window.document.createElement('a');
+      linkEl.setAttribute('data-testid', 'context-item-link');
+      linkEl.setAttribute('href', trackHref);
+      linkEl.textContent = trackTitle;
+      window.document.body.appendChild(linkEl);
+    },
+  });
+  try {
+    assert.equal(hidden(p), false);
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+
+    linkEl.setAttribute('href', '/track/222second');
+    linkEl.textContent = 'Second Song';
+    p.window.navigator.mediaSession.metadata = { title: 'Second Song', artist: 'Artist B' };
+    p.window.document.querySelector('title').textContent = 'Second Song • Artist B';
+    await new Promise(setImmediate);
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+
+    const sent = downloads(p).map((msg) => msg.payload || msg);
+    assert.equal(sent.length, 2);
+    assert.equal(sent[0].url, 'https://open.spotify.com/track/111first');
+    assert.equal(sent[1].url, 'https://open.spotify.com/track/222second');
+    assert.equal(sent[1].strictTarget, false);
+  } finally { p.dom.window.close(); }
+});
+
+test('direct MP4 on dropbox.com is not misclassified as x.com', () => {
+  const p = page('https://www.dropbox.com/s/abc/demo', {
+    videos: [{ src: 'https://uc.dropbox.com/raw/demo.mp4', paused: false }],
+  });
+  try {
+    assert.equal(hidden(p), false);
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    const sent = downloads(p).map((msg) => msg.payload || msg);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].url, 'https://uc.dropbox.com/raw/demo.mp4');
+  } finally { p.dom.window.close(); }
+});

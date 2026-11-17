@@ -10,6 +10,27 @@ let config = {
   lang: 'ar',
 };
 
+const VALID_ERROR_CODES = new Set(['connection', 'drmProtected', 'telegramSource', 'telegramAudio', 'transfer']);
+const DRM_VIDEO_HOST_RE = /(^|\.)(netflix\.com|disneyplus\.com|primevideo\.com|shahid\.mbc\.net|watchit\.com|osnplus\.com|tv\.apple\.com|hulu\.com|max\.com|peacocktv\.com|paramountplus\.com|tod\.tv|starzplay\.com)$/i;
+const NO_COOKIE_MUSIC_HOST_RE = /(^|\.)(open\.spotify\.com|spotify\.com|music\.apple\.com|deezer\.com|anghami\.com)$/i;
+
+function isDrmVideoUrl(raw) {
+  try {
+    const u = new URL(String(raw || ''));
+    return DRM_VIDEO_HOST_RE.test(u.hostname) ||
+      (/(^|\.)amazon\.[a-z.]+$/i.test(u.hostname) && /^\/(gp\/video|detail|dp)\b/i.test(u.pathname));
+  } catch (_) {
+    return false;
+  }
+}
+
+function recordPopupError(code) {
+  if (!VALID_ERROR_CODES.has(code)) return;
+  try {
+    chrome.storage.session.set({ scorpionDownloadError: { code, at: Date.now() } }).catch(() => {});
+  } catch (_) {}
+}
+
 function updateContextMenus(lang) {
   const isEn = lang === 'en';
   try {
@@ -33,13 +54,16 @@ function updateContextMenus(lang) {
   } catch (_) {}
 }
 
-chrome.storage.local.get(['scorpionConfig'], (res) => {
-  if (res && res.scorpionConfig) {
-    config = { ...config, ...res.scorpionConfig };
-  } else {
-    chrome.storage.local.set({ scorpionConfig: config });
-  }
-  updateContextMenus(config.lang);
+const configReady = new Promise((resolve) => {
+  chrome.storage.local.get(['scorpionConfig'], (res) => {
+    if (res && res.scorpionConfig) {
+      config = { ...config, ...res.scorpionConfig };
+    } else {
+      chrome.storage.local.set({ scorpionConfig: config });
+    }
+    updateContextMenus(config.lang);
+    resolve(config);
+  });
 });
 
 chrome.storage.onChanged.addListener((changes) => {
@@ -52,7 +76,8 @@ chrome.storage.onChanged.addListener((changes) => {
   }
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
+  await configReady;
   updateContextMenus(config.lang);
   checkScorpionAlive();
 });
@@ -63,17 +88,51 @@ if (chrome.runtime && chrome.runtime.onStartup) {
   });
 }
 
+let lastAliveCheckAt = 0;
+function checkScorpionAliveThrottled() {
+  const now = Date.now();
+  if (now - lastAliveCheckAt < 2000) return;
+  lastAliveCheckAt = now;
+  checkScorpionAlive();
+}
+
 if (chrome.tabs) {
-  chrome.tabs.onCreated.addListener(() => { checkScorpionAlive(); });
-  chrome.tabs.onActivated.addListener(() => { checkScorpionAlive(); });
-  chrome.tabs.onUpdated.addListener(() => { checkScorpionAlive(); });
+  chrome.tabs.onCreated.addListener(() => { checkScorpionAliveThrottled(); });
+  chrome.tabs.onActivated.addListener(() => { checkScorpionAliveThrottled(); });
+  chrome.tabs.onUpdated.addListener((_id, change) => { if (change.url) checkScorpionAliveThrottled(); });
 }
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  const pageUrl = (info && info.pageUrl) || (tab && tab.url) || '';
+  if (isDrmVideoUrl(pageUrl) || isDrmVideoUrl(info && info.srcUrl)) {
+    recordPopupError('drmProtected');
+    return;
+  }
   if (tab && (info.menuItemId === 'scorpion-download-page-video' ||
       ScorpionMedia.isTelegram(tab.url) && info.menuItemId === 'scorpion-download-media')) {
-    chrome.tabs.sendMessage(tab.id, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA', src: info.srcUrl || '' },
-      { frameId: info.frameId || 0 }, () => void chrome.runtime.lastError);
+    chrome.tabs.sendMessage(
+      tab.id,
+      { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA', src: info.srcUrl || '' },
+      { frameId: info.frameId || 0 },
+      async (res) => {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          if (res && res.error === 'drmProtected') {
+            recordPopupError('drmProtected');
+            return;
+          }
+          if (info.menuItemId === 'scorpion-download-page-video' && tab && tab.url) {
+            await sendToScorpion({
+              url: tab.url,
+              pageUrl: tab.url,
+              title: tab.title || 'Video',
+              type: 'video',
+              quality: 'best',
+              cookies: await siteCookies([tab.url], tab),
+            });
+          }
+        }
+      }
+    );
     return;
   }
   if (info.menuItemId === 'scorpion-download-link' && info.linkUrl) {
@@ -81,6 +140,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       url: info.linkUrl,
       referer: info.pageUrl || '',
       type: 'file',
+      cookies: await siteCookies([info.linkUrl, info.pageUrl], tab),
     });
   } else if (info.menuItemId === 'scorpion-download-media' && info.srcUrl) {
     const isAudio = info.mediaType === 'audio' ||
@@ -90,6 +150,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       referer: info.pageUrl || '',
       type: isAudio ? 'audio' : 'video',
       quality: isAudio ? 'direct' : 'best',
+      cookies: await siteCookies([info.srcUrl, info.pageUrl], tab),
     });
   } else if (info.menuItemId === 'scorpion-download-page-video' && tab && tab.url) {
     await sendToScorpion({
@@ -98,6 +159,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       title: tab.title || 'Video',
       type: 'video',
       quality: 'best',
+      cookies: await siteCookies([tab.url], tab),
     });
   }
 });
@@ -106,6 +168,7 @@ const DOWNLOAD_EXT_REGEX = /\.(torrent|zip|rar|7z|exe|msi|iso|dmg|pkg|deb|rpm|ap
 const IGNORE_WEB_ASSET_REGEX = /\.(html?|htm|json|xml|css|js|svg|ico|webp|gif|jpe?g|png)(\?|$)/i;
 
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
+  await configReady;
   if (!config.interceptAllDownloads) return;
   if (downloadItem.state && downloadItem.state !== 'in_progress') return;
 
@@ -168,6 +231,7 @@ async function detectBrowserKey() {
 
 async function checkScorpionAlive() {
   try {
+    await configReady;
     const br = await detectBrowserKey();
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 900);
@@ -194,14 +258,26 @@ setInterval(checkScorpionAlive, 2500);
 
 // The user's cookies for the video's site, so the app can download what the browser can see (videos that
 // need a sign-in: Facebook, Instagram, X, private posts...). Sent only to the local app, only for these sites;
-// the app keeps them in memory and in a temporary file deleted after the download.
-async function siteCookies(urls) {
+// skipped for incognito tabs and DRM music domains whose playback routes through public fallback search.
+async function siteCookies(urls, tab = null) {
   if (!chrome.cookies) return [];
+  if (tab && tab.incognito) return [];
+  let storeId;
+  if (tab && Number.isInteger(tab.id)) {
+    try {
+      const stores = await chrome.cookies.getAllCookieStores();
+      const hit = stores.find((s) => Array.isArray(s.tabIds) && s.tabIds.includes(tab.id));
+      if (hit) storeId = hit.id;
+    } catch (_) {}
+  }
   const seen = new Map();
   for (const u of urls) {
     if (!u || !/^https?:\/\//i.test(u)) continue;
     try {
-      for (const c of await chrome.cookies.getAll({ url: u })) {
+      const host = new URL(u).hostname;
+      if (NO_COOKIE_MUSIC_HOST_RE.test(host) || DRM_VIDEO_HOST_RE.test(host)) continue;
+      const query = storeId ? { url: u, storeId } : { url: u };
+      for (const c of await chrome.cookies.getAll(query)) {
         seen.set(`${c.domain}|${c.path}|${c.name}`, {
           domain: c.domain, path: c.path, secure: c.secure, hostOnly: c.hostOnly,
           expirationDate: c.expirationDate || 0, name: c.name, value: c.value,
@@ -215,16 +291,16 @@ async function siteCookies(urls) {
 const recentCaptures = new Map();
 
 async function sendToScorpion(payload) {
-  const dedupKey = `${payload.url || ''}|${payload.quality || ''}|${payload.type || ''}`;
+  const dedupKey = `${payload.url || ''}|${payload.quality || ''}|${payload.type || ''}|${payload.pageUrl || ''}`;
   const now = Date.now();
   const prev = recentCaptures.get(dedupKey);
-  if (prev && now - prev < 4000) {
+  if (prev && now - prev < 1500) {
     return true;
   }
   recentCaptures.set(dedupKey, now);
   if (recentCaptures.size > 64) {
     for (const [k, ts] of recentCaptures) {
-      if (now - ts >= 4000) recentCaptures.delete(k);
+      if (now - ts >= 1500 || recentCaptures.size > 64) recentCaptures.delete(k);
     }
   }
   try {
@@ -257,9 +333,20 @@ if (chrome.webRequest) chrome.webRequest.onHeadersReceived.addListener((details)
   tabStreams.set(details.tabId, streams);
 }, { urls: ['http://*/*', 'https://*/*'] }, ['responseHeaders']);
 chrome.tabs.onRemoved.addListener((id) => tabStreams.delete(id));
-chrome.tabs.onUpdated.addListener((id, change) => { if (change.url) tabStreams.delete(id); });
+chrome.tabs.onReplaced.addListener((_, removedId) => tabStreams.delete(removedId));
+chrome.tabs.onUpdated.addListener((id, change) => {
+  if (change.url) {
+    tabStreams.delete(id);
+    chrome.tabs.sendMessage(id, { action: 'SCORPION_URL_CHANGED', url: change.url }, () => void chrome.runtime.lastError);
+  }
+});
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === 'SCORPION_REPORT_ERROR') {
+    recordPopupError(msg.code);
+    sendResponse({ ok: true });
+    return false;
+  }
   if (msg.action === 'SCORPION_BROWSER_TRANSFER') {
     const operation = msg.operation;
     const payload = msg.payload || {};
@@ -278,7 +365,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return sendResponse({ ok: false, error: 'جلسة التنزيل انتهت. أعد المحاولة من الفيديو.' });
       const res = await fetch(`${SCORPION_SERVER}/browser-transfer/${operation}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...SCORPION_HEADERS },
-        body: JSON.stringify(payload), signal: AbortSignal.timeout(operation === 'finish' ? 65000 : 20000),
+        body: JSON.stringify(payload), signal: AbortSignal.timeout(operation === 'finish' ? 120000 : 20000),
       });
       const data = await res.json();
       if (operation === 'start' && data.ok) await chrome.storage.session.set({ [`scorpionTransfer:${data.transferId}`]: owner });
@@ -289,6 +376,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.action === 'SCORPION_DOWNLOAD_VIDEO' || msg.action === 'SCORPION_DOWNLOAD_LINK') {
     const payload = { ...(msg.payload || {}) };
+    if (isDrmVideoUrl(payload.url) || isDrmVideoUrl(payload.pageUrl)) {
+      recordPopupError('drmProtected');
+      sendResponse({ ok: false, error: 'drmProtected' });
+      return false;
+    }
     // From an embedded player (iframe): also send the page the user is on, for when the player's own
     // address doesn't identify the video
     if (sender && sender.tab && sender.frameId && sender.tab.url) payload.tabUrl = sender.tab.url;
@@ -296,7 +388,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const finish = async () => {
       if (msg.action === 'SCORPION_DOWNLOAD_VIDEO') {
         const tabUrl = sender && sender.tab && sender.tab.url;
-        payload.cookies = await siteCookies([payload.url, payload.pageUrl, tabUrl, ...(payload.candidates || [])]);
+        payload.cookies = await siteCookies([payload.url, payload.pageUrl, tabUrl, ...(payload.candidates || [])], sender && sender.tab);
       }
       sendResponse({ ok: await sendToScorpion(payload) });
     };
@@ -311,17 +403,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.action === 'SCORPION_GET_TAB_STREAMS') {
-    const streams = tabStreams.get(sender.tab && sender.tab.id);
-    sendResponse({ streams: Array.from(streams ? streams.values() : []).filter((s) =>
-      Date.now() - s.t < 180000 && s.frameId === (sender.frameId || 0)).reverse(), config });
+    configReady.then(() => {
+      const streams = tabStreams.get(sender.tab && sender.tab.id);
+      sendResponse({ streams: Array.from(streams ? streams.values() : []).filter((s) =>
+        Date.now() - s.t < 180000 && s.frameId === (sender.frameId || 0)).reverse(), config });
+    });
     return true;
   }
   if (msg.action === 'SCORPION_LIST_QUALITIES') {
-    // Reading a video's qualities can take several seconds (the app asks yt-dlp)
+    // Reading a video's qualities can take several seconds (the app asks yt-dlp).
+    // Passive hover prefetches omit cookies so tokens are never transmitted before user interaction.
     const tabUrl = (sender && sender.tab && sender.tab.url) || '';
+    if (isDrmVideoUrl(msg.url) || isDrmVideoUrl(tabUrl)) {
+      sendResponse({ ok: false, qualities: [] });
+      return false;
+    }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 60000);
-    siteCookies([msg.url, tabUrl, ...(msg.candidates || [])])
+    const cookiePromise = msg.allowCookies
+      ? siteCookies([msg.url, tabUrl, ...(msg.candidates || [])], sender && sender.tab)
+      : Promise.resolve([]);
+    cookiePromise
       .then((cookies) =>
         fetch(`${SCORPION_SERVER}/formats`, {
           method: 'POST',
@@ -345,14 +447,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.action === 'SCORPION_GET_APP_LANG') {
-    fetch(`${SCORPION_SERVER}/ping`)
+    fetch(`${SCORPION_SERVER}/ping`, { headers: SCORPION_HEADERS, signal: AbortSignal.timeout(1500) })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => sendResponse({ lang: data && data.lang }))
       .catch(() => sendResponse({ lang: null }));
     return true;
   }
   if (msg.action === 'SCORPION_CHECK_STATUS') {
-    checkScorpionAlive().then((alive) => sendResponse({ alive, config }));
+    configReady.then(() => checkScorpionAlive()).then((alive) => sendResponse({ alive, config }));
     return true;
   }
 });

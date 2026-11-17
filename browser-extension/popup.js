@@ -29,6 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
       dismissError: 'إخفاء الرسالة',
       errors: {
         connection: 'تعذر إرسال التنزيل. تأكد من تشغيل البرنامج، ثم حاول مرة أخرى.',
+        drmProtected: '🔒 هذا الفيديو محمي بتشفير DRM (مثل Netflix) ولا يدعم التنزيل الخارجي. استخدم ميزة التنزيل داخل تطبيق المنصة الرسمي.',
         telegramSource: 'افتح الفيديو المطلوب داخل تليجرام ثم أعد المحاولة. إذا لم يتوفر مصدر قابل للقراءة، استخدم تنزيل تليجرام الأصلي.',
         telegramAudio: 'نزّل فيديو تليجرام كاملًا أولًا؛ تنزيل الصوت وحده غير متاح لهذا المسار.',
         transfer: 'تعذر إكمال تنزيل تليجرام. راجع سبب الفشل في البرنامج، ثم أعد المحاولة من الفيديو.',
@@ -47,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
       dismissError: 'Dismiss message',
       errors: {
         connection: 'Could not send the download. Open the desktop application and try again.',
+        drmProtected: '🔒 This video is DRM-protected (e.g. Netflix) and cannot be downloaded externally. Use the platform’s official offline download feature.',
         telegramSource: 'Open the selected video in Telegram and retry. If no readable source is available, use Telegram’s own download button.',
         telegramAudio: 'Download the complete Telegram video first; audio-only download is unavailable for this source.',
         transfer: 'The Telegram download could not finish. Check the reason in the desktop application, then retry from the video.',
@@ -126,6 +128,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!tab || !tab.url) return;
       chrome.tabs.sendMessage(tab.id, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' }, (res) => {
         if (chrome.runtime.lastError || !res || !res.ok) {
+          if (res && res.error === 'drmProtected') {
+            lastError = { code: 'drmProtected', at: Date.now() };
+            applyLang();
+            return;
+          }
           statusBadge.textContent = (I18N[currentLang] || I18N.ar).noVideo;
           statusBadge.className = 'status';
           return;

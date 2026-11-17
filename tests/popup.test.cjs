@@ -42,6 +42,18 @@ test('popup shows and dismisses localized errors separately from connection stat
   } finally { p.dom.window.close(); }
 });
 
+test('popup renders drmProtected localized warning in Arabic and English', async () => {
+  const p = await popup({ code: 'drmProtected', at: Date.now() });
+  try {
+    const card = p.document.getElementById('downloadErrorCard');
+    const message = p.document.getElementById('downloadErrorMessage');
+    assert.equal(card.hidden, false);
+    assert.match(message.textContent, /DRM|Netflix/);
+    p.document.getElementById('langToggleBtn').click();
+    assert.match(message.textContent, /DRM-protected/);
+  } finally { p.dom.window.close(); }
+});
+
 test('expired, future and unknown errors are never displayed in the popup', async () => {
   for (const error of [{ code: 'connection', at: Date.now() - 3600001 },
     { code: 'transfer', at: Date.now() + 60000 }, { code: '<script>private</script>', at: Date.now() }]) {

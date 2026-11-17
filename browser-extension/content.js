@@ -33,8 +33,24 @@
   const AUDIO_RE = /\.(mp3|m4a|aac|ogg|opus|wav|flac|wma|amr|m4b|weba|aiff)(\?|#|$)/i;
   const UI_SOUND_RE = /(^https?:\/\/static\.|\/(assets|sounds?|sfx)\/)/i;
   const TINY_UI_SOUND_RE = /(beep|notification|click|ringtone|alert|ping|pop)\.(mp3|wav|ogg)/i;
-  const MUSIC_SITE_RE = /(open\.spotify\.com|soundcloud\.com|anghami\.com|deezer\.com|music\.apple\.com|music\.youtube\.com)/i;
+  const MUSIC_SITE_RE = /(open\.spotify\.com|soundcloud\.com|anghami\.com|deezer\.com|music\.apple\.com|music\.youtube\.com|bandcamp\.com|mixcloud\.com|audiomack\.com|mp3quran\.net)/i;
   const DRM_MUSIC_SITE_RE = /(open\.spotify\.com|music\.apple\.com|deezer\.com|anghami\.com)/i;
+  const MUSIC_FALLBACK_SITE_RE = /(open\.spotify\.com|soundcloud\.com|anghami\.com|deezer\.com|music\.apple\.com)/i;
+  const DRM_VIDEO_SITE_RE = /(^|\.)(netflix\.com|disneyplus\.com|primevideo\.com|shahid\.mbc\.net|watchit\.com|osnplus\.com|tv\.apple\.com|hulu\.com|max\.com|peacocktv\.com|paramountplus\.com|tod\.tv|starzplay\.com)$/i;
+
+  function cleanVirtualUrl(u) {
+    return String(u || '').replace(/#scorpion-track=.*$/, '');
+  }
+
+  function isDrmVideoSite(host = window.location.hostname, path = window.location.pathname) {
+    if (DRM_VIDEO_SITE_RE.test(String(host || ''))) return true;
+    return /(^|\.)amazon\.[a-z.]+$/i.test(String(host || '')) && /^\/(gp\/video|detail)\b/i.test(String(path || ''));
+  }
+
+  function isDrmProtectedMedia(media) {
+    if (!media || MUSIC_SITE_RE.test(window.location.hostname)) return false;
+    return isDrmVideoSite() || Boolean(media.mediaKeys) || Boolean(media.__scorpionEncrypted);
+  }
 
   function isFloatingVirtual(media) {
     return Boolean(media && media.isVirtual);
@@ -90,6 +106,10 @@
 
   function hasVisibleRect(media) {
     if (!media || isFloatingVirtual(media) || !media.isConnected || typeof media.getBoundingClientRect !== 'function') return false;
+    try {
+      const style = window.getComputedStyle && window.getComputedStyle(media);
+      if (style && (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0')) return false;
+    } catch (_) {}
     const rect = media.getBoundingClientRect();
     const audio = isAudioMedia(media);
     if (rect.width < (audio ? 80 : 160) || rect.height < (audio ? 16 : 100)) return false;
@@ -122,20 +142,31 @@
   }
 
   function getVirtualAudioMedia() {
-    const audioStream = detectedStreams.find((s) => s.isAudio && !UI_SOUND_RE.test(s.url) && !TINY_UI_SOUND_RE.test(s.url));
+    const isMusicSite = MUSIC_SITE_RE.test(window.location.hostname);
+    const audioStream = detectedStreams.find(
+      (s) => (s.isAudio || (isMusicSite && s.isManifest)) && !UI_SOUND_RE.test(s.url) && !TINY_UI_SOUND_RE.test(s.url)
+    );
     let url = audioStream ? audioStream.url : '';
-    if (!url && MUSIC_SITE_RE.test(window.location.hostname)) {
-      const playing = navigator.mediaSession && navigator.mediaSession.playbackState === 'playing';
-      if (playing) url = window.location.href;
+    let trackTag = '';
+    if (isMusicSite) {
+      const info = extractPlayingTrackInfo();
+      const ms = navigator.mediaSession;
+      const hasMeta = Boolean(ms && ((ms.playbackState === 'playing') || (ms.metadata && ms.metadata.title)));
+      const hasTrackUrl = Boolean(info.trackUrl && info.trackUrl !== window.location.href);
+      if (url || hasMeta || hasTrackUrl) {
+        if (!url) url = info.trackUrl || window.location.href;
+        if (info.title) trackTag = `#scorpion-track=${encodeURIComponent(info.title)}`;
+      }
     }
     if (!url) return null;
-    if (!virtualAudioMedia || virtualAudioSrc !== url) {
-      virtualAudioSrc = url;
+    const versionedSrc = url + trackTag;
+    if (!virtualAudioMedia || virtualAudioSrc !== versionedSrc) {
+      virtualAudioSrc = versionedSrc;
       virtualAudioMedia = {
         isVirtual: true,
         tagName: 'AUDIO',
-        src: url,
-        currentSrc: url,
+        src: versionedSrc,
+        currentSrc: versionedSrc,
         isConnected: true,
         paused: false,
         getBoundingClientRect: () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }),
@@ -145,7 +176,7 @@
   }
 
   function isSelectableMedia(media) {
-    if (!media || !sourceOf(media)) return false;
+    if (!media || !sourceOf(media) || isDrmProtectedMedia(media)) return false;
     if (!isAudioMedia(media)) {
       if (!hasVisibleRect(media)) return false;
       const rect = media.getBoundingClientRect();
@@ -348,13 +379,31 @@
     return m ? m[1].toUpperCase() : 'MP3';
   }
 
+  let perfIndex = 0;
+
+  function resetRouteStreams() {
+    streamMap.clear();
+    detectedStreams = [];
+    streamPage = location.href;
+    qualityCache.clear();
+    try {
+      perfIndex = performance.getEntriesByType('resource').length;
+    } catch (_) {
+      perfIndex = 0;
+    }
+  }
+
   function considerUrl(url, initiator) {
     if (streamPage !== location.href) {
-      streamMap.clear();
-      detectedStreams = [];
-      streamPage = location.href;
+      resetRouteStreams();
     }
-    if (!url || !/^https?:\/\//i.test(url) || streamMap.has(url)) return;
+    if (!url || !/^https?:\/\//i.test(url)) return;
+    if (streamMap.has(url)) {
+      const existing = streamMap.get(url);
+      existing.t = Date.now();
+      detectedStreams = Array.from(streamMap.values()).sort((a, b) => b.score - a.score || b.t - a.t);
+      return;
+    }
     if (url.startsWith('http://127.0.0.1:19615')) return;
     if (IGNORE_STREAM_RE.test(url)) return;
     if (ScorpionMedia.isFragment(url) || ScorpionMedia.isBrowserLocal(url)) return;
@@ -379,16 +428,25 @@
     if (streamMap.size > 128) streamMap.delete(streamMap.keys().next().value);
     detectedStreams = Array.from(streamMap.values()).sort((a, b) => b.score - a.score || b.t - a.t);
 
-    if (isAudio && (initiator === 'network-audio' || initiator === 'audio') &&
-        (!activeMedia || isFloatingVirtual(activeMedia))) {
+    if (
+      ((isAudio && (initiator === 'network-audio' || initiator === 'audio' || initiator === 'fetch' || initiator === 'xmlhttprequest')) ||
+        (isManifest && MUSIC_SITE_RE.test(window.location.hostname))) &&
+      (!activeMedia || isFloatingVirtual(activeMedia))
+    ) {
       scheduleViewportRefresh();
     }
     // A network video request alone never makes an overlay: it may belong to another player.
   }
 
   function scanPerformance() {
+    if (streamPage !== location.href) {
+      resetRouteStreams();
+    }
     try {
-      performance.getEntriesByType('resource').forEach((e) => considerUrl(e.name, e.initiatorType));
+      const entries = performance.getEntriesByType('resource');
+      if (perfIndex > entries.length) perfIndex = 0;
+      entries.slice(perfIndex).forEach((e) => considerUrl(e.name, e.initiatorType));
+      perfIndex = entries.length;
     } catch (_) {}
     queryMedia(document, 'video, video source').forEach((el) => {
       considerUrl(el.currentSrc || el.src, 'video');
@@ -415,17 +473,6 @@
     }).observe({ type: 'resource', buffered: true });
   } catch (_) {}
   scanPerformance();
-
-  function bestStream(preferAudio = false) {
-    scanPerformance();
-    detectedStreams = detectedStreams.filter((s) => Date.now() - s.t < 180000);
-    if (preferAudio) {
-      const aud = detectedStreams.find((s) => s.isAudio || s.isManifest);
-      if (aud) return aud;
-      return detectedStreams.length > 0 ? detectedStreams[0] : null;
-    }
-    return detectedStreams.find((s) => !s.isAudio) || null;
-  }
 
   // Embedded players often carry no video id in their address (Dailymotion's own pages load
   // geo.dailymotion.com/player/<player>.html? in an iframe). Rebuild the video page address from the
@@ -526,38 +573,98 @@
 
     // 2. SoundCloud bottom player bar (.playbackSoundBadge__titleLink has the real track URL!)
     if (host.includes('soundcloud.com')) {
-      const titleLink = document.querySelector('a.playbackSoundBadge__titleLink, .playbackSoundBadge a[href*="/"]');
-      const artistLink = document.querySelector('a.playbackSoundBadge__lightLink');
-      if (titleLink) {
-        const href = titleLink.getAttribute('href');
-        if (href && href.startsWith('/') && href.split('/').filter(Boolean).length >= 2) {
-          trackUrl = new URL(href.split('?')[0], 'https://soundcloud.com').href;
-        }
-        if (!title) {
-          title = (titleLink.getAttribute('title') || titleLink.textContent || '').trim();
+      const scNavFirst = new Set(['you', 'discover', 'stream', 'search', 'pages', 'settings', 'messages', 'notifications', 'charts', 'tags']);
+      const scNavSecond = new Set(['sets', 'tracks', 'albums', 'likes', 'reposts', 'followers', 'following', 'comments', 'recommended']);
+      const validScTrack = (href) => {
+        if (!href) return '';
+        try {
+          const u = new URL(href, 'https://soundcloud.com');
+          if (!/soundcloud\.com$/i.test(u.hostname)) return '';
+          const segs = u.pathname.split('/').filter(Boolean);
+          if (segs.length >= 2 && !scNavFirst.has(segs[0].toLowerCase()) && !scNavSecond.has(segs[1].toLowerCase())) {
+            return `${u.origin}${u.pathname}`;
+          }
+        } catch (_) {}
+        return '';
+      };
+      const scLinks = document.querySelectorAll(
+        'a.playbackSoundBadge__titleLink, [class*="playbackSoundBadge"] a[href], .playControls a[href]'
+      );
+      for (const link of scLinks) {
+        const resolved = validScTrack(link.getAttribute('href'));
+        if (resolved) {
+          trackUrl = resolved;
+          if (!title) {
+            title = (link.getAttribute('title') || link.textContent || '').trim();
+          }
+          break;
         }
       }
+      if (!trackUrl) {
+        trackUrl = validScTrack(window.location.pathname);
+      }
+      if (!title) {
+        const scHero = document.querySelector('h1.soundTitle__title');
+        if (scHero) title = (scHero.textContent || '').trim();
+      }
+      const artistLink = document.querySelector('a.playbackSoundBadge__lightLink, .soundTitle__usernameHero');
       if (artistLink && !artist) {
         artist = (artistLink.getAttribute('title') || artistLink.textContent || '').trim();
       }
     }
 
+    // 2b. MP3Quran player bar (#soraName + #reciterName verified on live site)
+    if (host.includes('mp3quran.net')) {
+      const soraEl = document.querySelector('div.audio-player #soraName, .apdp-sora');
+      const reciterEl = document.querySelector('div.audio-player #reciterName, .apdp-reciter');
+      if (!title && soraEl) title = (soraEl.textContent || '').trim();
+      if (!artist && reciterEl) artist = (reciterEl.textContent || '').trim();
+    }
+
     // 3. Spotify bottom Now Playing bar
     if (host.includes('spotify.com')) {
-      const spTitle = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-widget"] a[href*="/track/"]');
+      const spTitle = document.querySelector(
+        '[data-testid="context-item-link"], [data-testid="now-playing-widget"] a[href*="/track/"], footer a[href*="/track/"]'
+      );
       const spArtists = document.querySelectorAll('[data-testid="context-item-info-subtitles"] a, [data-testid="context-item-info-artist"]');
       if (spTitle) {
         if (!title) title = (spTitle.textContent || '').trim();
         const href = spTitle.getAttribute('href');
-        if (href && href.includes('/track/')) {
-          trackUrl = new URL(href, 'https://open.spotify.com').href;
+        if (href && /\/(track|episode)\//i.test(href)) {
+          try {
+            const u = new URL(href, 'https://open.spotify.com');
+            trackUrl = `${u.origin}${u.pathname}`;
+          } catch (_) {}
         }
+      }
+      if (!trackUrl && /^\/(track|episode)\//i.test(window.location.pathname)) {
+        trackUrl = `${window.location.origin}${window.location.pathname}`;
       }
       if (!artist && spArtists.length > 0) {
         artist = Array.from(spArtists)
           .map((el) => (el.textContent || '').trim())
           .filter(Boolean)
           .join(', ');
+      }
+    }
+
+    // 4. YouTube Music player bar
+    if (host === 'music.youtube.com') {
+      const ytLink = document.querySelector('ytmusic-player-bar a[href*="watch?v="]');
+      if (ytLink) {
+        try { trackUrl = new URL(ytLink.getAttribute('href'), 'https://music.youtube.com').href; } catch (_) {}
+      }
+      const ytTitle = document.querySelector('ytmusic-player-bar .title');
+      const ytArtist = document.querySelector('ytmusic-player-bar .byline');
+      if (!title && ytTitle) title = (ytTitle.textContent || '').trim();
+      if (!artist && ytArtist) artist = (ytArtist.textContent || '').split('•')[0].trim();
+    }
+
+    // 5. Anghami / Deezer player links
+    if (host.includes('anghami.com') || host.includes('deezer.com')) {
+      const mLink = document.querySelector('a[href*="/song/"], a[href*="/track/"]');
+      if (mLink) {
+        try { trackUrl = new URL(mLink.getAttribute('href'), window.location.origin).href; } catch (_) {}
       }
     }
 
@@ -587,7 +694,23 @@
           const info = extractPlayingTrackInfo();
           sendResponse({ title: info.title });
         }
-        if (msg && msg.action === 'SCORPION_DOWNLOAD_CURRENT_MEDIA') {
+    if (msg && msg.action === 'SCORPION_URL_CHANGED') {
+      resetRouteStreams();
+      dismissedForUrl = '';
+      scheduleViewportRefresh();
+      return;
+    }
+    if (msg && msg.action === 'SCORPION_DOWNLOAD_CURRENT_MEDIA') {
+      if (isDrmVideoSite() || queryMedia(document, 'video').some((el) => isDrmProtectedMedia(el))) {
+        try {
+          chrome.runtime.sendMessage({ action: 'SCORPION_REPORT_ERROR', code: 'drmProtected' }, () => void chrome.runtime.lastError);
+          if (chrome.storage && chrome.storage.session && chrome.storage.session.set) {
+            chrome.storage.session.set({ scorpionDownloadError: { code: 'drmProtected', at: Date.now() } }).catch(() => {});
+          }
+        } catch (_) {}
+        sendResponse({ ok: false, error: 'drmProtected' });
+        return;
+      }
           const media = msg.src ? queryMedia(document, 'video, audio').find((el) => sourceOf(el) === msg.src) :
             (isSelectableMedia(activeMedia) ? activeMedia : chooseVisibleMedia());
           if (!isSelectableMedia(media)) { sendResponse({ ok: false }); return; }
@@ -596,13 +719,13 @@
           activateMediaElement(media, 'explicit');
           const target = computeDownloadTarget();
           const targetIsAudio = isAudioMedia(media) || AUDIO_RE.test(target.targetUrl);
-          const isDrmMusic = target.isMusicPlatform && DRM_MUSIC_SITE_RE.test(target.effectivePageUrl);
+          const isMusicFallback = target.isMusicPlatform && MUSIC_FALLBACK_SITE_RE.test(target.effectivePageUrl);
           const ok = triggerVideoDownload({
             url: target.targetUrl,
             pageUrl: target.effectivePageUrl,
             referer: location.href,
             candidates: target.candidates,
-            strictTarget: !isDrmMusic,
+            strictTarget: !isMusicFallback,
             title: target.pageTitle,
             quality: targetIsAudio ? (AUDIO_RE.test(target.targetUrl) && !target.isMusicPlatform ? 'direct' : 'audio') : 'best',
             type: targetIsAudio ? 'audio' : 'video',
@@ -771,8 +894,18 @@
     const trackInfo = extractPlayingTrackInfo();
     const pageTitle = trackInfo.title;
 
-    const mediaSrc = sourceOf(activeMedia);
+    const rawMediaSrc = sourceOf(activeMedia);
+    const mediaSrc = cleanVirtualUrl(rawMediaSrc);
+    if ((activeMedia && /^blob:/i.test(mediaSrc)) || isFloatingVirtual(activeMedia)) {
+      scanPerformance();
+    }
+    const virtualHasRawMedia =
+      !isFloatingVirtual(activeMedia) ||
+      AUDIO_RE.test(mediaSrc) ||
+      MANIFEST_RE.test(mediaSrc) ||
+      detectedStreams.some((s) => s.url === mediaSrc && (s.isAudio || s.isManifest));
     const directMediaSrc =
+      virtualHasRawMedia &&
       mediaSrc &&
       /^https?:\/\//i.test(mediaSrc) &&
       !ScorpionMedia.isFragment(mediaSrc) &&
@@ -785,8 +918,11 @@
       ? Array.from(activeMedia.querySelectorAll('source')).map((s) => s.src) : [];
     const sources = new Set([mediaSrc, ...childSources]);
     const multipleMedia = isFloatingVirtual(activeMedia) ? false : queryMedia().length > 1;
+    const nowTs = Date.now();
     const scopedStreams = detectedStreams.filter(
-      (stream) => sources.has(stream.url) || (activeMode === 'audio' && stream.isAudio && (!directMediaSrc || !multipleMedia))
+      (stream) =>
+        nowTs - stream.t < 180000 &&
+        (sources.has(stream.url) || (activeMode === 'audio' && stream.isAudio && !multipleMedia))
     );
     // A lone player fed through MSE (blob:) has no address of its own. When it is the only media element
     // in this document (typically an embedded player's iframe), the manifests this frame loaded are its
@@ -799,14 +935,15 @@
     const sniffed = scopedStreams.find((stream) => stream.isManifest) || scopedStreams[0];
     const permalinks = isFloatingVirtual(activeMedia) ? [] : findPermalinksNearMedia(activeMedia);
     // A track address from a music site wins; otherwise the post around the video beats the feed's address
-    const trackUrl = isAudioMedia(activeMedia) && trackInfo.trackUrl && trackInfo.trackUrl !== pageUrl ? trackInfo.trackUrl : '';
+    const trackUrl = isAudioMedia(activeMedia) && trackInfo.trackUrl ? trackInfo.trackUrl : '';
     const effectivePageUrl = isFloatingVirtual(activeMedia)
       ? resolveEmbeddedVideoPage(trackUrl || pageUrl)
       : resolvePostUrlForMedia(activeMedia, resolveEmbeddedVideoPage(trackUrl || permalinks[0] || pageUrl));
-    const isMusicPlatform = MUSIC_SITE_RE.test(isFramed ? document.referrer || effectivePageUrl : effectivePageUrl);
+    const platformUrl = isFramed && !directMediaSrc ? (document.referrer || effectivePageUrl) : effectivePageUrl;
+    const isMusicPlatform = MUSIC_SITE_RE.test(platformUrl);
     const isKnownVideoSite =
-      /youtube\.com|youtu\.be|facebook\.com|instagram\.com|tiktok\.com|twitter\.com|x\.com|vimeo\.com|dailymotion\.com|linkedin\.com\/(feed\/update|posts)\//i.test(
-        isFramed ? document.referrer || effectivePageUrl : effectivePageUrl
+      /(?:^|\/\/|\.)(youtube\.com|youtu\.be|facebook\.com|instagram\.com|tiktok\.com|twitter\.com|x\.com|vimeo\.com|dailymotion\.com|linkedin\.com\/(?:feed\/update|posts)\/)/i.test(
+        platformUrl
       );
 
     let targetUrl = effectivePageUrl;
@@ -814,17 +951,41 @@
       resolvePostUrlForMedia(activeMedia, pageUrl) !== pageUrl ||
       !multipleMedia && (effectivePageUrl !== pageUrl || PERMALINK_RE.test(location.pathname + location.search));
     const ambiguous = multipleMedia && !scopedPost && !directMediaSrc && !ScorpionMedia.isTelegram(pageUrl);
-    if ((!isKnownVideoSite && !isMusicPlatform) || multipleMedia && directMediaSrc) {
+    const allowDirectOnMusicSite =
+      isMusicPlatform &&
+      directMediaSrc &&
+      AUDIO_RE.test(directMediaSrc) &&
+      !MUSIC_FALLBACK_SITE_RE.test(effectivePageUrl) &&
+      !/music\.youtube\.com/i.test(effectivePageUrl);
+    if ((!isKnownVideoSite && (!isMusicPlatform || allowDirectOnMusicSite)) || multipleMedia && directMediaSrc) {
       if (directMediaSrc) targetUrl = directMediaSrc;
       else if (sniffed && (sniffed.isManifest || (activeMode === 'audio' && sniffed.isAudio))) targetUrl = sniffed.url;
       // A page extractor is safer than an unrelated short MP4 loaded by an ad or background animation.
     }
-    const candidates = [];
+    const isGenericMusicUrl = (u) => {
+      if (!u || !isMusicPlatform) return false;
+      try {
+        const parsed = new URL(u);
+        const pathClean = parsed.pathname.replace(/\/+$/, '');
+        if (!pathClean) return true;
+        if (/soundcloud\.com$/i.test(parsed.hostname)) {
+          const segs = pathClean.split('/').filter(Boolean);
+          if (segs.length < 2) return true;
+          if (['you', 'discover', 'stream', 'search', 'charts', 'tags'].includes(segs[0].toLowerCase())) return true;
+        }
+        if (/spotify\.com$/i.test(parsed.hostname) && !/^\/(track|episode)\//i.test(pathClean)) return true;
+      } catch (_) {}
+      return false;
+    };
+    const rawCandidates = [];
     const addCandidate = (u) => {
-      if (u && /^https?:\/\//i.test(u) && !candidates.includes(u)) candidates.push(u);
+      if (u && /^https?:\/\//i.test(u) && !rawCandidates.includes(u)) rawCandidates.push(u);
     };
     [targetUrl, ...permalinks, directMediaSrc, ...(!multipleMedia ? [effectivePageUrl] : [])].forEach(addCandidate);
     scopedStreams.forEach((stream) => addCandidate(stream.url));
+    const candidates = rawCandidates.some((c) => !isGenericMusicUrl(c))
+      ? rawCandidates.filter((c) => !isGenericMusicUrl(c))
+      : rawCandidates;
     return { pageUrl, pageTitle, effectivePageUrl, isMusicPlatform, isKnownVideoSite, targetUrl, candidates, scopedStreams, ambiguous };
   }
 
@@ -834,7 +995,7 @@
     if (ScorpionMedia.isTelegram(location.href)) return;
     try {
       const tgt = computeDownloadTarget();
-      if (!tgt.isMusicPlatform && !tgt.ambiguous) listQualities(tgt.targetUrl, tgt.pageUrl, tgt.candidates);
+      if (!tgt.isMusicPlatform && !tgt.ambiguous) listQualities(tgt.targetUrl, tgt.pageUrl, tgt.candidates, false);
     } catch (_) {}
   }
 
@@ -855,10 +1016,12 @@
     }
 
     const isDrmMusicSite = isMusicPlatform && DRM_MUSIC_SITE_RE.test(effectivePageUrl);
+    const isMusicFallbackSite = isMusicPlatform && MUSIC_FALLBACK_SITE_RE.test(effectivePageUrl);
     const isDirectAudioStream = Boolean(scopedStreams.some((s) => s.url === targetUrl && s.isAudio));
     const isDirectAudioFile =
       activeMode === 'audio' &&
-      !isMusicPlatform &&
+      !isMusicFallbackSite &&
+      !/music\.youtube\.com/i.test(effectivePageUrl) &&
       !isKnownVideoSite &&
       (AUDIO_RE.test(targetUrl) || isDirectAudioStream);
 
@@ -923,7 +1086,7 @@
           type: opt.type || 'video',
           filename: opt.filename || '',
           candidates,
-          strictTarget: !isDrmMusicSite,
+          strictTarget: !isMusicFallbackSite,
         }, session);
       });
       return btn;
@@ -938,7 +1101,7 @@
       status.textContent = tr.loadingQualities;
       box.appendChild(status);
       dropdownEl.insertBefore(box, dropdownEl.children[1] || null);
-      listQualities(targetUrl, pageUrl, candidates).then((res) => {
+      listQualities(targetUrl, pageUrl, candidates, true).then((res) => {
         if (!sessionIsCurrent(session) || renderedMenu !== menuGeneration || !box.isConnected) return;
         const list = (res && res.qualities) || [];
         if (!list.length) {
@@ -995,24 +1158,31 @@
 
   // Qualities per address, cached so reopening the menu is instant (one request per video)
   const qualityCache = new Map();
-  function listQualities(url, referer, candidates) {
-    if (!qualityCache.has(url)) {
+  function listQualities(url, referer, candidates, allowCookies = false) {
+    const cacheKey = `${url}|${(candidates || []).join(',')}`;
+    if (!qualityCache.has(cacheKey)) {
+      if (qualityCache.size >= 32) {
+        qualityCache.delete(qualityCache.keys().next().value);
+      }
       qualityCache.set(
-        url,
+        cacheKey,
         new Promise((resolve) => {
           try {
-            chrome.runtime.sendMessage({ action: 'SCORPION_LIST_QUALITIES', url, referer, candidates: candidates || [], strictTarget: true }, (res) => {
-              if (chrome.runtime.lastError || !res || !res.ok) qualityCache.delete(url);
-              resolve(chrome.runtime.lastError ? null : res);
-            });
+            chrome.runtime.sendMessage(
+              { action: 'SCORPION_LIST_QUALITIES', url, referer, candidates: candidates || [], strictTarget: true, allowCookies },
+              (res) => {
+                if (chrome.runtime.lastError || !res || !res.ok) qualityCache.delete(cacheKey);
+                resolve(chrome.runtime.lastError ? null : res);
+              }
+            );
           } catch (_) {
-            qualityCache.delete(url);
+            qualityCache.delete(cacheKey);
             resolve(null);
           }
         })
       );
     }
-    return qualityCache.get(url);
+    return qualityCache.get(cacheKey);
   }
 
   function triggerVideoDownload(payload, session = mediaSession()) {
@@ -1025,7 +1195,10 @@
     // retained for the extension popup; never persist a source URL or a raw server error.
     const reportError = (code) => {
       try {
-        chrome.storage.session.set({ scorpionDownloadError: { code, at: Date.now() } }).catch(() => {});
+        chrome.runtime.sendMessage({ action: 'SCORPION_REPORT_ERROR', code }, () => void chrome.runtime.lastError);
+        if (chrome.storage && chrome.storage.session && chrome.storage.session.set) {
+          chrome.storage.session.set({ scorpionDownloadError: { code, at: Date.now() } }).catch(() => {});
+        }
       } catch (_) {}
     };
 
@@ -1133,12 +1306,21 @@
     createFloatingPanel();
     if (labelEl && labelEl.textContent !== currentMainLabel()) labelEl.textContent = currentMainLabel();
 
-    const hostEl = document.fullscreenElement || document.documentElement;
+    const fsEl = document.fullscreenElement;
+    const hostEl =
+      fsEl && fsEl.tagName !== 'VIDEO' && fsEl.tagName !== 'AUDIO' && fsEl.tagName !== 'IFRAME' && !fsEl.shadowRoot
+        ? fsEl
+        : document.documentElement;
     if (panelEl.parentElement !== hostEl) {
       hostEl.appendChild(panelEl);
     }
 
+    if (panelEl.style.display === 'none') {
+      panelEl.style.visibility = 'hidden';
+      panelEl.style.display = 'block';
+    }
     const panelW = Math.max(290, panelEl.offsetWidth || 320);
+    panelEl.style.visibility = '';
 
     if (panelEl.__userDraggedPos) {
       const clampedLeft = Math.max(8, Math.min(window.innerWidth - panelW - 8, panelEl.__userDraggedPos.left));
@@ -1224,6 +1406,10 @@
     media.addEventListener('loadeddata', () => refreshMediaSelection());
     // Pause/end do not invalidate an explicitly selected video; source/removal/visibility do.
     for (const event of ['pause', 'ended', 'emptied', 'error']) media.addEventListener(event, () => refreshMediaSelection());
+    media.addEventListener('encrypted', () => {
+      media.__scorpionEncrypted = true;
+      refreshMediaSelection();
+    });
   }
 
   function scanForMedia() {
@@ -1236,6 +1422,7 @@
   function refreshMediaSelection(reason = 'scan') {
     if (!window.document) return;
     if (reason === 'viewport' && !panelDragging) {
+      if (isHoveringPanel && isSelectableMedia(activeMedia)) return;
       const selected = chooseVisibleMedia();
       if (selected) { activateMediaElement(selected, 'viewport'); return; }
     }
@@ -1280,6 +1467,15 @@
   mediaObserver = observer;
   for (const root of shadowRoots) observer.observe(root, OBSERVE_OPTS);
 
+  try {
+    const titleEl = document.querySelector('title');
+    if (titleEl) {
+      new MutationObserver(() => {
+        if (MUSIC_SITE_RE.test(window.location.hostname)) scheduleViewportRefresh();
+      }).observe(titleEl, { childList: true, characterData: true, subtree: true });
+    }
+  } catch (_) {}
+
   function scheduleViewportRefresh() {
     if (viewportRefreshPending) return;
     viewportRefreshPending = true;
@@ -1295,8 +1491,17 @@
     { passive: true, capture: true }
   );
   window.addEventListener('resize', scheduleViewportRefresh, { passive: true });
-  window.addEventListener('hashchange', scheduleViewportRefresh);
-  window.addEventListener('popstate', scheduleViewportRefresh);
+  const onSpaRouteChange = () => {
+    resetRouteStreams();
+    scheduleViewportRefresh();
+  };
+  window.addEventListener('hashchange', onSpaRouteChange);
+  window.addEventListener('popstate', onSpaRouteChange);
+  try {
+    if (window.navigation && typeof window.navigation.addEventListener === 'function') {
+      window.navigation.addEventListener('navigatesuccess', onSpaRouteChange);
+    }
+  } catch (_) {}
   document.addEventListener('fullscreenchange', scheduleViewportRefresh);
   document.addEventListener('pointermove', (event) => {
     if (!panelEl || !panelEl.contains(event.target)) pointerPosition = { x: event.clientX, y: event.clientY };

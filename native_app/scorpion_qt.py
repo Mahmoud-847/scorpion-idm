@@ -9,6 +9,7 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 import json
+import copy
 import re
 import time
 import uuid
@@ -157,7 +158,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.21"
+APP_VERSION = "2.1.22"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -179,6 +180,38 @@ def find_tool(name: str) -> str:
     return ""
 
 
+DRM_VIDEO_DOMAINS = (
+    "netflix.com",
+    "disneyplus.com",
+    "primevideo.com",
+    "shahid.mbc.net",
+    "watchit.com",
+    "osnplus.com",
+    "tv.apple.com",
+    "hulu.com",
+    "max.com",
+    "peacocktv.com",
+    "paramountplus.com",
+    "tod.tv",
+    "starzplay.com",
+)
+
+
+def is_drm_video_url(url: str) -> bool:
+    try:
+        p = urllib.parse.urlparse((url or "").strip())
+        host = (p.hostname or "").lower()
+        if not host:
+            return False
+        if any(host == d or host.endswith("." + d) for d in DRM_VIDEO_DOMAINS):
+            return True
+        if re.search(r"(^|\.)amazon\.[a-z.]+$", host) and re.match(r"^/(gp/video|detail)\b", p.path or "", re.I):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def needs_login(err) -> bool:
     text = str(err).lower()
     return any(k in text for k in ("registered users", "login required", "log in", "sign in", "cookies", "private video",
@@ -188,6 +221,8 @@ def needs_login(err) -> bool:
 def friendly_video_error(err) -> str:
     """Why a video failed, in words the user can act on (same rules for every site)."""
     text = str(err).replace("ERROR:", "").strip()
+    if any(k in text.lower() for k in ("drm protected", "this video is drm", "widevine", "playready", "encrypted media", "تشفير drm")):
+        return "هذا المحتوى محمي بتشفير DRM (مثل Netflix / Shahid) ولا يدعم التنزيل الخارجي. استخدم ميزة التنزيل داخل التطبيق الرسمي للمنصة."
     if needs_login(text):
         return ("الفيديو ده محتاج تسجيل دخول في الموقع. افتح الموقع في Chrome وسجّل دخول، "
                 "وبعدين اضغط زر التحميل اللي فوق الفيديو تاني.")
@@ -225,6 +260,24 @@ BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.22",
+        "date": "2026-11-17",
+        "title_ar": "الإصدار 2.1.22 — حماية DRM ذكية، إصلاح SoundCloud/Spotify، وأسماء الملفات العربية",
+        "title_en": "Version 2.1.22 — Smart DRM Handling, SoundCloud/Spotify Audio Fixes & UTF-8 Filenames",
+        "ar": [
+            "إخفاء زر التحميل العائم في منصات الفيديو المحمية بـ DRM (مثل Netflix وShahid) وعرض تنبيه عربي واضح عند الطلب اليدوي.",
+            "إصلاح تنزيل SoundCloud (التقاط التراك الفعلي من /discover والبديل الصوتي للتراكات المحمية من المصدر).",
+            "تحسين استقرار البديل الصوتي لـ Spotify ومنع إرسال Referer خارجي أو رفض الملف لفرق ثوانٍ بسيطة.",
+            "استعادة أسماء الملفات العربية المشوّهة (UTF-8 Mojibake) من ترويسات السيرفرات وتوسيع استخراج روابط الصوت في التضمينات.",
+        ],
+        "en": [
+            "Auto-hide the floating video panel on DRM-protected platforms (Netflix, Shahid, etc.) and show a clear DRM notice on manual actions.",
+            "Fixed SoundCloud track URL extraction on /discover feeds and enabled public audio fallback for DRM-locked SoundCloud tracks.",
+            "Fixed Spotify track switching reactivity, Referer/cookie isolation, and audio fallback duration tolerance.",
+            "Recovered UTF-8 mojibake Arabic filenames from Content-Disposition headers and expanded embedded media scraper extensions.",
+        ],
+    },
     {
         "version": "2.1.21",
         "date": "2026-11-13",
@@ -636,8 +689,23 @@ def detect_category(filename: str, mime: str = "") -> str:
     return "General"
 
 
+def _fix_header_mojibake(val: str) -> str:
+    if not val or not any("\u0080" <= ch <= "\u00ff" for ch in val):
+        return val
+    if any("\u0600" <= ch <= "\u06ff" for ch in val):
+        return val
+    try:
+        fixed = val.encode("latin-1").decode("utf-8")
+        if fixed and "\ufffd" not in fixed:
+            return fixed
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    return val
+
+
 def sanitize_filename(name: str) -> str:
-    clean = "".join("_" if c in '<>:"/\\|?*\r\n\t' else c for c in (name or "download_file")).strip()
+    fixed = _fix_header_mojibake(name or "")
+    clean = "".join("_" if c in '<>:"/\\|?*\r\n\t' else c for c in (fixed or "download_file")).strip()
     return clean or "scorpion_download.bin"
 
 
@@ -710,19 +778,28 @@ def _sniff_file_ext(path: str) -> str:
 
 
 def extract_filename(url: str, headers: dict) -> str:
-    cd = headers.get("Content-Disposition") or headers.get("content-disposition") or ""
+    cd = _fix_header_mojibake(headers.get("Content-Disposition") or headers.get("content-disposition") or "")
     name = ""
-    m_ext = re.search(r"filename\*\s*=\s*([^;\s]+)", cd, re.I)
+    m_ext = re.search(r"filename\*\s*=\s*([^;\r\n]+)", cd, re.I)
     if m_ext:
         val = m_ext.group(1).strip().strip('"\'')
-        if "''" in val:
-            val = val.split("''", 1)[1]
-        if val:
-            name = sanitize_filename(urllib.parse.unquote(val))
+        m_rfc = re.match(r"^([A-Za-z0-9._-]+)'[^']*'(.*)$", val)
+        if m_rfc:
+            charset, encoded = m_rfc.group(1), m_rfc.group(2)
+            try:
+                decoded = urllib.parse.unquote(encoded, encoding=charset or "utf-8", errors="replace")
+            except LookupError:
+                decoded = urllib.parse.unquote(encoded, encoding="utf-8", errors="replace")
+            if decoded:
+                name = sanitize_filename(_fix_header_mojibake(decoded))
+        elif val:
+            if "''" in val:
+                val = val.split("''", 1)[1]
+            name = sanitize_filename(_fix_header_mojibake(urllib.parse.unquote(val)))
     if not name and "filename=" in cd.lower():
         m_std = re.search(r'filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;\r\n]+)', cd, re.I)
         if m_std:
-            part = (m_std.group(1) or m_std.group(2) or "").strip().strip('"\';')
+            part = _fix_header_mojibake((m_std.group(1) or m_std.group(2) or "").strip().strip('"\';'))
             if part:
                 name = sanitize_filename(urllib.parse.unquote(part))
     if not name:
@@ -2134,21 +2211,26 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     hh, mm = (self.settings.get("schedTime") or "02:00").split(":")[:2]
                     due = (now.tm_hour, now.tm_min) >= (int(hh), int(mm))
                     if due and self.settings.get("schedLastFired") != today:
-                        self.settings["schedLastFired"] = today
-                        for it in self.downloads.values():
-                            if it.get("status") == "scheduled":
-                                it["status"] = "queued"
+                        with self.lock:
+                            self.settings["schedLastFired"] = today
+                            for it in self.downloads.values():
+                                if it.get("status") == "scheduled":
+                                    it["status"] = "queued"
                         self.save_state()
                 # Queue: start the oldest queued items while there are free slots
                 max_c = max(1, int(self.settings.get("maxConcurrent") or 4))
-                queued = sorted(
-                    (it for it in self.downloads.values() if it.get("status") == "queued"),
-                    key=lambda x: x.get("createdAt", 0),
-                )
+                with self.lock:
+                    queued = sorted(
+                        (it for it in self.downloads.values() if it.get("status") == "queued"),
+                        key=lambda x: x.get("createdAt", 0),
+                    )
                 for it in queued:
-                    if self.active_count() >= max_c:
-                        break
-                    it["status"] = "paused"
+                    with self.lock:
+                        if self.active_count() >= max_c:
+                            break
+                        if it.get("status") != "queued":
+                            continue
+                        it["status"] = "paused"
                     self.start_download(it["id"])
             except Exception:
                 pass
@@ -2384,7 +2466,15 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     dl_id = item.get("id")
                     fn = item.get("filename") or "download.bin"
                     if dl_id:
-                        item["tempFilePath"] = os.path.join(self.get_item_temp_dir(dl_id), fn + ".scorpion_part")
+                        stored_tmp = item.get("tempFilePath") or ""
+                        temp_abs = os.path.abspath(self.temp_root)
+                        inside_temp = bool(
+                            stored_tmp
+                            and os.path.abspath(stored_tmp).startswith(temp_abs + os.sep)
+                            and os.path.isfile(stored_tmp)
+                        )
+                        if not inside_temp:
+                            item["tempFilePath"] = os.path.join(self.get_item_temp_dir(dl_id), fn + ".scorpion_part")
                     self.downloads[item["id"]] = item
         except Exception:
             pass
@@ -2392,31 +2482,50 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
     def _sweep_stray_part_files(self):
         dl_root = self.settings.get("downloadsRoot") or self.default_dl_root
-        if not os.path.isdir(dl_root):
-            return
-        try:
-            for dirpath, _, filenames in os.walk(dl_root):
-                for fn in filenames:
-                    if fn.endswith((".part", ".ytdl", ".scorpion_part", ".aria2")) or "-Frag" in fn:
-                        try:
-                            os.remove(os.path.join(dirpath, fn))
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-    def save_state(self):
-        with self.lock:
+        if os.path.isdir(dl_root):
             try:
-                with open(self.state_file, "w", encoding="utf-8") as f:
-                    json.dump(
-                        {"settings": self.settings, "downloads": list(self.downloads.values())},
-                        f,
-                        ensure_ascii=False,
-                        indent=2,
-                    )
+                for dirpath, _, filenames in os.walk(dl_root):
+                    for fn in filenames:
+                        if fn.endswith((".part", ".ytdl", ".scorpion_part", ".aria2")) or "-Frag" in fn:
+                            try:
+                                os.remove(os.path.join(dirpath, fn))
+                            except Exception:
+                                pass
             except Exception:
                 pass
+        if os.path.isdir(self.temp_root):
+            try:
+                known_ids = set(self.downloads.keys())
+                for entry in os.listdir(self.temp_root):
+                    p = os.path.join(self.temp_root, entry)
+                    if os.path.isdir(p) and entry not in known_ids:
+                        shutil.rmtree(p, ignore_errors=True)
+                    elif os.path.isfile(p) and entry.startswith("cookies_") and entry.endswith(".txt"):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+            except Exception:
+                pass
+
+    def save_state(self):
+        state_path = getattr(self, "state_file", "")
+        if not state_path:
+            return
+        try:
+            with self.lock:
+                snapshot = copy.deepcopy(
+                    {"settings": dict(self.settings), "downloads": list(self.downloads.values())}
+                )
+            os.makedirs(os.path.dirname(state_path), exist_ok=True)
+            tmp_path = state_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, state_path)
+        except Exception:
+            pass
 
     def _cookies_to_jar(self, cookies):
         if not cookies:
@@ -2674,64 +2783,92 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         return item
 
     def start_download(self, dl_id: str):
-        item = self.downloads.get(dl_id)
-        if not item or item["status"] == "completed" or dl_id in self.controllers:
-            return
-        if item.get("browserTransfer"):
-            item.update(status="error", speed=0, errorMsg="الملف مرتبط بجلسة المتصفح. افتح الفيديو واضغط زر التنزيل مرة أخرى.")
-            self.save_state()
-            return
-        # Download queue: respect the max number of simultaneous downloads
-        if self.active_count() >= max(1, int(self.settings.get("maxConcurrent") or 4)):
-            item["status"] = "queued"
-            item["speed"] = 0
-            self.save_state()
-            return
-        item["status"] = "downloading"
-        item["errorMsg"] = ""
-        item["startedAt"] = time.time()
-        item.pop("finishedAt", None)
-        self.save_state()
+        with self.lock:
+            item = self.downloads.get(dl_id)
+            if not item or item["status"] == "completed" or dl_id in self.controllers:
+                return
+            if item.get("browserTransfer"):
+                item.update(status="error", speed=0, errorMsg="الملف مرتبط بجلسة المتصفح. افتح الفيديو واضغط زر التنزيل مرة أخرى.")
+                self.save_state()
+                return
+            # Download queue: respect the max number of simultaneous downloads
+            if self.active_count() >= max(1, int(self.settings.get("maxConcurrent") or 4)):
+                item["status"] = "queued"
+                item["speed"] = 0
+                self.save_state()
+                return
+            item["status"] = "downloading"
+            item["errorMsg"] = ""
+            item["startedAt"] = time.time()
+            item.pop("finishedAt", None)
 
-        if item.get("isTorrent") or self._is_torrent_source(item.get("url", ""), item):
-            item["isTorrent"] = True
-            ctrl = {"aborted": False, "last_bytes": item["downloadedBytes"], "last_time": time.time(), "file_lock": threading.Lock()}
-            self.controllers[dl_id] = ctrl
-            threading.Thread(target=self._run_torrent_worker, args=(item, ctrl), daemon=True).start()
-            return
+            if item.get("isTorrent") or self._is_torrent_source(item.get("url", ""), item):
+                item["isTorrent"] = True
+                ctrl = {"aborted": False, "last_bytes": item["downloadedBytes"], "last_time": time.time(), "file_lock": threading.Lock()}
+                self.controllers[dl_id] = ctrl
+                self.save_state()
+                threading.Thread(target=self._run_torrent_worker, args=(item, ctrl), daemon=True).start()
+                return
 
-        u_plus_ref = ((item.get("url") or "") + " " + (item.get("referer") or "")).lower()
-        if any(
-            d in u_plus_ref
-            for d in ("spotify.com", "soundcloud.com", "anghami.com", "deezer.com", "music.apple.com", "widevine-license")
-        ):
-            item["isVideo"] = True
-            item["videoQuality"] = "audio"
-            item["category"] = "Music"
-            if any(x in (item.get("url") or "").lower() for x in ("widevine-license", "spclient.spotify.com", "/license")):
-                if item.get("referer"):
-                    item["url"] = item["referer"]
-            self.save_state()
+            music_hosts = ("spotify.com", "soundcloud.com", "anghami.com", "deezer.com", "music.apple.com")
+            u_host = (urllib.parse.urlparse(item.get("url") or "").hostname or "").lower()
+            ref_host = (urllib.parse.urlparse(item.get("referer") or "").hostname or "").lower()
+            is_music_host = any(
+                h == d or h.endswith("." + d)
+                for h in (u_host, ref_host)
+                if h
+                for d in music_hosts
+            ) or ("widevine-license" in (item.get("url") or "").lower() and any(ref_host == d or ref_host.endswith("." + d) for d in music_hosts))
+            if is_music_host:
+                item["isVideo"] = True
+                item["videoQuality"] = "audio"
+                item["category"] = "Music"
+                if item.get("downloadedBytes", 0) == 0:
+                    music_dir = os.path.join(self.settings["downloadsRoot"], "Music")
+                    os.makedirs(music_dir, exist_ok=True)
+                    item["saveDir"] = music_dir
+                    item["filePath"] = os.path.join(music_dir, item.get("filename") or "download.mp3")
+                if any(x in (item.get("url") or "").lower() for x in ("widevine-license", "spclient.spotify.com", "/license")):
+                    if item.get("referer"):
+                        item["url"] = item["referer"]
 
-        if item.get("isVideo"):
-            ctrl = {"aborted": False, "last_bytes": item["downloadedBytes"], "last_time": time.time(), "file_lock": threading.Lock()}
-            self.controllers[dl_id] = ctrl
-            threading.Thread(target=self._run_video_worker_with_cookies, args=(item, ctrl), daemon=True).start()
-            return
+            if item.get("isVideo"):
+                ctrl = {"aborted": False, "last_bytes": item["downloadedBytes"], "last_time": time.time(), "file_lock": threading.Lock()}
+                self.controllers[dl_id] = ctrl
+                self.save_state()
+                threading.Thread(target=self._run_video_worker_with_cookies, args=(item, ctrl), daemon=True).start()
+                return
 
-        os.makedirs(item["saveDir"], exist_ok=True)
-        mode = "r+b" if os.path.exists(item["tempFilePath"]) else "w+b"
-        f_obj = open(item["tempFilePath"], mode)
-        ctrl = {"aborted": False, "file": f_obj, "file_lock": threading.Lock(), "last_bytes": item["downloadedBytes"], "last_time": time.time(),
-                "act_lock": threading.Lock(), "active": 0, "conn_limit": max(1, len(item["segments"]))}
-        self.controllers[dl_id] = ctrl
-
-        for seg in item["segments"]:
-            if seg["endByte"] == -1 or seg["currentByte"] <= seg["endByte"]:
-                threading.Thread(target=self._run_segment_worker, args=(item, seg, ctrl), daemon=True).start()
+            os.makedirs(item["saveDir"], exist_ok=True)
+            os.makedirs(os.path.dirname(item["tempFilePath"]), exist_ok=True)
+            tmp_exists = os.path.exists(item["tempFilePath"])
+            need_reset = (not item.get("supportsRange", True)) or (not tmp_exists and item.get("downloadedBytes", 0) > 0)
+            if need_reset:
+                item["downloadedBytes"] = 0
+                item["progress"] = 0.0
+                for seg in item.get("segments") or []:
+                    seg["currentByte"] = seg.get("startByte", 0)
+                    seg["downloaded"] = 0
+                mode = "w+b"
             else:
-                seg["status"] = "completed"
-                seg["info"] = "Complete"
+                mode = "r+b" if tmp_exists else "w+b"
+            f_obj = open(item["tempFilePath"], mode)
+            ctrl = {"aborted": False, "file": f_obj, "file_lock": threading.Lock(), "last_bytes": item["downloadedBytes"], "last_time": time.time(),
+                    "act_lock": threading.Lock(), "active": 0, "conn_limit": max(1, len(item["segments"]))}
+            self.controllers[dl_id] = ctrl
+
+            segs_to_start = []
+            for seg in item["segments"]:
+                if seg["endByte"] == -1 or seg["currentByte"] <= seg["endByte"]:
+                    seg["status"] = "downloading"
+                    seg["info"] = "Connecting..."
+                    segs_to_start.append(seg)
+                else:
+                    seg["status"] = "completed"
+                    seg["info"] = "Complete"
+            self.save_state()
+        for seg in segs_to_start:
+            threading.Thread(target=self._run_segment_worker, args=(item, seg, ctrl), daemon=True).start()
 
     def _throttle(self, item: dict):
         """Per-download and global speed limits."""
@@ -2748,22 +2885,25 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             if ctrl.get("restarting"):
                 return
             ctrl["restarting"] = True
-        ctrl["aborted"] = True
-        self.controllers.pop(item["id"], None)
-        try:
-            ctrl["file"].close()
-        except Exception:
-            pass
-        try:
-            if os.path.exists(item["tempFilePath"]):
-                os.remove(item["tempFilePath"])
-        except Exception:
-            pass
-        item["supportsRange"] = False
-        item["downloadedBytes"] = 0
-        item["segments"] = self._create_segments(item.get("totalSize") or 0, 1)
-        item["status"] = "paused"
-        self.save_state()
+        with ctrl["file_lock"]:
+            ctrl["aborted"] = True
+            try:
+                ctrl["file"].close()
+            except Exception:
+                pass
+        with self.lock:
+            self.controllers.pop(item["id"], None)
+            try:
+                if os.path.exists(item["tempFilePath"]):
+                    os.remove(item["tempFilePath"])
+            except Exception:
+                pass
+            item["supportsRange"] = False
+            item["downloadedBytes"] = 0
+            item["progress"] = 0.0
+            item["segments"] = self._create_segments(item.get("totalSize") or 0, 1)
+            item["status"] = "paused"
+            self.save_state()
         self.start_download(item["id"])
 
     def _run_segment_worker(self, item: dict, seg: dict, ctrl: dict):
@@ -2798,6 +2938,15 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     ranged = item["supportsRange"] and seg["endByte"] >= seg["currentByte"]
                     if ranged:
                         hdrs["Range"] = f"bytes={seg['currentByte']}-{seg['endByte']}"
+                    elif seg["currentByte"] > 0:
+                        with ctrl["file_lock"]:
+                            if ctrl["aborted"]:
+                                return
+                            ctrl["file"].seek(0)
+                            ctrl["file"].truncate(0)
+                            seg["currentByte"] = 0
+                            seg["downloaded"] = 0
+                            item["downloadedBytes"] = 0
 
                     jar = self._cookies_to_jar(self.__dict__.get("_site_cookies", {}).get(item["id"]))
                     with requests.get(
@@ -2809,7 +2958,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                             seg["status"] = "error"
                             seg["info"] = f"HTTP {r.status_code}"
                             return
-                        elif r.status_code == 200 and ranged and seg["currentByte"] > 0:
+                        elif r.status_code == 200 and ranged and (seg["currentByte"] > 0 or len(item.get("segments") or []) > 1):
                             # Range ignored by the server -> fall back to a single connection
                             threading.Thread(target=self._restart_single_connection, args=(item, ctrl), daemon=True).start()
                             return
@@ -2852,15 +3001,15 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                                     return
                                 if not chunk:
                                     continue
-                                to_write = len(chunk)
-                                if seg["endByte"] != -1:
-                                    rem = seg["endByte"] - seg["currentByte"] + 1
-                                    if rem <= 0:
-                                        break
-                                    to_write = min(to_write, rem)
                                 with ctrl["file_lock"]:
                                     if ctrl["aborted"]:
                                         return
+                                    to_write = len(chunk)
+                                    if seg["endByte"] != -1:
+                                        rem = seg["endByte"] - seg["currentByte"] + 1
+                                        if rem <= 0:
+                                            break
+                                        to_write = min(to_write, rem)
                                     ctrl["file"].seek(seg["currentByte"])
                                     ctrl["file"].write(chunk[:to_write])
                                     seg["currentByte"] += to_write
@@ -2978,9 +3127,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         pass
             except Exception:
                 pass
-        found = re.findall(r"""https?://[^\s"'<>\\]+?\.(?:m3u8|mpd|mp4)(?:\?[^\s"'<>\\]*)?""", html, re.I)
-        # relative manifest paths like file:"/hls/xyz/master.m3u8"
-        for rel in re.findall(r"""["'](/[^"'\s]+?\.m3u8(?:\?[^"'\s]*)?)["']""", html, re.I):
+        found = re.findall(
+            r"""https?://[^\s"'<>\\]+?\.(?:m3u8|mpd|mp4|webm|m4a|mp3|ogg|opus|flac|wav)(?:\?[^\s"'<>\\]*)?""",
+            html,
+            re.I,
+        )
+        # relative manifest/media paths like file:"/hls/xyz/master.m3u8"
+        for rel in re.findall(r"""["'](/[^"'\s]+?\.(?:m3u8|mpd|mp4|m4a|mp3|ogg)(?:\?[^"'\s]*)?)["']""", html, re.I):
             found.append(urllib.parse.urljoin(page_url, rel))
         uniq = []
         for u in found:
@@ -3031,6 +3184,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         raw = re.sub(r"^(?:Stream|Listen\s+to|Play)\s+", "", raw, flags=re.I)
         raw = re.sub(r"\s+on\s+(?:Spotify|SoundCloud|Anghami|Deezer|Apple\s*Music).*$", "", raw, flags=re.I)
         raw = re.sub(r"^\(\d+\)\s*", "", raw)
+        raw = re.sub(r"\s*\(\d+\)$", "", raw)
         raw = re.sub(r"[•·|_+\ufffd]+", " ", raw)
         raw = re.sub(r"\s+", " ", raw).strip(" -–—.")
 
@@ -3045,11 +3199,18 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "scorpion video",
             "spotify",
             "soundcloud",
+            "apple music",
+            "deezer",
+            "anghami",
+            "youtube music",
             "web player",
             "you",
             "search",
         }
-        if raw.lower() not in generic_names and len(raw) >= 3:
+        u_hint = ((item.get("url") or "") + " " + (item.get("referer") or "")).lower()
+        is_music_url = any(d in u_hint for d in ("spotify.com", "soundcloud.com", "anghami.com", "deezer.com", "music.apple.com"))
+        is_opaque_id = is_music_url and bool(re.fullmatch(r"[A-Za-z0-9_-]{12,}|[0-9]+", raw))
+        if raw.lower() not in generic_names and len(raw) >= 3 and not is_opaque_id:
             return raw
 
         for page_url in (item.get("url") or "", item.get("referer") or ""):
@@ -3060,9 +3221,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             try:
                 resp = requests.get(page_url, headers={"User-Agent": BROWSER_UA}, timeout=10, verify=False)
                 html_txt = resp.text
-                m_og = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html_txt, re.I)
-                m_desc = re.search(
-                    r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', html_txt, re.I
+                m_og = (
+                    re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html_txt, re.I)
+                    or re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']', html_txt, re.I)
+                )
+                m_desc = (
+                    re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', html_txt, re.I)
+                    or re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:description["\']', html_txt, re.I)
                 )
                 if m_og:
                     title_part = html_mod.unescape(m_og.group(1)).strip()
@@ -3091,7 +3256,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             except Exception:
                 pass
 
-        return raw
+        return "" if is_opaque_id else raw
 
     def _extract_with_fallback(self, ydl, item: dict):
         """Try yt-dlp on the URL; for DRM/music sites or unsupported pages, fall back to audio search or stream scraping."""
@@ -3100,6 +3265,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         # the site's three-second animation, which is not the user's video.
         if urllib.parse.urlparse(u_low).hostname == "web.telegram.org" or browser_local_url(u_low):
             raise RuntimeError("فيديو تليجرام مرتبط بجلسة المتصفح. حدّث الإضافة وافتح الفيديو ثم اضغط زر التنزيل فوقه.")
+        if is_drm_video_url(u_low) or is_drm_video_url(item.get("referer") or "") or is_drm_video_url(item.get("tabUrl") or ""):
+            raise RuntimeError("هذا المحتوى محمي بتشفير DRM (مثل Netflix / Shahid) ولا يدعم التنزيل الخارجي. استخدم ميزة التنزيل داخل التطبيق الرسمي للمنصة.")
         u_clean = u_low.split("?")[0].rstrip("/")
         is_audio = item.get("videoQuality") == "audio" or item.get("category") == "Music"
         strict_target = bool(item.get("strictTarget", False))
@@ -3121,17 +3288,30 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             query = self._build_audio_search_query(item)
             if not query:
                 return None
-            saved_hdrs = dict(ydl.params.get("http_headers") or {})
+            orig_hdrs = ydl.params.get("http_headers")
+            saved_hdrs = dict(orig_hdrs or {})
+            saved_cookiefile = ydl.params.pop("cookiefile", None)
             try:
-                clean_hdrs = {k: v for k, v in saved_hdrs.items() if k.lower() not in ("referer", "origin")}
+                if getattr(ydl, "cookiejar", None) is not None:
+                    ydl.cookiejar.clear()
+            except Exception:
+                pass
+            try:
+                clean_dict = {k: v for k, v in saved_hdrs.items() if k.lower() not in ("referer", "origin")}
+                clean_hdrs = type(orig_hdrs)(clean_dict) if isinstance(orig_hdrs, dict) and type(orig_hdrs) is not dict else clean_dict
                 ydl.params["http_headers"] = clean_hdrs
                 res = _unwrap_info(ydl.extract_info(f"ytsearch1:{query}", download=False))
                 if res:
+                    item["_fromAudioSearch"] = True
+                    item["referer"] = ""
+                    if isinstance(res, dict) and res.get("webpage_url"):
+                        item["url"] = res["webpage_url"]
                     return res
             except Exception:
                 pass
-            finally:
-                ydl.params["http_headers"] = saved_hdrs
+            if saved_cookiefile is not None:
+                ydl.params["cookiefile"] = saved_cookiefile
+            ydl.params["http_headers"] = orig_hdrs if orig_hdrs is not None else saved_hdrs
             return None
 
         if strict_target:
@@ -3176,7 +3356,30 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "https://m.soundcloud.com",
             "https://m.soundcloud.com/discover",
         )
-        if is_audio and (any(d in u_low for d in drm_music_domains) or u_clean in sc_generic_paths):
+
+        def _is_generic_music_url(u: str) -> bool:
+            ul = (u or "").lower().strip()
+            uc = ul.split("?")[0].rstrip("/")
+            return any(d in ul for d in drm_music_domains) or uc in sc_generic_paths
+
+        if is_audio and _is_generic_music_url(u_low):
+            for alt in list(item.get("candidates") or []):
+                alt = (alt or "").strip() if isinstance(alt, str) else ""
+                if (
+                    not alt.lower().startswith(("http://", "https://"))
+                    or _is_generic_music_url(alt)
+                    or fragment_url(alt)
+                    or browser_local_url(alt)
+                    or urllib.parse.urlparse(alt).hostname == "web.telegram.org"
+                ):
+                    continue
+                try:
+                    cand_info = _unwrap_info(ydl.extract_info(alt, download=False))
+                    if cand_info and (cand_info.get("formats") or cand_info.get("url")):
+                        item["url"] = alt
+                        return cand_info
+                except Exception:
+                    pass
             found_info = _extract_via_audio_search()
             if found_info:
                 return found_info
@@ -3186,18 +3389,19 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 raise RuntimeError("الرابط يخص جزءًا من البث. استخدم رابط الفيديو أو قائمة البث الكاملة.")
             return _unwrap_info(ydl.extract_info(item["url"], download=False))
         except Exception as first_err:
-            if is_audio:
-                found_info = _extract_via_audio_search()
-                if found_info:
-                    return found_info
             # The first address may not identify the video (a feed, a profile, an embedded player): try the
             # others the browser saw (post links near the video, the tab, streams the player loaded) in order
             tried = {item["url"]}
             for alt in [item.get("tabUrl") or ""] + list(item.get("candidates") or []):
-                alt = (alt or "").strip()
+                alt = (alt or "").strip() if isinstance(alt, str) else ""
                 if not alt.lower().startswith(("http://", "https://")) or alt in tried:
                     continue
-                if fragment_url(alt) or browser_local_url(alt) or urllib.parse.urlparse(alt).hostname == "web.telegram.org":
+                if (
+                    _is_generic_music_url(alt)
+                    or fragment_url(alt)
+                    or browser_local_url(alt)
+                    or urllib.parse.urlparse(alt).hostname == "web.telegram.org"
+                ):
                     continue
                 tried.add(alt)
                 try:
@@ -3208,11 +3412,17 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 except Exception as alt_err:
                     if needs_login(alt_err):
                         first_err = alt_err  # the most useful reason to show
+            if is_audio:
+                found_info = _extract_via_audio_search()
+                if found_info:
+                    return found_info
             if needs_login(first_err):
                 raise first_err
             if not item["url"].lower().split("?")[0].endswith((".html", ".htm", "/")) and "unsupported url" not in str(first_err).lower():
                 raise
             for cand in self._scrape_media_urls(item["url"], item.get("referer") or item["url"]):
+                if fragment_url(cand) or browser_local_url(cand):
+                    continue
                 try:
                     info = _unwrap_info(ydl.extract_info(cand, download=False))
                     item["url"] = cand
@@ -3240,9 +3450,12 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 or item.get("category") == "Music"
                 or os.path.splitext(path or "")[1].lower() in CATEGORY_MAP["Music"]
             )
-        return validate_media(path, find_tool("ffprobe"),
-                              max(finite_duration(item.get("expectedDuration")), finite_duration(expected_duration)),
-                              bool(audio_only), expect_audio)
+        target_dur = (
+            finite_duration(expected_duration)
+            if item.get("_fromAudioSearch")
+            else max(finite_duration(item.get("expectedDuration")), finite_duration(expected_duration))
+        )
+        return validate_media(path, find_tool("ffprobe"), target_dur, bool(audio_only), expect_audio)
 
     def _has_video_stream(self, path: str):
         """True/False from ffprobe; None when it can't tell (no ffprobe, unreadable file)."""
@@ -4005,8 +4218,16 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             item.pop("_videoOutput", None)
             item["filePath"] = base_no_ext + os.path.splitext(item["filename"])[1]
             item["useRangeVideoEngine"] = False
-            self.controllers.pop(item["id"], None)
+            with self.lock:
+                self.controllers.pop(item["id"], None)
             if not ctrl["aborted"]:
+                # Clean stale partial video_out.* files so manual retries do not resume corrupt data
+                try:
+                    for fn in os.listdir(item_temp_dir):
+                        if fn.startswith("video_out"):
+                            os.remove(os.path.join(item_temp_dir, fn))
+                except Exception:
+                    pass
                 msg = friendly_video_error(err)
                 item["status"] = "error"
                 item["errorMsg"] = msg[:160]
@@ -4495,28 +4716,33 @@ class ScorpionNativeEngine(BrowserTransferMixin):
     def _speed_loop(self):
         while True:
             time.sleep(0.3)
-            now = time.time()
-            # Total speed of all running downloads (used by the global speed limit)
-            self.total_speed = sum(
-                int(it.get("speed") or 0) for it in list(self.downloads.values()) if it.get("status") == "downloading"
-            )
-            for dl_id, ctrl in list(self.controllers.items()):
-                item = self.downloads.get(dl_id)
-                if not item or item["status"] != "downloading":
-                    continue
-                if item.get("isTorrent") or (item.get("isVideo") and not item.get("useRangeVideoEngine") and not item.get("browserTransfer")):
-                    continue
-                elapsed = max(0.1, now - ctrl["last_time"])
-                delta = max(0, item["downloadedBytes"] - ctrl["last_bytes"])
-                inst = int(delta / elapsed)
-                item["speed"] = int(item["speed"] * 0.6 + inst * 0.4) if item["speed"] > 0 else inst
-                ctrl["last_bytes"] = item["downloadedBytes"]
-                ctrl["last_time"] = now
-                if item["totalSize"] > 0:
-                    item["progress"] = min(99.9, round((item["downloadedBytes"] / item["totalSize"]) * 100, 2))
-                    rem = max(0, item["totalSize"] - item["downloadedBytes"])
-                    item["timeLeft"] = int(rem / item["speed"]) if item["speed"] > 0 else None
-                item["speedHistory"] = (item.get("speedHistory") or [])[-35:] + [item["speed"]]
+            try:
+                now = time.time()
+                with self.lock:
+                    downloads_snap = list(self.downloads.values())
+                    ctrls_snap = [(dl_id, ctrl, self.downloads.get(dl_id)) for dl_id, ctrl in self.controllers.items()]
+                # Total speed of all running downloads (used by the global speed limit)
+                self.total_speed = sum(
+                    int(it.get("speed") or 0) for it in downloads_snap if it.get("status") == "downloading"
+                )
+                for dl_id, ctrl, item in ctrls_snap:
+                    if not item or item["status"] != "downloading":
+                        continue
+                    if item.get("isTorrent") or (item.get("isVideo") and not item.get("useRangeVideoEngine") and not item.get("browserTransfer")):
+                        continue
+                    elapsed = max(0.1, now - ctrl["last_time"])
+                    delta = max(0, item["downloadedBytes"] - ctrl["last_bytes"])
+                    inst = int(delta / elapsed)
+                    item["speed"] = int(item["speed"] * 0.6 + inst * 0.4) if item["speed"] > 0 else inst
+                    ctrl["last_bytes"] = item["downloadedBytes"]
+                    ctrl["last_time"] = now
+                    if item["totalSize"] > 0:
+                        item["progress"] = min(99.9, round((item["downloadedBytes"] / item["totalSize"]) * 100, 2))
+                        rem = max(0, item["totalSize"] - item["downloadedBytes"])
+                        item["timeLeft"] = int(rem / item["speed"]) if item["speed"] > 0 else None
+                    item["speedHistory"] = (item.get("speedHistory") or [])[-35:] + [item["speed"]]
+            except Exception:
+                pass
 
 
 # ==============================================================================

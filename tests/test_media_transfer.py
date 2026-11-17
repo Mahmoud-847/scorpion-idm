@@ -423,6 +423,128 @@ class MediaRegressionTests(unittest.TestCase):
                 zf.writestr("xl/workbook.xml", "<workbook/>")
             self.assertEqual(sq._sniff_file_ext(str(xlsx_tmp)), ".xlsx")
 
+    def test_drm_video_sites_rejected_immediately_with_polite_message(self):
+        extractor = Mock()
+        with patch.object(self.engine, "_scrape_media_urls") as scrape:
+            with self.assertRaisesRegex(RuntimeError, "DRM"):
+                self.engine._extract_with_fallback(
+                    extractor,
+                    {"url": "https://www.netflix.com/watch/80057281", "videoQuality": "best", "strictTarget": False},
+                )
+        extractor.extract_info.assert_not_called()
+        scrape.assert_not_called()
+        self.assertIn("DRM", sq.friendly_video_error(RuntimeError("ERROR: [soundcloud] 2425992501: This video is DRM protected")))
+
+    def test_soundcloud_drm_fallback_clears_foreign_referer_and_uses_search_duration(self):
+        extractor = Mock()
+        extractor.params = {
+            "http_headers": {"Referer": "https://open.spotify.com/", "Origin": "https://open.spotify.com", "User-Agent": "UA"},
+            "cookiefile": "spotify.txt",
+        }
+        extractor.cookiejar = Mock()
+
+        def side_effect(target, download=False):
+            if "soundcloud.com" in target:
+                raise RuntimeError("ERROR: [soundcloud] 2425992501: This video is DRM protected")
+            return {"webpage_url": "https://www.youtube.com/watch?v=abc123", "formats": [{"url": "https://cdn.test/a.m4a"}], "duration": 182}
+
+        extractor.extract_info.side_effect = side_effect
+        item = {
+            "url": "https://soundcloud.com/shahyn24720/brimo",
+            "filename": "Brimo by Shahyn.mp3",
+            "referer": "https://soundcloud.com/discover",
+            "videoQuality": "audio",
+            "category": "Music",
+            "expectedDuration": 210,
+            "strictTarget": False,
+        }
+        info = self.engine._extract_with_fallback(extractor, item)
+        self.assertEqual(info["webpage_url"], "https://www.youtube.com/watch?v=abc123")
+        self.assertTrue(item.get("_fromAudioSearch"))
+        self.assertNotIn("Referer", extractor.params["http_headers"])
+        self.assertNotIn("Origin", extractor.params["http_headers"])
+        self.assertNotIn("cookiefile", extractor.params)
+        extractor.cookiejar.clear.assert_called_once()
+        with patch.object(sq, "validate_media", return_value=182.0) as mock_val:
+            self.engine._validate_video_output("out.mp3", item, expected_duration=182.0, audio_only=True)
+            self.assertEqual(mock_val.call_args.args[2], 182.0)
+
+    def test_soundcloud_discover_prefers_real_track_candidate_before_audio_search(self):
+        extractor = Mock()
+        track = "https://soundcloud.com/lebbo-2/oclf8fwewllb"
+        extractor.extract_info.return_value = {"url": track, "formats": [{"url": "https://cdn.test/sc.m3u8"}], "duration": 240}
+        item = {
+            "url": "https://soundcloud.com/discover",
+            "filename": "Ya Bent El Sultan.mp3",
+            "candidates": [track],
+            "videoQuality": "audio",
+            "category": "Music",
+            "strictTarget": False,
+        }
+        with patch.object(self.engine, "_build_audio_search_query") as search_q:
+            info = self.engine._extract_with_fallback(extractor, item)
+        search_q.assert_not_called()
+        self.assertEqual(item["url"], track)
+        self.assertEqual(info["duration"], 240)
+
+    def test_extract_filename_recovers_utf8_arabic_mojibake(self):
+        arabic_name = "التصنيفات_الرئيسية_v2.docx"
+        mojibake = arabic_name.encode("utf-8").decode("latin-1")
+        recovered = sq.extract_filename(
+            "https://drive.usercontent.google.com/download?id=1",
+            {"Content-Disposition": f'attachment; filename="{mojibake}"'},
+        )
+        self.assertEqual(recovered, arabic_name)
+
+    def test_extract_filename_rfc5987_language_tag_and_spaces(self):
+        name = sq.extract_filename(
+            "https://portal.example.com/export",
+            {"Content-Disposition": "attachment; filename*=UTF-8'en'Quarterly%20Report.xlsx"},
+        )
+        self.assertEqual(name, "Quarterly Report.xlsx")
+
+    def test_drm_video_blocked_in_audio_mode_and_via_referer(self):
+        extractor = Mock()
+        for item in (
+            {"url": "https://www.netflix.com/watch/1", "videoQuality": "audio", "category": "Music"},
+            {"url": "https://cdn.example.com/video.mp4", "referer": "https://www.netflix.com/watch/1", "videoQuality": "best"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "DRM"):
+                self.engine._extract_with_fallback(extractor, item)
+        extractor.extract_info.assert_not_called()
+
+    def test_non_ranged_resume_resets_bytes_before_restart(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            eng = engine_at(Path(tmpdir))
+            Path(eng.settings["downloadsRoot"]).mkdir(parents=True, exist_ok=True)
+            tmp_file = Path(tmpdir) / "temp" / "dl-nr" / "file.bin.scorpion_part"
+            tmp_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp_file.write_bytes(b"partial-data")
+            eng.downloads["dl-nr"] = {
+                "id": "dl-nr",
+                "url": "https://example.com/file.bin",
+                "filename": "file.bin",
+                "saveDir": eng.settings["downloadsRoot"],
+                "filePath": str(Path(eng.settings["downloadsRoot"]) / "file.bin"),
+                "tempFilePath": str(tmp_file),
+                "totalSize": 1000,
+                "downloadedBytes": 500,
+                "progress": 50.0,
+                "status": "paused",
+                "supportsRange": False,
+                "segments": [{"id": 1, "startByte": 0, "endByte": 999, "currentByte": 500, "downloaded": 500, "status": "paused", "info": ""}],
+            }
+            fake_thread = Mock()
+            with patch.object(sq.threading, "Thread", return_value=fake_thread):
+                eng.start_download("dl-nr")
+            it = eng.downloads["dl-nr"]
+            self.assertEqual(it["downloadedBytes"], 0)
+            self.assertEqual(it["segments"][0]["currentByte"], 0)
+            self.assertEqual(it["segments"][0]["status"], "downloading")
+            ctrl = eng.controllers.get("dl-nr")
+            if ctrl and ctrl.get("file"):
+                ctrl["file"].close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -100,18 +100,18 @@ class BrowserTransferMixin:
                 dl_spec["category"] = "Music"
                 dl_spec["videoQuality"] = "audio"
             item = self.add_download(dl_spec)
-        ctrl = {"aborted": False, "file_lock": threading.RLock(), "last_bytes": 0,
-                "last_time": time.time(), "last_activity": time.time()}
-        try:
-            ctrl["file"] = open(item["tempFilePath"], "w+b")
-        except OSError:
-            item.update(status="error", speed=0, errorMsg="تعذر إنشاء ملف التنزيل. راجع المساحة المتاحة وصلاحية المجلد.")
+            ctrl = {"aborted": False, "file_lock": threading.RLock(), "last_bytes": 0,
+                    "last_time": time.time(), "last_activity": time.time()}
+            try:
+                ctrl["file"] = open(item["tempFilePath"], "w+b")
+            except OSError:
+                item.update(status="error", speed=0, errorMsg="تعذر إنشاء ملف التنزيل. راجع المساحة المتاحة وصلاحية المجلد.")
+                self.save_state()
+                raise
+            token = uuid.uuid4().hex
+            self.__dict__.setdefault("_browser_transfers", {})[token] = (item, ctrl)
+            self.controllers[item["id"]] = ctrl
             self.save_state()
-            raise
-        token = uuid.uuid4().hex
-        self.__dict__.setdefault("_browser_transfers", {})[token] = (item, ctrl)
-        self.controllers[item["id"]] = ctrl
-        self.save_state()
         self.signals.browser_captured.emit({"browserTransferId": item["id"]})
         return {"ok": True, "transferId": token}
 
@@ -184,14 +184,16 @@ class BrowserTransferMixin:
                 raise
 
     def fail_browser_transfer(self, token, message):
-        record = self.__dict__.get("_browser_transfers", {}).pop(token, None)
+        with self.lock:
+            record = self.__dict__.get("_browser_transfers", {}).pop(token, None)
         if not record:
             return
         item, ctrl = record
         with ctrl["file_lock"]:
             ctrl["aborted"] = True
             ctrl["file"].close()
-            self.controllers.pop(item["id"], None)
+            with self.lock:
+                self.controllers.pop(item["id"], None)
             # A browser session cannot be resumed from the app, so its partial file is useless
             temp_path = item.get("tempFilePath")
             if temp_path and item.get("status") != "completed":
@@ -206,13 +208,17 @@ class BrowserTransferMixin:
                 self.save_state()
 
     def cancel_browser_transfer(self, dl_id, message):
-        for token, (item, _) in list(self.__dict__.get("_browser_transfers", {}).items()):
+        with self.lock:
+            items = list(self.__dict__.get("_browser_transfers", {}).items())
+        for token, (item, _) in items:
             if item.get("id") == dl_id:
                 self.fail_browser_transfer(token, message)
                 return True
         return False
 
     def expire_browser_transfers(self):
-        for token, (_, ctrl) in list(self.__dict__.get("_browser_transfers", {}).items()):
+        with self.lock:
+            items = list(self.__dict__.get("_browser_transfers", {}).items())
+        for token, (_, ctrl) in items:
             if ctrl["aborted"] or time.time() - ctrl["last_activity"] > 180:
                 self.fail_browser_transfer(token, "انقطع الاتصال بتبويب الفيديو. افتحه وأعد التنزيل.")

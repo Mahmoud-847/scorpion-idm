@@ -1,22 +1,22 @@
 {
-  "version": "2.1.21",
-  "publishedAt": "2026-11-13",
+  "version": "2.1.22",
+  "publishedAt": "2026-11-17",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "337ac8ff90060133171ed56ab3ee54d15fc5ba988d786bfca8c88e5d39089a3c",
+  "sha256": "5b932cd66a29acb27161cc57e4889437464bc200af979359ea06299300431c58",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.21 — منع التكرار، زر الإلغاء، وإصلاح تحميل الصوت والتقارير",
-  "title_en": "Version 2.1.21 — Deduplication, Card Cancel Button, Audio & Report Fixes",
+  "title_ar": "الإصدار 2.1.22 — حماية DRM ذكية، إصلاح SoundCloud/Spotify، وأسماء الملفات العربية",
+  "title_en": "Version 2.1.22 — Smart DRM Handling, SoundCloud/Spotify Audio Fixes & UTF-8 Filenames",
   "changelog_ar": [
-    "منع تكرار تنزيل نفس الرابط مرتين عند وصول إشارة الالتقاط أكثر من مرة.",
-    "إضافة زر «إلغاء» واضح في أسفل بطاقة التحميل المنبثقة لإيقاف وحذف التحميل فورًا.",
-    "إصلاح توقف تحميل مقاطع SoundCloud / HLS عند 20% عبر ضبط عدد الاتصالات المتزامنة.",
-    "تسريع بدء تحميل ملفات المواقع البطيئة وعدم تجميد الواجهة، مع اكتشاف امتداد الملفات مثل (.xlsx, .csv, .pdf) تلقائيًا."
+    "إخفاء زر التحميل العائم في منصات الفيديو المحمية بـ DRM (مثل Netflix وShahid) وعرض تنبيه عربي واضح عند الطلب اليدوي.",
+    "إصلاح تنزيل SoundCloud (التقاط التراك الفعلي من /discover والبديل الصوتي للتراكات المحمية من المصدر).",
+    "تحسين استقرار البديل الصوتي لـ Spotify ومنع إرسال Referer خارجي أو رفض الملف لفرق ثوانٍ بسيطة.",
+    "استعادة أسماء الملفات العربية المشوّهة (UTF-8 Mojibake) من ترويسات السيرفرات وتوسيع استخراج روابط الصوت في التضمينات."
   ],
   "changelog_en": [
-    "Prevented duplicate downloads when identical captures arrive within seconds.",
-    "Added a visible Cancel button at the bottom of the floating DownloadCard popup.",
-    "Fixed SoundCloud / HLS audio downloads stalling at 20% by tuning concurrent fragment downloads.",
-    "Skipped synchronous UI-thread probes for browser-captured files, raised read timeout for slow report servers, and inferred missing extensions (.xlsx, .csv, .pdf) from headers/query."
+    "Auto-hide the floating video panel on DRM-protected platforms (Netflix, Shahid, etc.) and show a clear DRM notice on manual actions.",
+    "Fixed SoundCloud track URL extraction on /discover feeds and enabled public audio fallback for DRM-locked SoundCloud tracks.",
+    "Fixed Spotify track switching reactivity, Referer/cookie isolation, and audio fallback duration tolerance.",
+    "Recovered UTF-8 mojibake Arabic filenames from Content-Disposition headers and expanded embedded media scraper extensions."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",
