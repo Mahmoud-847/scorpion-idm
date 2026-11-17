@@ -100,8 +100,8 @@ class BrowserTransferMixin:
                 dl_spec["category"] = "Music"
                 dl_spec["videoQuality"] = "audio"
             item = self.add_download(dl_spec)
-            ctrl = {"aborted": False, "file_lock": threading.RLock(), "last_bytes": 0,
-                    "last_time": time.time(), "last_activity": time.time()}
+            ctrl = {"aborted": False, "file_lock": threading.RLock(), "chunk_lock": threading.Lock(),
+                    "last_bytes": 0, "last_time": time.time(), "last_activity": time.time()}
             try:
                 ctrl["file"] = open(item["tempFilePath"], "w+b")
             except OSError:
@@ -113,7 +113,9 @@ class BrowserTransferMixin:
             self.controllers[item["id"]] = ctrl
             self.save_state()
         self.signals.browser_captured.emit({"browserTransferId": item["id"]})
-        return {"ok": True, "transferId": token}
+        g_kbps = int((getattr(self, "settings", {}) or {}).get("globalSpeedLimitKbps") or 0)
+        rec_chunk = 512 * 1024 if g_kbps <= 0 else max(16384, min(512 * 1024, g_kbps * 1024 * 2))
+        return {"ok": True, "transferId": token, "chunkSize": rec_chunk}
 
     def receive_browser_transfer(self, operation, payload):
         token = str(payload.get("transferId") or "")
@@ -125,37 +127,54 @@ class BrowserTransferMixin:
             # Always honoured, even after a pause/cancel, so the session and its temp file never linger
             self.fail_browser_transfer(token, "التنزيل من المتصفح انقطع. افتح الفيديو وأعد المحاولة.")
             return {"ok": True}
+        if operation == "chunk":
+            offset = int(payload.get("offset", -1))
+            encoded = payload.get("data") or ""
+            if not isinstance(encoded, str) or len(encoded) > 710000:
+                raise ValueError("حجم جزء الفيديو غير صالح.")
+            chunk = base64.b64decode(encoded, validate=True)
+            chunk_lock = ctrl.setdefault("chunk_lock", threading.Lock())
+            with chunk_lock:
+                with ctrl["file_lock"]:
+                    ctrl["last_activity"] = time.time()
+                    if ctrl["aborted"] or item.get("status") != "downloading":
+                        raise ValueError("التنزيل اتوقف. أعد المحاولة من المتصفح.")
+                    current = item["downloadedBytes"]
+                    if offset < 0 or not chunk or len(chunk) > 512 * 1024 or offset + len(chunk) > item["totalSize"]:
+                        raise ValueError("حدود جزء الفيديو غير صالحة.")
+                    fh = ctrl["file"]
+                    if offset < current and offset + len(chunk) <= current:
+                        fh.seek(offset)
+                        if fh.read(len(chunk)) != chunk:
+                            raise ValueError("الجزء المكرر مختلف عن البيانات المحفوظة.")
+                        return {"ok": True, "offset": current}
+                    if offset != current:
+                        raise ValueError("وصل جزء فيديو خارج الترتيب.")
+                    fh.seek(offset)
+                    fh.write(chunk)
+                    item["downloadedBytes"] += len(chunk)
+                    seg = item["segments"][0]
+                    seg["downloaded"] = item["downloadedBytes"]
+                    seg["currentByte"] = item["downloadedBytes"]
+                    item["progress"] = min(99.9, item["downloadedBytes"] / item["totalSize"] * 100)
+                    new_offset = item["downloadedBytes"]
+                # Throttle outside file_lock so abort/cancel never blocks on disk lock or sleeps past HTTP timeout
+                extra_wait = 0.0
+                if hasattr(self, "consume_bandwidth"):
+                    try:
+                        extra_wait = float(self.consume_bandwidth(item, len(chunk), ctrl, max_wait_s=4.0) or 0.0)
+                    except TypeError:
+                        self.consume_bandwidth(item, len(chunk), ctrl)
+                if ctrl["aborted"]:
+                    raise ValueError("التنزيل اتوقف. أعد المحاولة من المتصفح.")
+                resp_obj = {"ok": True, "offset": new_offset}
+                if extra_wait > 0:
+                    resp_obj["throttleMs"] = int(min(60000.0, extra_wait * 1000.0))
+                return resp_obj
         with ctrl["file_lock"]:
             ctrl["last_activity"] = time.time()
             if ctrl["aborted"] or item.get("status") != "downloading":
                 raise ValueError("التنزيل اتوقف. أعد المحاولة من المتصفح.")
-            if operation == "chunk":
-                offset = int(payload.get("offset", -1))
-                encoded = payload.get("data") or ""
-                if not isinstance(encoded, str) or len(encoded) > 710000:
-                    raise ValueError("حجم جزء الفيديو غير صالح.")
-                chunk = base64.b64decode(encoded, validate=True)
-                current = item["downloadedBytes"]
-                if offset < 0 or not chunk or len(chunk) > 512 * 1024 or offset + len(chunk) > item["totalSize"]:
-                    raise ValueError("حدود جزء الفيديو غير صالحة.")
-                fh = ctrl["file"]
-                if offset < current and offset + len(chunk) <= current:
-                    fh.seek(offset)
-                    if fh.read(len(chunk)) != chunk:
-                        raise ValueError("الجزء المكرر مختلف عن البيانات المحفوظة.")
-                    return {"ok": True, "offset": current}
-                if offset != current:
-                    raise ValueError("وصل جزء فيديو خارج الترتيب.")
-                fh.seek(offset)
-                fh.write(chunk)
-                item["downloadedBytes"] += len(chunk)
-                if hasattr(self, "consume_bandwidth"):
-                    self.consume_bandwidth(item, len(chunk), ctrl)
-                seg = item["segments"][0]
-                seg["downloaded"] = item["downloadedBytes"]
-                seg["currentByte"] = item["downloadedBytes"]
-                item["progress"] = min(99.9, item["downloadedBytes"] / item["totalSize"] * 100)
-                return {"ok": True, "offset": item["downloadedBytes"]}
             if operation != "finish":
                 raise ValueError("عملية تنزيل غير صالحة.")
             try:
@@ -191,9 +210,13 @@ class BrowserTransferMixin:
         if not record:
             return
         item, ctrl = record
+        ctrl["aborted"] = True
         with ctrl["file_lock"]:
             ctrl["aborted"] = True
-            ctrl["file"].close()
+            try:
+                ctrl["file"].close()
+            except Exception:
+                pass
             with self.lock:
                 self.controllers.pop(item["id"], None)
             # A browser session cannot be resumed from the app, so its partial file is useless

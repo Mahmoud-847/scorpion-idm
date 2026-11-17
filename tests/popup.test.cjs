@@ -4,12 +4,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
-async function popup(error, tabReply = { ok: false }) {
+async function popup(error, tabReply = { ok: false }, statusOverride = null) {
   const html = fs.readFileSync(path.join(__dirname, '../browser-extension/popup.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'https://extension.test/popup.html', runScripts: 'outside-only' });
   const { window } = dom;
   const removed = [];
   window.fetch = async () => ({ ok: true });
+  const statusPayload = statusOverride || { alive: true, config: { lang: 'ar' }, stats: null };
   window.chrome = {
     storage: {
       session: {
@@ -23,7 +24,7 @@ async function popup(error, tabReply = { ok: false }) {
       query: (_, callback) => callback([{ id: 7, url: 'https://example.com/watch' }]),
       sendMessage: (_id, _msg, callback) => callback(tabReply),
     },
-    runtime: { sendMessage: (_, callback) => callback({ alive: true, config: { lang: 'ar' } }) },
+    runtime: { sendMessage: (_, callback) => callback(statusPayload) },
   };
   window.eval(fs.readFileSync(path.join(__dirname, '../browser-extension/popup.js'), 'utf8'));
   await new Promise((resolve) => window.document.addEventListener('DOMContentLoaded', resolve, { once: true }));
@@ -82,13 +83,39 @@ test('grabCurrentPageBtn shows noVideo inside errorCard without mutating statusB
     p.document.getElementById('grabCurrentPageBtn').click();
     assert.equal(card.hidden, false);
     assert.match(message.textContent, /قف على الفيديو المطلوب/);
-    assert.match(badge.textContent, /متصل بالبرنامج 🟢/);
+    assert.match(badge.textContent, /متصل ببرنامج سطح المكتب/);
     p.document.getElementById('langToggleBtn').click();
     assert.match(message.textContent, /Point to the video or scroll to it/);
-    assert.match(badge.textContent, /Connected 🟢/);
+    assert.match(badge.textContent, /Desktop App Connected/);
     p.document.getElementById('dismissErrorBtn').click();
     assert.equal(card.hidden, true);
     assert.equal(message.textContent, '');
     assert.ok(p.removed.includes('scorpionDownloadError'));
   } finally { p.dom.window.close(); }
+});
+
+test('popup renders golden scorpion vector without emoji and omits unavailable stats until connected with real counts', async () => {
+  const noStats = await popup(null, { ok: false }, { alive: true, config: { lang: 'en' }, stats: null });
+  try {
+    assert.ok(noStats.document.querySelector('svg.brand-emblem'));
+    assert.equal(noStats.document.body.textContent.includes('🦂'), false);
+    assert.equal(noStats.document.getElementById('statsRow').hidden, true);
+  } finally { noStats.dom.window.close(); }
+
+  const offlineWithStats = await popup(null, { ok: false }, { alive: false, config: { lang: 'en' }, stats: { totalCount: 4, activeCount: 1 } });
+  try {
+    assert.equal(offlineWithStats.document.getElementById('statsRow').hidden, true);
+    assert.equal(offlineWithStats.document.getElementById('statusBadge').textContent, 'Desktop App Disconnected');
+  } finally { offlineWithStats.dom.window.close(); }
+
+  const withStats = await popup(null, { ok: false }, { alive: true, config: { lang: 'ar' }, stats: { totalCount: 6, activeCount: 2 } });
+  try {
+    const row = withStats.document.getElementById('statsRow');
+    assert.equal(row.hidden, false);
+    assert.equal(withStats.document.getElementById('lblDownloadsCount').textContent, 'التحميلات: 6');
+    assert.equal(withStats.document.getElementById('lblActiveCount').textContent, 'النشطة: 2');
+    withStats.document.getElementById('langToggleBtn').click();
+    assert.equal(withStats.document.getElementById('lblDownloadsCount').textContent, 'Downloads: 6');
+    assert.equal(withStats.document.getElementById('lblActiveCount').textContent, 'Active: 2');
+  } finally { withStats.dom.window.close(); }
 });

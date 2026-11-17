@@ -74,10 +74,11 @@ procedure AskRunningAppToQuit();
 var
   ResultCode: Integer;
 begin
-  { The app's local bridge only accepts /quit with the trusted-client header }
+  { The app's local bridge requires both the client header and the per-install bridge_token }
   Exec('powershell.exe',
-    '-NoProfile -NonInteractive -WindowStyle Hidden -Command "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 ' +
-    '-Headers @{''X-Scorpion-Client''=''1''} http://127.0.0.1:19615/quit | Out-Null; Start-Sleep -Seconds 2 } catch {}"',
+    '-NoProfile -NonInteractive -WindowStyle Hidden -Command "try { $t = Join-Path $env:LOCALAPPDATA ''ScorpionIDM\bridge_token''; ' +
+    '$h = @{''X-Scorpion-Client''=''1''}; if (Test-Path $t) { $h[''X-Scorpion-Token''] = (Get-Content $t -Raw).Trim() }; ' +
+    'Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Headers $h http://127.0.0.1:19615/quit | Out-Null; Start-Sleep -Seconds 2 } catch {}"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 

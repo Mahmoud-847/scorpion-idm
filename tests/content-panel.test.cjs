@@ -569,7 +569,7 @@ test('visible <audio controls> with child <source> shows the audio bar and sends
   });
   try {
     assert.equal(hidden(p), false);
-    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, '🎵 تحميل هذا الصوت - Scorpion IDM');
+    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, 'تحميل الصوت بواسطة Scorpion');
     p.panel.querySelector('.scorpion-idm-trigger').click();
     const sent = downloads(p).map((msg) => msg.payload || msg);
     assert.equal(sent.length, 1);
@@ -593,7 +593,7 @@ test('hidden 0x0 custom <audio> player anchors the audio bar at bottom-right and
   });
   try {
     assert.equal(hidden(p), false);
-    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, '🎵 تحميل هذا الصوت - Scorpion IDM');
+    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, 'تحميل الصوت بواسطة Scorpion');
     assert.ok(parseFloat(p.panel.style.top) > 0 && parseFloat(p.panel.style.left) > 0);
     p.panel.querySelector('.scorpion-idm-trigger').click();
     const sent = downloads(p).map((msg) => msg.payload || msg);
@@ -620,7 +620,7 @@ test('standalone browser audio tab (<video> playing audio/*) is detected in audi
   });
   try {
     assert.equal(hidden(p), false);
-    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, '🎵 تحميل هذا الصوت - Scorpion IDM');
+    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, 'تحميل الصوت بواسطة Scorpion');
     p.panel.querySelector('.scorpion-idm-trigger').click();
     const sent = downloads(p).map((msg) => msg.payload || msg);
     assert.equal(sent.length, 1);
@@ -832,5 +832,111 @@ test('panel trigger and quality badge are keyboard-focusable buttons with menu A
     assert.equal(dropdown.classList.contains('open'), false);
     assert.equal(badge.getAttribute('aria-expanded'), 'false');
     assert.equal(p.window.document.activeElement, badge);
+  } finally { p.dom.window.close(); }
+});
+
+test('explicit/hover frame priority resists background play and rejected preferred frame never falls back', async () => {
+  const vm = require('node:vm');
+  const frames = new Map();
+  let runtimeHandler;
+  const chrome = {
+    storage: { local: { get: (_, cb) => cb({ scorpionConfig: { interceptAllDownloads: true, lang: 'en' } }), set() {} }, session: { set: async () => {}, get: async () => ({}), remove: async () => {} }, onChanged: { addListener() {} } },
+    runtime: { lastError: null, onInstalled: { addListener() {} }, onStartup: { addListener() {} }, onMessage: { addListener: (cb) => { runtimeHandler = cb; } } },
+    contextMenus: { removeAll: (cb) => cb(), create() {}, onClicked: { addListener() {} } },
+    tabs: {
+      onCreated: { addListener() {} }, onActivated: { addListener() {} }, onUpdated: { addListener() {} }, onRemoved: { addListener() {} }, onReplaced: { addListener() {} },
+      sendMessage: (_tabId, msg, opts, cb) => {
+        const fid = typeof opts === 'object' && opts ? opts.frameId : 0;
+        const fn = frames.get(fid);
+        if (fn) fn(msg, {}, cb);
+        else cb({ ok: false });
+      },
+    },
+    downloads: { onCreated: { addListener() {} }, cancel() {}, erase() {} },
+    cookies: { getAllCookieStores: async () => [], getAll: async () => [] },
+    webRequest: { onHeadersReceived: { addListener() {} }, onSendHeaders: { addListener() {} } },
+  };
+  const context = {
+    chrome,
+    ScorpionMedia: require(path.join(__dirname, '../browser-extension/media.js')),
+    importScripts() {},
+    navigator: { userAgent: 'UA', languages: ['en'] },
+    URL, AbortController, AbortSignal, setTimeout: () => 0, clearTimeout() {}, setInterval() {}, console,
+    fetch: async () => ({ ok: true, json: async () => ({ ok: true, authenticated: true }) }),
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/background.js'), 'utf8'), context);
+
+  frames.set(1, (_m, _s, cb) => cb({ ok: true }));
+  frames.set(2, (_m, _s, cb) => cb({ ok: true }));
+  runtimeHandler({ action: 'SCORPION_MARK_ACTIVE_FRAME', reason: 'hover' }, { tab: { id: 9 }, frameId: 1 }, () => {});
+  runtimeHandler({ action: 'SCORPION_MARK_ACTIVE_FRAME', reason: 'play' }, { tab: { id: 9 }, frameId: 2 }, () => {});
+  let res = await context.dispatchMediaCommandToTab(9, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' });
+  assert.equal(res.frameId, 1);
+
+  frames.set(1, (_m, _s, cb) => cb({ ok: false, error: 'drmProtected' }));
+  frames.set(0, (_m, _s, cb) => cb({ ok: true }));
+  res = await context.dispatchMediaCommandToTab(9, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' }, 1);
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'drmProtected');
+});
+
+test('anonymous quality request never reuses authenticated quality cache', async () => {
+  let calls = 0;
+  const p = page(undefined, {
+    beforeContent: ({ window }) => {
+      const orig = window.chrome.runtime.sendMessage;
+      window.chrome.runtime.sendMessage = (msg, cb) => {
+        if (msg.action === 'SCORPION_LIST_QUALITIES') {
+          calls++;
+          const q = msg.allowCookies ? [{ quality: '1080p', label: '1080p' }] : [{ quality: '360p', label: '360p' }];
+          queueMicrotask(() => cb({ ok: true, qualities: q }));
+        } else orig(msg, cb);
+      };
+    },
+  });
+  try {
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    await new Promise(setImmediate);
+    await new Promise(setImmediate);
+    p.timers.find((tm) => tm.ms === 600).fn();
+    await new Promise(setImmediate);
+    assert.equal(calls, 2);
+  } finally { p.dom.window.close(); }
+});
+
+test('floating control uses golden scorpion vector, obsidian labels, and marks top quality with checkmark', async () => {
+  const p = page(undefined, {
+    beforeContent: ({ window }) => {
+      const orig = window.chrome.runtime.sendMessage;
+      window.chrome.runtime.sendMessage = (msg, cb) => {
+        if (msg.action === 'SCORPION_LIST_QUALITIES') {
+          queueMicrotask(() => cb({
+            ok: true,
+            qualities: [
+              { quality: '1080p', label: '1080p', size: 120_000_000 },
+              { quality: '720p', label: '720p', size: 75_000_000 },
+            ],
+          }));
+        } else {
+          orig(msg, cb);
+        }
+      };
+    },
+  });
+  try {
+    assert.ok(p.panel.querySelector('svg.scorpion-idm-emblem'));
+    assert.equal(p.panel.textContent.includes('🦂'), false);
+    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, 'تحميل بواسطة Scorpion');
+
+    p.panel.querySelector('.scorpion-idm-lang-btn').click();
+    assert.equal(p.panel.querySelector('.scorpion-btn-text').textContent, 'Download with Scorpion');
+
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    await new Promise(setImmediate);
+    await new Promise(setImmediate);
+    const selected = p.panel.querySelectorAll('.scorpion-idm-option.is-selected');
+    assert.equal(selected.length, 1);
+    assert.match(selected[0].textContent, /1080p MP4/);
+    assert.equal(selected[0].querySelector('.scorpion-idm-opt-check').textContent, '✓');
   } finally { p.dom.window.close(); }
 });

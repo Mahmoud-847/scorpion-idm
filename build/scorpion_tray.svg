@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="trayGold" x1="40" y1="210" x2="196" y2="28" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#DF720A"/>
+      <stop offset="52%" stop-color="#FFA930"/>
+      <stop offset="100%" stop-color="#FFD468"/>
+    </linearGradient>
+  </defs>
+  <g stroke="#3D1800" stroke-width="5.5" stroke-linejoin="round" stroke-linecap="round" fill="url(#trayGold)">
+    <!-- 4 High-Contrast Right Legs -->
+    <path d="M142 146 L166 161 L169 196 L157 187 L156 167 L136 152 Z"/>
+    <path d="M154 135 L183 148 L194 184 L182 177 L173 155 L147 142 Z"/>
+    <path d="M164 122 L198 132 L214 164 L201 159 L187 140 L158 129 Z"/>
+    <path d="M170 107 L206 113 L224 142 L210 139 L195 122 L166 115 Z"/>
+    <!-- Left Pincer Claw -->
+    <path d="M100 128 C78 115 56 118 40 135 C27 151 27 177 36 198 C42 182 44 170 50 162 C51 175 54 187 60 196 C64 180 64 164 69 154 C74 142 86 138 100 138 Z"/>
+    <!-- Right Pincer Claw -->
+    <path d="M124 154 C138 170 134 191 116 207 C99 221 70 227 46 221 C64 214 78 205 86 196 C70 202 54 204 42 200 C61 191 80 179 94 168 C104 160 116 154 124 154 Z"/>
+    <!-- Armored Body & Open Arched Tail + Sleek Stinger -->
+    <path d="M84 152 C77 141 85 125 104 116 C126 102 150 85 166 67 C174 56 173 42 164 35 C156 30 148 33 144 41 C141 50 144 62 132 76 C131 64 123 51 124 36 C126 19 144 13 166 19 C189 26 202 47 197 71 C192 94 173 114 152 132 C137 146 119 164 97 160 Z"/>
+  </g>
+</svg>

@@ -1,23 +1,25 @@
 {
-  "version": "2.1.26",
+  "version": "2.1.27",
   "publishedAt": "2026-11-17",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "4fbbbbf13981ed401c8be6f80dc19c8a20cb3560a50c7014df713d852d96dc32",
-  "sourceSha256": "1f33f85af76089cb011f0788a566d501e0b2907ad8966678015bc7bae6878e96",
+  "sha256": "4772c076e6043bfeeb7aa42e1d8ba511c0e87e1e26daed0408ec30e418a92562",
+  "sourceSha256": "7b424cba5ccae488b3cd5eadaf1ae16c824cd59dadf707f85ca05f83ccaccbf0",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.26 — تثبيت سلامة الملفات والأمان وجودة تكامل المتصفح",
-  "title_en": "Version 2.1.26 — Data Integrity, Security Hardening & Browser Reliability",
+  "title_ar": "الإصدار 2.1.27 — الهوية الذهبية الجديدة وواجهة Obsidian وتطوير الإضافة وتعزيز الأمان",
+  "title_en": "Version 2.1.27 — Golden-Scorpion Brand Identity, Obsidian Desktop & Extension UI, and Integrity Hardening",
   "changelog_ar": [
-    "حصر التنظيف التلقائي في مجلد التطبيق المؤقت فقط وعدم المساس بمجلد التنزيلات العام، وضمان حفظ مخرجات التورنت قبل حذف الملفات المؤقتة.",
-    "تحقق صارم من تطابق Content-Range و ETag / Last-Modified عند الاستكمال، وحفظ السجل بأقفال متسلسلة مع نسخة احتياطية .bak، وتحديث آمن مع استرجاع تلقائي عند الفشل.",
-    "تفعيل التحقق الكامل من شهادات SSL/TLS، وحفظ قيود الكوكيز (Secure / hostOnly / Expiration)، وعزل تنزيلات التصفح الخفي، وتوثيق الجسر المحلي بمفتاح اقتران.",
-    "انتظار تأكيد القبول الحقيقي في الإضافة قبل إلغاء تنزيل المتصفح، ودعم أوامر الإطارات iframe ولوحة المفاتيح وأسماء الوصول، وفحص الروابط خارج خيط الواجهة، وتوحيد محدد السرعة."
+    "تصميم جديد بالكامل بالهوية البصرية للعقرب الذهبي وأيقونات متجهة موحدة وواجهة Obsidian داكنة ببطاقات تحميل مكدسة وقائمة اختيار ملفات التورنت المباشرة، مع تحديث نافذة إضافة المتصفح وزر تحميل الفيديو العائم.",
+    "معالجة استجابات HTTP 200 المضغوطة (gzip/deflate) عند الرجوع لاتصال واحد دون اقتطاع المحتوى المفكوك، ومنع خلط النسخ عند غياب أو تغيّر نوع محدد الهوية عند الاستكمال.",
+    "الحفاظ على قيود الكوكيز hostOnly عبر جلسة HTTP وإعادة التوجيه، وفصل ذاكرة الجودات ببصمة الجلسة لكل حساب.",
+    "فصل نقطة الالتزام النهائية في التحديثات حتى لا يتسبب خطأ لاحق في حذف التطبيق، وتوفير انتظار حد السرعة التعاوني لنقل المتصفح وتوحيد ميزانية التورنت.",
+    "إصلاح تزويد bridge-auth.json التلقائي لكل مسارات الإضافة اليدوية مع دعم Native Messaging وإلزام التحقق بالمفتاح السري الحقيقي."
   ],
   "changelog_en": [
-    "Confined startup/item cleanup strictly to app temp directories, and prevented torrent temp deletion or false completion if output move fails.",
-    "Added strict Content-Range byte-bounds + ETag/Last-Modified resume verification, monotonic thread-safe state saves with .bak recovery, and staged rollback-capable updates.",
-    "Enabled TLS certificate verification across all requests, preserved Secure/hostOnly/expiry cookie constraints, isolated Incognito downloads, and paired the local bridge via a per-install secret token.",
-    "Fixed premature duplicate cancellation, iframe command routing, session-aware quality caching, scoped DRM checks, non-blocking Add URL probing, custom folder retention, full keyboard accessibility, accurate handshake status, scrollable settings, and unified bandwidth throttling."
+    "Complete Golden-Scorpion brand identity & unified vector icons with the new dark Obsidian & Amber desktop interface, stacked download cards, inline torrent file selection, redesigned extension popup, and updated “Download with Scorpion” floating video control.",
+    "Prevent false completion on compressed HTTP 200 fallbacks, and require comparable saved validators on partial resume to avoid mixing resource versions.",
+    "Enforce hostOnly cookie policy across requests sessions and redirects, and isolate quality caches by irreversible cookie fingerprint per account.",
+    "Enforce an explicit post-swap commit boundary in update installation, make browser-transfer rate limiting lock-free and abortable, and share a unified global budget with torrents.",
+    "Fix bridge-auth.json provisioning across all local unpacked extension paths, add Native Messaging token handoff, and require valid bridge tokens on all requests."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",

@@ -48,9 +48,14 @@ REPO_URL = "https://github.com/Mahmoud-847/scorpion-idm.git"
 
 WATCH_TARGETS = [
     os.path.join(PROJECT_ROOT, "native_app", "scorpion_qt.py"),
+    os.path.join(PROJECT_ROOT, "native_app", "scorpion_brand.py"),
+    os.path.join(PROJECT_ROOT, "native_app", "scorpion_cards.py"),
     os.path.join(PROJECT_ROOT, "native_app", "sitecustomize.py"),
     os.path.join(PROJECT_ROOT, "native_app", "media_transfer.py"),
     os.path.join(PROJECT_ROOT, "native_app", "installer", "scorpion_setup.iss"),
+    os.path.join(PROJECT_ROOT, "build", "scorpion_logo.svg"),
+    os.path.join(PROJECT_ROOT, "build", "scorpion_tray.svg"),
+    os.path.join(PROJECT_ROOT, "build", "icon.ico"),
     os.path.join(PROJECT_ROOT, "browser-extension", "manifest.json"),
     os.path.join(PROJECT_ROOT, "browser-extension", "background.js"),
     os.path.join(PROJECT_ROOT, "browser-extension", "content.js"),
@@ -60,6 +65,7 @@ WATCH_TARGETS = [
     os.path.join(PROJECT_ROOT, "browser-extension", "content.css"),
     os.path.join(PROJECT_ROOT, "browser-extension", "popup.html"),
     os.path.join(PROJECT_ROOT, "browser-extension", "popup.js"),
+    os.path.join(PROJECT_ROOT, "browser-extension", "scorpion-logo.svg"),
     os.path.join(PROJECT_ROOT, "build_installer.ps1"),
     os.path.join(PROJECT_ROOT, "requirements.txt"),
     os.path.join(PROJECT_ROOT, "tests", "test_media_transfer.py"),
@@ -80,7 +86,7 @@ WATCH_TARGETS = [
 def validate_release_sources(log):
     """Never close the user's app or publish a release whose regression checks fail."""
     commands = [
-        [sys.executable, "-m", "py_compile", "native_app/scorpion_qt.py", "native_app/media_transfer.py", "auto_publish.py"],
+        [sys.executable, "-m", "py_compile", "native_app/scorpion_qt.py", "native_app/scorpion_brand.py", "native_app/scorpion_cards.py", "native_app/media_transfer.py", "auto_publish.py"],
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"],
     ]
     node = shutil.which("node")
@@ -311,19 +317,31 @@ def bridge_auth_headers() -> dict:
 
 
 def active_downloads_count() -> int:
+    """Return active download count; return -1 when state is unknown or bridge cannot verify inactivity."""
+    import json
+    import socket
+
     try:
         with urllib.request.urlopen("http://127.0.0.1:19615/ping", timeout=1) as resp:
             data = json.load(resp)
-        return int(data.get("activeCount") or 0)
+        if isinstance(data, dict) and "activeCount" in data and isinstance(data["activeCount"], int):
+            val = int(data["activeCount"])
+            return val if val >= 0 else -1
+        return -1
     except Exception:
-        return 0
+        try:
+            with socket.create_connection(("127.0.0.1", 19615), timeout=0.4):
+                return -1
+        except Exception:
+            return 0
 
 
 def stop_running_scorpion(force: bool = False):
-    """Requests ScorpionIDM.exe to quit cleanly via authenticated RPC and waits until its files are unlocked."""
-    if not force and active_downloads_count() > 0:
+    """Requests ScorpionIDM.exe to quit cleanly via authenticated RPC and verifies port 19615 closes."""
+    cnt = active_downloads_count()
+    if not force and cnt != 0:
         raise RuntimeError(
-            "توجد تحميلات نشطة حالياً في Scorpion IDM — تم إيقاف النشر لتجنب قطعها (مرّر --force-stop للتجاوز)"
+            "توجد تحميلات نشطة أو حالة نشاط غير مؤكدة في Scorpion IDM — تم إيقاف النشر (مرّر --force-stop للتجاوز)"
         )
     try:
         # The bridge requires X-Scorpion-Client and the local per-install X-Scorpion-Token
@@ -331,12 +349,17 @@ def stop_running_scorpion(force: bool = False):
         urllib.request.urlopen(req, timeout=2).read()
     except Exception:
         pass
+    closed = False
     for _ in range(16):
         time.sleep(0.35)
         try:
-            urllib.request.urlopen("http://127.0.0.1:19615/ping", timeout=0.4).read()
+            with socket.create_connection(("127.0.0.1", 19615), timeout=0.4):
+                pass
         except Exception:
+            closed = True
             break
+    if not closed and not force:
+        raise RuntimeError("تعذر إغلاق النسخة المفتوحة من Scorpion IDM قبل تحديث الملفات")
     time.sleep(0.6)
 
 
@@ -571,8 +594,10 @@ class AutoPublisherWindow(QMainWindow):
                 self.signals.progress.emit(7, "جاري التأكد من أن المشروع على فرع main ومحدّث من GitHub...")
                 ensure_on_up_to_date_main()
                 self.signals.progress.emit(9, "جاري اختبار إصلاحات الفيديو والإضافة قبل البناء والنشر...")
-                validate_release_sources(self.signals.log.emit)
                 tested_snapshot = compute_snapshot()
+                validate_release_sources(self.signals.log.emit)
+                if compute_snapshot() != tested_snapshot:
+                    raise RuntimeError("تغيرت ملفات المصدر أثناء الاختبارات — أعد الاختبار على نسخة ثابتة قبل البناء والنشر")
                 cur_ver = read_current_version()
                 new_ver = bump_patch_version(cur_ver) if do_bump else cur_ver
                 if do_bump or note_ar:
@@ -667,7 +692,7 @@ class AutoPublisherWindow(QMainWindow):
                 if manifest.get("version") != new_ver or manifest.get("sha256") != pkg_sha:
                     raise RuntimeError("ملف update.json لا يطابق حزمة التحديث (الإصدار أو بصمة SHA-256) — تم إيقاف الرفع")
                 expected_src_hash = hashlib.sha256()
-                for rel in ("native_app/scorpion_qt.py", "native_app/sitecustomize.py", "native_app/media_transfer.py"):
+                for rel in ("native_app/scorpion_qt.py", "native_app/sitecustomize.py", "native_app/media_transfer.py", "native_app/scorpion_brand.py", "native_app/scorpion_cards.py"):
                     expected_src_hash.update((rel + "\0").encode("utf-8"))
                     with open(os.path.join(PROJECT_ROOT, rel), "rb") as sf:
                         expected_src_hash.update(sf.read())
@@ -687,7 +712,13 @@ class AutoPublisherWindow(QMainWindow):
                     # Only files that exist: a renamed or removed doc/test must not block a release
                     ("add", "--", *[p for p in (
                         "release/update.json", "release/Scorpion-Update-Payload.zip", "release/Scorpion-Browser-Extension.zip",
-                        "native_app/media_transfer.py", "browser-extension/media.js", "browser-extension/browser-transfer.js",
+                        "native_app/scorpion_brand.py", "native_app/scorpion_cards.py", "native_app/media_transfer.py",
+                        "build/scorpion_logo.svg", "build/scorpion_tray.svg", "build/generate_brand_assets.py",
+                        "build/icon.ico", "build/icon.png", "build/tray.png",
+                        "build/icons",
+                        "browser-extension/scorpion-logo.svg", "browser-extension/icon.png",
+                        "browser-extension/icons",
+                        "browser-extension/media.js", "browser-extension/browser-transfer.js",
                         "browser-extension/telegram-reader.js",
                         "README.md", "VIDEO_DOWNLOADS.md", "PRIVACY.md",
                         "tests/test_media_transfer.py", "tests/browser-transfer.test.cjs", "tests/test_publisher_startup.py",

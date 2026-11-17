@@ -2,8 +2,9 @@
 (function (root) {
   'use strict';
   const CHUNK_SIZE = 512 * 1024;
-  async function readRange(url, offset, total, fetcher) {
-    const end = total ? Math.min(total - 1, offset + CHUNK_SIZE - 1) : offset + CHUNK_SIZE - 1;
+  async function readRange(url, offset, total, fetcher, limit = CHUNK_SIZE) {
+    const size = Math.max(1024, Math.min(CHUNK_SIZE, Number(limit) || CHUNK_SIZE));
+    const end = total ? Math.min(total - 1, offset + size - 1) : offset + size - 1;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 90000);
     try {
@@ -52,11 +53,14 @@
       const start = await request('start', { ...metadata, url, totalSize: part.total, mime: part.mime });
       if (!start.ok) throw new Error(start.error || 'تعذر بدء التنزيل. حدّث البرنامج والإضافة.');
       transferId = start.transferId;
+      const chunkSize = Number.isFinite(start.chunkSize) && start.chunkSize > 0
+        ? Math.min(CHUNK_SIZE, Math.max(4096, Math.floor(start.chunkSize)))
+        : CHUNK_SIZE;
       let offset = 0;
       const total = part.total;
       const readAt = async (from) => {
         for (let attempt = 0; ; attempt++) {
-          try { return await rangeReader(url, from, total, fetcher); }
+          try { return await rangeReader(url, from, total, fetcher, chunkSize); }
           catch (err) { if (attempt === 2) throw err; }
         }
       };
@@ -77,6 +81,9 @@
           catch (err) { if (attempt === 2) throw err; }
         }
         if (!result.ok) throw new Error(result.error || 'التنزيل اتوقف. أعد المحاولة من الفيديو.');
+        if (result.throttleMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(60000, Number(result.throttleMs) || 0)));
+        }
         offset = nextOffset;
         progress(offset, total);
         if (nextPart) part = await nextPart;

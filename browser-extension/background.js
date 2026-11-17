@@ -2,26 +2,95 @@ importScripts('media.js');
 const SCORPION_SERVER = 'http://127.0.0.1:19615';
 // Required by the desktop app for any state-changing call (web pages cannot send it cross-site).
 const SCORPION_HEADERS = { 'X-Scorpion-Client': '1' };
-let bridgeTokenPromise = null;
+let cachedBridgeToken = '';
+let inflightTokenRead = null;
 
-async function getBridgeHeaders() {
-  if (!bridgeTokenPromise) {
-    bridgeTokenPromise = (async () => {
+function persistTokenToStorage(tok) {
+  try {
+    if (tok && chrome && chrome.storage && chrome.storage.local && typeof chrome.storage.local.set === 'function') {
+      chrome.storage.local.set({ scorpionBridgeToken: tok });
+    }
+  } catch (_) {}
+}
+
+async function readTokenFromNativeHost() {
+  try {
+    if (chrome && chrome.runtime && typeof chrome.runtime.sendNativeMessage === 'function') {
+      const reply = await new Promise((resolve) => {
+        try {
+          chrome.runtime.sendNativeMessage('com.scorpionidm.bridge', { action: 'getBridgeToken' }, (res) => {
+            if (chrome.runtime.lastError) resolve(null);
+            else resolve(res || null);
+          });
+        } catch (_) {
+          resolve(null);
+        }
+      });
+      if (reply && typeof reply.token === 'string' && reply.token.trim()) {
+        return reply.token.trim();
+      }
+    }
+  } catch (_) {}
+  return '';
+}
+
+async function getBridgeHeaders(forceRefresh = false) {
+  if (forceRefresh) cachedBridgeToken = '';
+  if (cachedBridgeToken) {
+    return { ...SCORPION_HEADERS, 'X-Scorpion-Token': cachedBridgeToken };
+  }
+  if (!inflightTokenRead) {
+    inflightTokenRead = (async () => {
       try {
         if (chrome && chrome.runtime && typeof chrome.runtime.getURL === 'function') {
           const res = await fetch(chrome.runtime.getURL('bridge-auth.json'));
           if (res && res.ok) {
             const data = await res.json();
             if (data && typeof data.token === 'string' && data.token.trim()) {
-              return { ...SCORPION_HEADERS, 'X-Scorpion-Token': data.token.trim() };
+              cachedBridgeToken = data.token.trim();
+              persistTokenToStorage(cachedBridgeToken);
+              return cachedBridgeToken;
             }
           }
         }
       } catch (_) {}
-      return { ...SCORPION_HEADERS };
-    })();
+      if (!forceRefresh && chrome && chrome.storage && chrome.storage.local && typeof chrome.storage.local.get === 'function') {
+        const stored = await new Promise((resolve) => {
+          try {
+            chrome.storage.local.get(['scorpionBridgeToken'], (r) => resolve(r && r.scorpionBridgeToken ? String(r.scorpionBridgeToken).trim() : ''));
+          } catch (_) {
+            resolve('');
+          }
+        });
+        if (stored) {
+          cachedBridgeToken = stored;
+          return cachedBridgeToken;
+        }
+      }
+      const nativeTok = await readTokenFromNativeHost();
+      if (nativeTok) {
+        cachedBridgeToken = nativeTok;
+        persistTokenToStorage(nativeTok);
+        return cachedBridgeToken;
+      }
+      return '';
+    })().finally(() => {
+      inflightTokenRead = null;
+    });
   }
-  return bridgeTokenPromise;
+  const tok = await inflightTokenRead;
+  return tok ? { ...SCORPION_HEADERS, 'X-Scorpion-Token': tok } : { ...SCORPION_HEADERS };
+}
+
+async function bridgeFetch(url, options = {}) {
+  const baseHeaders = options.headers || {};
+  const headers = { ...baseHeaders, ...(await getBridgeHeaders(false)) };
+  let res = await fetch(url, { ...options, headers });
+  if (res && (res.status === 401 || res.status === 403)) {
+    const freshHeaders = { ...baseHeaders, ...(await getBridgeHeaders(true)) };
+    res = await fetch(url, { ...options, headers: freshHeaders });
+  }
+  return res;
 }
 
 let config = {
@@ -131,6 +200,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
   if (tab && (info.menuItemId === 'scorpion-download-page-video' ||
       ScorpionMedia.isTelegram(tab.url) && info.menuItemId === 'scorpion-download-media')) {
+    const hasExplicitFrame = Number.isInteger(info.frameId) && info.frameId > 0;
     const res = await dispatchMediaCommandToTab(
       tab.id,
       { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA', src: info.srcUrl || '' },
@@ -141,7 +211,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         recordPopupError('drmProtected');
         return;
       }
-      if (info.menuItemId === 'scorpion-download-page-video' && tab && tab.url) {
+      if (!hasExplicitFrame && info.menuItemId === 'scorpion-download-page-video' && tab && tab.url) {
         await sendToScorpion({
           url: tab.url,
           pageUrl: tab.url,
@@ -253,18 +323,26 @@ async function detectBrowserKey() {
   return 'chrome';
 }
 
+let lastAppStats = null;
+
 async function checkScorpionAlive() {
+  lastAppStats = null;
   try {
     await configReady;
     const br = await detectBrowserKey();
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 900);
-    const headers = await getBridgeHeaders();
-    const res = await fetch(`${SCORPION_SERVER}/ping?ext=1&browser=${encodeURIComponent(br)}`, { signal: ctrl.signal, headers });
+    const timer = setTimeout(() => ctrl.abort(), 1200);
+    const res = await bridgeFetch(`${SCORPION_SERVER}/ping?ext=1&browser=${encodeURIComponent(br)}`, { signal: ctrl.signal });
     clearTimeout(timer);
-    if (res.ok) {
+    if (res && res.ok) {
       try {
         const data = await res.json();
+        if (data && data.authenticated === false) {
+          return false;
+        }
+        if (data && Number.isInteger(data.totalCount) && Number.isInteger(data.activeCount)) {
+          lastAppStats = { totalCount: data.totalCount, activeCount: data.activeCount };
+        }
         if (data && (data.lang === 'en' || data.lang === 'ar') && data.lang !== config.lang) {
           config = { ...config, lang: data.lang };
           chrome.storage.local.set({ scorpionConfig: config });
@@ -340,10 +418,9 @@ async function sendToScorpion(payload) {
   const entry = { ts: now, settled: false, ok: false, promise: null };
   entry.promise = (async () => {
     try {
-      const headers = await getBridgeHeaders();
-      const res = await fetch(`${SCORPION_SERVER}/capture`, {
+      const res = await bridgeFetch(`${SCORPION_SERVER}/capture`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bodyPayload),
       });
       let accepted = Boolean(res && res.ok);
@@ -371,33 +448,53 @@ async function sendToScorpion(payload) {
 }
 
 const activeMediaFrameByTab = new Map();
+const FRAME_REASON_PRIORITY = { explicit: 3, hover: 2, play: 1 };
 
 function sendMessageToFrame(tabId, message, frameId) {
   return new Promise((resolve) => {
     try {
       chrome.tabs.sendMessage(tabId, message, { frameId }, (res) => {
         if (chrome.runtime.lastError || !res) {
-          resolve({ ok: false });
+          resolve({ ok: false, noListener: Boolean(chrome.runtime.lastError) });
         } else {
           resolve(res);
         }
       });
     } catch (_) {
-      resolve({ ok: false });
+      resolve({ ok: false, noListener: true });
     }
   });
 }
 
 async function dispatchMediaCommandToTab(tabId, message, preferredFrameId = null) {
+  if (Number.isInteger(preferredFrameId) && preferredFrameId >= 0) {
+    const res = await sendMessageToFrame(tabId, message, preferredFrameId);
+    if (res && res.ok) return { ok: true, frameId: preferredFrameId };
+    return {
+      ok: false,
+      frameId: preferredFrameId,
+      ...(res && res.error ? { error: res.error } : {}),
+    };
+  }
+  const active = activeMediaFrameByTab.get(tabId);
+  const tried = new Set();
+  if (active && Number.isInteger(active.frameId) && active.frameId >= 0) {
+    tried.add(active.frameId);
+    const res = await sendMessageToFrame(tabId, message, active.frameId);
+    if (res && res.ok) return { ok: true, frameId: active.frameId };
+    if (res && res.error === 'drmProtected') {
+      return { ok: false, error: 'drmProtected', frameId: active.frameId };
+    }
+    if ((active.prio || 1) >= 2 && !res.noListener) {
+      return { ok: false, frameId: active.frameId };
+    }
+  }
   const frameOrder = [];
   const pushFrame = (fid) => {
-    if (Number.isInteger(fid) && fid >= 0 && !frameOrder.includes(fid)) {
+    if (Number.isInteger(fid) && fid >= 0 && !tried.has(fid) && !frameOrder.includes(fid)) {
       frameOrder.push(fid);
     }
   };
-  pushFrame(preferredFrameId);
-  const active = activeMediaFrameByTab.get(tabId);
-  if (active) pushFrame(active.frameId);
   const streams = tabStreams.get(tabId);
   if (streams) {
     for (const s of Array.from(streams.values()).reverse()) {
@@ -405,13 +502,14 @@ async function dispatchMediaCommandToTab(tabId, message, preferredFrameId = null
     }
   }
   pushFrame(0);
-  let sawDrm = false;
   for (const fid of frameOrder) {
     const res = await sendMessageToFrame(tabId, message, fid);
     if (res && res.ok) return { ok: true, frameId: fid };
-    if (res && res.error === 'drmProtected') sawDrm = true;
+    if (res && res.error === 'drmProtected') {
+      return { ok: false, error: 'drmProtected', frameId: fid };
+    }
   }
-  return sawDrm ? { ok: false, error: 'drmProtected' } : { ok: false };
+  return { ok: false };
 }
 
 // Response headers find extensionless manifests/media that performance entries cannot identify.
@@ -504,7 +602,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.action === 'SCORPION_MARK_ACTIVE_FRAME') {
     if (sender && sender.tab && Number.isInteger(sender.tab.id)) {
-      activeMediaFrameByTab.set(sender.tab.id, { frameId: sender.frameId || 0, at: Date.now() });
+      const tabId = sender.tab.id;
+      const fid = sender.frameId || 0;
+      const prio = FRAME_REASON_PRIORITY[msg.reason] || 1;
+      const prev = activeMediaFrameByTab.get(tabId);
+      const prevFresh = prev && Date.now() - prev.at < 300000;
+      if (!(prevFresh && prev.frameId !== fid && prev.prio > prio)) {
+        activeMediaFrameByTab.set(tabId, { frameId: fid, prio, at: Date.now() });
+      }
     }
     sendResponse({ ok: true });
     return false;
@@ -542,10 +647,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const key = `scorpionTransfer:${payload.transferId || ''}`;
       if (operation !== 'start' && (await chrome.storage.session.get(key))[key] !== owner)
         return sendResponse({ ok: false, error: 'جلسة التنزيل انتهت. أعد المحاولة من الفيديو.' });
-      const headers = await getBridgeHeaders();
-      const res = await fetch(`${SCORPION_SERVER}/browser-transfer/${operation}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify(payload), signal: AbortSignal.timeout(operation === 'finish' ? 120000 : 20000),
+      const res = await bridgeFetch(`${SCORPION_SERVER}/browser-transfer/${operation}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload), signal: AbortSignal.timeout(operation === 'finish' ? 120000 : 30000),
       });
       const data = await res.json();
       if (operation === 'start' && data.ok) await chrome.storage.session.set({ [`scorpionTransfer:${data.transferId}`]: owner });
@@ -606,11 +710,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const cookiePromise = msg.allowCookies
       ? siteCookies([msg.url, tabUrl, ...(msg.candidates || [])], sender && sender.tab)
       : Promise.resolve([]);
-    Promise.all([cookiePromise, getBridgeHeaders()])
-      .then(([cookies, headers]) =>
-        fetch(`${SCORPION_SERVER}/formats`, {
+    cookiePromise
+      .then((cookies) =>
+        bridgeFetch(`${SCORPION_SERVER}/formats`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...headers },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             url: msg.url || '',
             referer: msg.referer || '',
@@ -623,7 +727,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           signal: ctrl.signal,
         })
       )
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r && r.ok ? r.json() : null))
       .then((data) => sendResponse(data || { ok: false }))
       .catch(() => sendResponse({ ok: false }))
       .finally(() => clearTimeout(timer));
@@ -631,22 +735,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.action === 'SCORPION_SET_APP_LANG') {
     const lang = msg.lang === 'en' ? 'en' : 'ar';
-    getBridgeHeaders()
-      .then((headers) => fetch(`${SCORPION_SERVER}/ping?set_lang=${lang}`, { headers }))
-      .then((r) => sendResponse({ ok: r.ok }))
+    bridgeFetch(`${SCORPION_SERVER}/ping?set_lang=${lang}`)
+      .then((r) => sendResponse({ ok: Boolean(r && r.ok) }))
       .catch(() => sendResponse({ ok: false }));
     return true;
   }
   if (msg.action === 'SCORPION_GET_APP_LANG') {
-    getBridgeHeaders()
-      .then((headers) => fetch(`${SCORPION_SERVER}/ping`, { headers, signal: AbortSignal.timeout(1500) }))
-      .then((r) => (r.ok ? r.json() : null))
+    bridgeFetch(`${SCORPION_SERVER}/ping`, { signal: AbortSignal.timeout(1500) })
+      .then((r) => (r && r.ok ? r.json() : null))
       .then((data) => sendResponse({ lang: data && data.lang }))
       .catch(() => sendResponse({ lang: null }));
     return true;
   }
   if (msg.action === 'SCORPION_CHECK_STATUS') {
-    configReady.then(() => checkScorpionAlive()).then((alive) => sendResponse({ alive, config }));
+    configReady
+      .then(() => checkScorpionAlive())
+      .then((alive) => sendResponse({ alive, config, stats: alive ? lastAppStats : null }));
     return true;
   }
 });

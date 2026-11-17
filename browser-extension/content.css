@@ -1,4 +1,4 @@
-/* Scorpion IDM Floating Video Download Panel (IDM Signature Overlay) */
+/* Scorpion IDM Floating Video Download Control (Obsidian & Amber) */
 .scorpion-idm-video-panel {
   position: fixed !important;
   z-index: 2147483646 !important;
@@ -7,7 +7,7 @@
   direction: rtl !important;
   user-select: none !important;
   pointer-events: auto !important;
-  transition: opacity 0.2s ease, transform 0.2s ease !important;
+  transition: opacity 0.18s ease, transform 0.18s ease !important;
 }
 
 .scorpion-idm-video-panel[dir="ltr"] {
@@ -17,24 +17,25 @@
 .scorpion-idm-main-btn {
   display: inline-flex !important;
   align-items: center !important;
-  gap: 6px !important;
+  gap: 5px !important;
   max-width: min(100%, calc(100vw - 16px)) !important;
   box-sizing: border-box !important;
-  padding: 5px 8px 5px 8px !important;
-  background: linear-gradient(135deg, #0d1322 0%, #17213a 100%) !important;
-  border: 1.5px solid #f59e0b !important;
+  padding: 6px 9px !important;
+  background: rgba(20, 20, 27, 0.94) !important;
+  border: 1px solid rgba(255, 149, 0, 0.36) !important;
   border-radius: 10px !important;
-  color: #f8fafc !important;
-  font-size: 12.5px !important;
-  font-weight: 700 !important;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65), 0 0 12px rgba(245, 158, 11, 0.35) !important;
-  backdrop-filter: blur(8px) !important;
+  color: #f3f3f7 !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.68), 0 0 0 1px rgba(255, 255, 255, 0.04) inset !important;
+  backdrop-filter: blur(10px) !important;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease !important;
 }
 
 .scorpion-idm-main-btn:hover {
-  background: linear-gradient(135deg, #151f38 0%, #1e2b4d 100%) !important;
-  border-color: #22d3ee !important;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.8), 0 0 16px rgba(6, 182, 212, 0.5) !important;
+  background: rgba(26, 26, 35, 0.97) !important;
+  border-color: rgba(255, 149, 0, 0.72) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.78), 0 0 14px rgba(255, 149, 0, 0.22) !important;
 }
 
 .scorpion-idm-drag-handle {
@@ -42,12 +43,17 @@
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  width: 22px !important;
-  height: 24px !important;
-  color: #cbd5e1 !important;
-  font-size: 20px !important;
+  width: 14px !important;
+  height: 22px !important;
+  color: #7c7e8a !important;
+  font-size: 14px !important;
   cursor: grab !important;
   touch-action: none !important;
+  border-radius: 4px !important;
+}
+
+.scorpion-idm-drag-handle:hover {
+  color: #ffb340 !important;
 }
 
 .scorpion-idm-drag-handle:active {
@@ -58,13 +64,20 @@
   all: unset !important;
   display: inline-flex !important;
   align-items: center !important;
-  gap: 7px !important;
-  padding: 2px 4px !important;
+  gap: 8px !important;
+  padding: 2px 5px !important;
   min-width: 0 !important;
   font: inherit !important;
   cursor: pointer !important;
-  color: #f8fafc !important;
+  color: #f3f3f7 !important;
   border-radius: 6px !important;
+}
+
+.scorpion-idm-emblem {
+  width: 19px !important;
+  height: 19px !important;
+  flex-shrink: 0 !important;
+  display: inline-block !important;
 }
 
 .scorpion-btn-text {
@@ -72,6 +85,7 @@
   min-width: 0 !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
+  letter-spacing: -0.01em !important;
 }
 
 .scorpion-idm-badge {
@@ -81,14 +95,23 @@
   justify-content: center !important;
   cursor: pointer !important;
   margin-inline-start: 2px !important;
-  background: #f59e0b !important;
-  color: #090d16 !important;
-  font-size: 10px !important;
-  font-weight: 800 !important;
-  padding: 3px 9px !important; /* a bigger target: it opens the quality menu */
-  border-radius: 5px !important;
-  font-family: Consolas, monospace !important;
-  line-height: 1.2 !important;
+  background: rgba(255, 149, 0, 0.14) !important;
+  border: 1px solid rgba(255, 149, 0, 0.34) !important;
+  color: #ffb340 !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  min-width: 22px !important;
+  height: 21px !important;
+  padding: 0 5px !important;
+  border-radius: 6px !important;
+  line-height: 1 !important;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
+}
+
+.scorpion-idm-badge:hover {
+  background: #ff9500 !important;
+  border-color: #ff9500 !important;
+  color: #140d04 !important;
 }
 
 .scorpion-idm-trigger:focus-visible,
@@ -97,7 +120,7 @@
 .scorpion-idm-close-btn:focus-visible,
 .scorpion-idm-drag-handle:focus-visible,
 .scorpion-idm-option:focus-visible {
-  outline: 2px solid #22d3ee !important;
+  outline: 2px solid #ff9500 !important;
   outline-offset: 2px !important;
 }
 
@@ -105,38 +128,38 @@
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  background: rgba(255, 255, 255, 0.08) !important;
-  color: #e2e8f0 !important;
-  border: 1px solid rgba(148, 163, 184, 0.35) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #c9cad3 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
   border-radius: 6px !important;
-  font-size: 10.5px !important;
-  font-weight: 800 !important;
-  padding: 2px 6px !important;
-  min-width: 24px !important;
-  height: 20px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  padding: 0 6px !important;
+  min-width: 22px !important;
+  height: 21px !important;
   cursor: pointer !important;
   line-height: 1 !important;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
 }
 
 .scorpion-idm-lang-btn:hover {
-  background: rgba(34, 211, 238, 0.2) !important;
-  color: #22d3ee !important;
-  border-color: #22d3ee !important;
+  background: rgba(255, 149, 0, 0.18) !important;
+  color: #ffb340 !important;
+  border-color: rgba(255, 149, 0, 0.55) !important;
 }
 
 .scorpion-idm-close-btn {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  background: rgba(244, 63, 94, 0.14) !important;
-  color: #fda4af !important;
-  border: 1px solid rgba(244, 63, 94, 0.35) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: #9c9ea9 !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
   border-radius: 6px !important;
-  font-size: 12px !important;
-  font-weight: 800 !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
   width: 21px !important;
-  height: 20px !important;
+  height: 21px !important;
   padding: 0 !important;
   cursor: pointer !important;
   line-height: 1 !important;
@@ -144,25 +167,26 @@
 }
 
 .scorpion-idm-close-btn:hover {
-  background: #e11d48 !important;
+  background: #ff453a !important;
   color: #ffffff !important;
-  border-color: #fb7185 !important;
+  border-color: #ff453a !important;
 }
 
 .scorpion-idm-dropdown {
   position: absolute !important;
   top: calc(100% + 6px) !important;
   inset-inline-start: 0 !important;
-  min-width: 280px !important;
+  min-width: 215px !important;
   max-width: calc(100vw - 24px) !important;
-  background: #0b101d !important;
-  border: 1px solid #334155 !important;
-  border-radius: 11px !important;
+  background: rgba(22, 22, 29, 0.98) !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  border-radius: 10px !important;
   padding: 6px !important;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.85) !important;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.85) !important;
+  backdrop-filter: blur(12px) !important;
   display: none !important;
   flex-direction: column !important;
-  gap: 4px !important;
+  gap: 2px !important;
   max-height: min(340px, 72vh) !important;
   overflow-y: auto !important;
   z-index: 2147483647 !important;
@@ -182,21 +206,52 @@
   align-items: center !important;
   justify-content: space-between !important;
   gap: 10px !important;
-  padding: 8px 10px !important;
-  border-radius: 8px !important;
-  color: #e2e8f0 !important;
-  font-size: 12px !important;
-  font-weight: 600 !important;
+  padding: 7px 10px !important;
+  border-radius: 7px !important;
+  color: #e4e4ec !important;
+  font-size: 12.5px !important;
+  font-weight: 500 !important;
   cursor: pointer !important;
   background: transparent !important;
   border: none !important;
   text-align: start !important;
   width: 100% !important;
+  transition: background 0.12s ease, color 0.12s ease !important;
 }
 
 .scorpion-idm-option:hover {
-  background: rgba(245, 158, 11, 0.16) !important;
-  color: #fbbf24 !important;
+  background: rgba(255, 149, 0, 0.14) !important;
+  color: #ffffff !important;
+}
+
+.scorpion-idm-option.is-selected {
+  background: rgba(255, 149, 0, 0.18) !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+.scorpion-idm-opt-main {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  min-width: 0 !important;
+}
+
+.scorpion-idm-opt-check {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 13px !important;
+  color: #ff9500 !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  flex-shrink: 0 !important;
+}
+
+.scorpion-idm-opt-label {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
 }
 
 .scorpion-idm-option-tag {
@@ -204,16 +259,21 @@
   font-size: 10px !important;
   padding: 2px 6px !important;
   border-radius: 4px !important;
-  background: rgba(6, 182, 212, 0.18) !important;
-  color: #22d3ee !important;
+  background: rgba(255, 255, 255, 0.07) !important;
+  color: #9e9faa !important;
   flex-shrink: 0 !important;
   direction: ltr !important;
   unicode-bidi: isolate !important;
 }
 
+.scorpion-idm-option.is-selected .scorpion-idm-option-tag {
+  background: rgba(255, 149, 0, 0.18) !important;
+  color: #ffb340 !important;
+}
+
 .scorpion-idm-hint {
   padding: 8px 10px !important;
-  color: #cbd5e1 !important;
+  color: #c9cad3 !important;
   font-size: 12px !important;
   line-height: 1.6 !important;
   max-width: 300px !important;

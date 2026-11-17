@@ -1,11 +1,16 @@
 document.addEventListener('DOMContentLoaded', () => {
   const statusBadge = document.getElementById('statusBadge');
+  const statusMonitorIcon = document.getElementById('statusMonitorIcon');
   const langToggleBtn = document.getElementById('langToggleBtn');
   const lblIntercept = document.getElementById('lblIntercept');
   const lblVideoBtn = document.getElementById('lblVideoBtn');
   const interceptToggle = document.getElementById('interceptToggle');
   const videoBtnToggle = document.getElementById('videoBtnToggle');
+  const statsRow = document.getElementById('statsRow');
+  const lblDownloadsCount = document.getElementById('lblDownloadsCount');
+  const lblActiveCount = document.getElementById('lblActiveCount');
   const grabCurrentPageBtn = document.getElementById('grabCurrentPageBtn');
+  const lblGrabBtn = document.getElementById('lblGrabBtn');
   const errorCard = document.getElementById('downloadErrorCard');
   const errorMessage = document.getElementById('downloadErrorMessage');
   const dismissErrorBtn = document.getElementById('dismissErrorBtn');
@@ -13,23 +18,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let currentLang = 'ar';
   let isAlive = false;
+  let lastStats = null;
   let lastError = null;
 
   const I18N = {
     ar: {
       dir: 'rtl',
-      online: 'متصل بالبرنامج 🟢',
-      offline: 'افتح برنامج Scorpion 🔴',
-      intercept: 'المسؤول الرئيسي لكل التحميلات:',
-      videoBtn: 'إظهار زر التحميل فوق الفيديوهات:',
-      grabBtn: '🎬 تحميل الفيديو المحدد الآن',
+      online: 'متصل ببرنامج سطح المكتب',
+      offline: 'برنامج سطح المكتب غير متصل',
+      intercept: 'الالتقاط التلقائي للتحميلات',
+      videoBtn: 'إظهار الزر العائم',
+      grabBtn: 'تحميل فيديو الصفحة الحالية',
+      downloadsLabel: (n) => `التحميلات: ${n}`,
+      activeLabel: (n) => `النشطة: ${n}`,
       noVideo: 'قف على الفيديو المطلوب أو مرّر الصفحة إليه، ثم استخدم الزر فوقه.',
-      toggleBtn: 'EN',
       privacy: 'سياسة الخصوصية',
       dismissError: 'إخفاء الرسالة',
       errors: {
         connection: 'تعذر إرسال التنزيل. تأكد من تشغيل البرنامج، ثم حاول مرة أخرى.',
-        drmProtected: '🔒 هذا الفيديو محمي بتشفير DRM (مثل Netflix) ولا يدعم التنزيل الخارجي. استخدم ميزة التنزيل داخل تطبيق المنصة الرسمي.',
+        drmProtected: 'هذا الفيديو محمي بتشفير DRM (مثل Netflix) ولا يدعم التنزيل الخارجي. استخدم ميزة التنزيل داخل تطبيق المنصة الرسمي.',
         noVideo: 'قف على الفيديو المطلوب أو مرّر الصفحة إليه، ثم استخدم الزر فوقه.',
         telegramSource: 'افتح الفيديو المطلوب داخل تليجرام ثم أعد المحاولة. إذا لم يتوفر مصدر قابل للقراءة، استخدم تنزيل تليجرام الأصلي.',
         telegramAudio: 'نزّل فيديو تليجرام كاملًا أولًا؛ تنزيل الصوت وحده غير متاح لهذا المسار.',
@@ -38,18 +45,19 @@ document.addEventListener('DOMContentLoaded', () => {
     },
     en: {
       dir: 'ltr',
-      online: 'Connected 🟢',
-      offline: 'Open Scorpion App 🔴',
-      intercept: 'Intercept all browser downloads:',
-      videoBtn: 'Show floating download bar on videos:',
-      grabBtn: '🎬 Download the selected video',
+      online: 'Desktop App Connected',
+      offline: 'Desktop App Disconnected',
+      intercept: 'Automatic Interception',
+      videoBtn: 'Show Floating Button',
+      grabBtn: 'Download Page Video',
+      downloadsLabel: (n) => `Downloads: ${n}`,
+      activeLabel: (n) => `Active: ${n}`,
       noVideo: 'Point to the video or scroll to it, then use the button above it.',
-      toggleBtn: 'عربي',
       privacy: 'Privacy policy',
       dismissError: 'Dismiss message',
       errors: {
         connection: 'Could not send the download. Open the desktop application and try again.',
-        drmProtected: '🔒 This video is DRM-protected (e.g. Netflix) and cannot be downloaded externally. Use the platform’s official offline download feature.',
+        drmProtected: 'This video is DRM-protected (e.g. Netflix) and cannot be downloaded externally. Use the platform’s official offline download feature.',
         noVideo: 'Point to the video or scroll to it, then use the button above it.',
         telegramSource: 'Open the selected video in Telegram and retry. If no readable source is available, use Telegram’s own download button.',
         telegramAudio: 'Download the complete Telegram video first; audio-only download is unavailable for this source.',
@@ -64,12 +72,34 @@ document.addEventListener('DOMContentLoaded', () => {
     document.documentElement.setAttribute('dir', tr.dir);
     statusBadge.textContent = isAlive ? tr.online : tr.offline;
     statusBadge.className = isAlive ? 'status online' : 'status offline';
+    if (statusMonitorIcon) {
+      statusMonitorIcon.setAttribute('class', isAlive ? 'status-ico online' : 'status-ico offline');
+    }
     lblIntercept.textContent = tr.intercept;
     lblVideoBtn.textContent = tr.videoBtn;
-    grabCurrentPageBtn.textContent = tr.grabBtn;
-    langToggleBtn.textContent = tr.toggleBtn;
+    if (lblGrabBtn) {
+      lblGrabBtn.textContent = tr.grabBtn;
+    } else {
+      grabCurrentPageBtn.textContent = tr.grabBtn;
+    }
+    langToggleBtn.setAttribute('aria-checked', currentLang === 'ar' ? 'true' : 'false');
+    langToggleBtn.setAttribute('title', currentLang === 'ar' ? 'Switch to English' : 'التحويل إلى العربية');
     privacyLink.textContent = tr.privacy;
     dismissErrorBtn.textContent = tr.dismissError;
+
+    const hasValidStats =
+      isAlive &&
+      lastStats &&
+      Number.isInteger(lastStats.totalCount) &&
+      Number.isInteger(lastStats.activeCount);
+    if (statsRow) {
+      statsRow.hidden = !hasValidStats;
+      if (hasValidStats) {
+        lblDownloadsCount.textContent = tr.downloadsLabel(lastStats.totalCount);
+        lblActiveCount.textContent = tr.activeLabel(lastStats.activeCount);
+      }
+    }
+
     const message = lastError && tr.errors[lastError.code];
     errorCard.hidden = !message;
     errorMessage.textContent = message || '';
@@ -89,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   chrome.runtime.sendMessage({ action: 'SCORPION_CHECK_STATUS' }, (res) => {
     isAlive = Boolean(res && res.alive);
+    lastStats = isAlive && res && res.stats && typeof res.stats === 'object' ? res.stats : null;
     if (res && res.config) {
       interceptToggle.checked = Boolean(res.config.interceptAllDownloads);
       videoBtnToggle.checked = Boolean(res.config.showVideoFloatingBtn);

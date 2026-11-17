@@ -253,3 +253,71 @@ test('incognito browser downloads are skipped without querying regular cookies o
   assert.equal(h.captured.length, 0);
   assert.deepEqual(h.cancelled, []);
 });
+
+test('missing bridge-auth.json is retried on next call and /ping unauthenticated reports offline', async () => {
+  let tokenExists = false;
+  let pingStatus = { ok: true, authenticated: false, lang: 'ar' };
+  const fetchCalls = [];
+  const chrome = {
+    storage: {
+      local: { get: (_, cb) => cb({ scorpionConfig: { interceptAllDownloads: true, lang: 'ar' } }), set() {} },
+      session: { set: async () => {}, get: async () => ({}), remove: async () => {} },
+      onChanged: { addListener() {} },
+    },
+    runtime: {
+      lastError: null,
+      getURL: (rel) => `chrome-extension://ext-id/${rel}`,
+      onInstalled: { addListener() {} },
+      onStartup: { addListener() {} },
+      onMessage: { addListener() {} },
+    },
+    contextMenus: { removeAll: (cb) => cb(), create() {}, onClicked: { addListener() {} } },
+    tabs: { onCreated: { addListener() {} }, onActivated: { addListener() {} }, onUpdated: { addListener() {} }, onRemoved: { addListener() {} }, onReplaced: { addListener() {} }, sendMessage() {} },
+    downloads: { onCreated: { addListener() {} }, cancel() {}, erase() {} },
+    cookies: { getAllCookieStores: async () => [], getAll: async () => [] },
+    webRequest: { onHeadersReceived: { addListener() {} }, onSendHeaders: { addListener() {} } },
+  };
+  const context = {
+    chrome,
+    ScorpionMedia: require(path.join(__dirname, '../browser-extension/media.js')),
+    importScripts() {},
+    navigator: { userAgent: 'Unit UA', languages: ['en'] },
+    URL, AbortController, AbortSignal, setTimeout: () => 0, clearTimeout() {}, setInterval() {}, console,
+    fetch: async (url, opts) => {
+      fetchCalls.push({ url, headers: opts && opts.headers });
+      if (url.endsWith('bridge-auth.json')) {
+        return tokenExists ? { ok: true, json: async () => ({ token: 'late-secret-999' }) } : { ok: false, status: 404 };
+      }
+      if (url.includes('/ping')) return { ok: Boolean(pingStatus), status: pingStatus ? 200 : 403, json: async () => pingStatus };
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/background.js'), 'utf8'), context);
+  await new Promise(setImmediate);
+  assert.equal(await context.checkScorpionAlive(), false);
+  tokenExists = true;
+  pingStatus = { ok: true, authenticated: true, lang: 'ar' };
+  const hdrsAfter = await context.getBridgeHeaders();
+  assert.equal(hdrsAfter['X-Scorpion-Token'], 'late-secret-999');
+  assert.equal(await context.checkScorpionAlive(), true);
+});
+
+test('transfer respects cooperative server throttleMs backpressure', async () => {
+  const src = Buffer.alloc(CHUNK_SIZE * 2);
+  let sentChunks = 0;
+  const fetcher = async (_u, opts) => {
+    const [, from, endReq] = /bytes=(\d+)-(\d+)/.exec(opts.headers.Range);
+    const s = Number(from), e = Math.min(Number(endReq), src.length - 1);
+    return new Response(src.subarray(s, e + 1), {
+      status: 206,
+      headers: { 'Content-Range': `bytes ${s}-${e}/${src.length}`, 'Content-Type': 'video/mp4' },
+    });
+  };
+  const request = async (op) => {
+    if (op === 'start') return { ok: true, transferId: 't1', chunkSize: 32768 };
+    if (op === 'chunk') { sentChunks++; return { ok: true, throttleMs: 1 }; }
+    return { ok: true };
+  };
+  await transfer('https://web.telegram.org/a/progressive/1', {}, request, fetcher);
+  assert.ok(sentChunks > 2);
+});

@@ -228,43 +228,97 @@
     return null;
   }
 
+  const SCORPION_INLINE_SVG = `<svg class="scorpion-idm-emblem" viewBox="0 0 256 256" width="18" height="18" fill="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="scorp-idm-grad-shell" x1="56" y1="186" x2="192" y2="30" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#D46608"/><stop offset="32%" stop-color="#F89B22"/>
+        <stop offset="62%" stop-color="#FFCA58"/><stop offset="86%" stop-color="#F69216"/><stop offset="100%" stop-color="#BF5003"/>
+      </linearGradient>
+      <linearGradient id="scorp-idm-grad-hi" x1="78" y1="170" x2="178" y2="48" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#F69D26"/><stop offset="50%" stop-color="#FFD46E"/><stop offset="100%" stop-color="#EA800E"/>
+      </linearGradient>
+      <linearGradient id="scorp-idm-grad-leg" x1="90" y1="110" x2="212" y2="196" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#FFB444"/><stop offset="62%" stop-color="#DF7710"/><stop offset="100%" stop-color="#8E3B02"/>
+      </linearGradient>
+      <linearGradient id="scorp-idm-grad-claw" x1="34" y1="214" x2="132" y2="124" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#FFC254"/><stop offset="48%" stop-color="#F79318"/><stop offset="100%" stop-color="#AD4603"/>
+      </linearGradient>
+      <linearGradient id="scorp-idm-grad-sting" x1="138" y1="24" x2="112" y2="82" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#FFD673"/><stop offset="55%" stop-color="#F59318"/><stop offset="100%" stop-color="#7D3202"/>
+      </linearGradient>
+    </defs>
+    <g stroke="#451B02" stroke-width="2.3" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M107 120 L92 103 L89 88 L96 94 L100 104 L114 115 Z" fill="url(#scorp-idm-grad-leg)"/>
+      <path d="M121 110 L108 91 L106 77 L113 85 L116 95 L127 107 Z" fill="url(#scorp-idm-grad-leg)"/>
+      <path d="M136 102 L125 84 L124 72 L131 80 L133 89 L141 99 Z" fill="url(#scorp-idm-grad-leg)"/>
+      <path d="M140 146 L158 158 L165 180 L159 199 L152 191 L156 177 L149 162 L133 150 Z" fill="url(#scorp-idm-grad-leg)"/>
+      <path d="M151 136 L174 148 L185 169 L184 190 L176 181 L176 167 L166 153 L145 142 Z" fill="url(#scorp-idm-grad-leg)"/>
+      <path d="M161 126 L188 134 L203 153 L207 173 L198 166 L194 152 L180 139 L157 132 Z" fill="url(#scorp-idm-grad-leg)"/>
+      <path d="M168 113 L195 117 L214 131 L222 149 L212 144 L204 132 L188 124 L166 120 Z" fill="url(#scorp-idm-grad-leg)"/>
+      <path d="M100 128 C88 121 76 120 67 124 L59 133 C45 143 35 160 35 178 C35 186 38 193 42 197 C42 184 44 171 50 162 C50 172 52 184 57 195 C60 183 61 168 64 157 C68 147 76 141 85 140 C93 139 98 136 103 132 Z" fill="url(#scorp-idm-grad-claw)"/>
+      <path d="M47 146 C55 137 64 131 74 132 C64 137 56 144 50 155 C45 164 42 175 41 184 C39 170 40 156 47 146 Z" fill="url(#scorp-idm-grad-hi)" stroke="none"/>
+      <path d="M123 153 L131 164 C136 173 134 184 127 192 C117 204 97 215 76 220 C64 222 53 221 46 218 C61 214 78 207 88 197 C76 203 60 205 47 203 C62 196 78 188 90 178 C100 169 109 167 116 168 C120 163 119 156 116 151 Z" fill="url(#scorp-idm-grad-claw)"/>
+      <path d="M121 168 C124 178 118 189 107 197 C96 205 83 210 70 213 C85 206 96 196 102 186 C109 176 116 169 121 168 Z" fill="url(#scorp-idm-grad-hi)" stroke="none"/>
+      <path d="M84 150 C79 142 84 130 96 123 C106 117 118 120 126 128 C134 136 135 148 127 156 C118 164 102 164 91 156 Z" fill="url(#scorp-idm-grad-shell)"/>
+      <path d="M86 152 L75 161 L82 162 L90 156 Z" fill="#F8A832"/>
+      <path d="M93 158 L84 168 L91 168 L98 160 Z" fill="#E88412"/>
+      <path d="M111 119 C121 110 135 112 145 121 C152 129 150 141 140 148 C132 154 122 151 115 143 C109 135 104 126 111 119 Z" fill="url(#scorp-idm-grad-shell)"/>
+      <path d="M127 108 C136 99 151 101 159 110 C166 118 163 129 154 136 C146 142 136 139 130 131 C124 123 121 114 127 108 Z" fill="url(#scorp-idm-grad-shell)"/>
+      <path d="M142 97 C151 89 164 92 171 100 C177 108 174 118 165 125 C158 130 149 127 144 120 C139 112 136 103 142 97 Z" fill="url(#scorp-idm-grad-shell)"/>
+      <path d="M155 87 C163 80 174 83 180 91 C185 98 182 108 174 114 C167 119 159 116 155 109 C151 102 149 93 155 87 Z" fill="url(#scorp-idm-grad-shell)"/>
+      <path d="M96 134 C104 128 113 131 120 137 C114 143 103 144 96 138 Z" fill="url(#scorp-idm-grad-hi)" stroke="none"/>
+      <path d="M121 120 C129 117 139 120 143 127 C134 132 124 130 121 120 Z" fill="url(#scorp-idm-grad-hi)" stroke="none"/>
+      <path d="M137 108 C144 105 154 108 157 115 C149 119 140 117 137 108 Z" fill="url(#scorp-idm-grad-hi)" stroke="none"/>
+      <path d="M150 98 C157 95 165 97 168 103 C161 107 153 105 150 98 Z" fill="url(#scorp-idm-grad-hi)" stroke="none"/>
+      <path d="M166 80 C175 72 185 73 189 81 C193 89 188 99 178 103 C171 105 164 100 163 92 C162 87 163 83 166 80 Z" fill="url(#scorp-idm-grad-shell)"/>
+      <path d="M173 64 C182 58 192 61 195 70 C197 78 190 87 180 88 C172 89 166 83 167 74 C168 69 170 66 173 64 Z" fill="url(#scorp-idm-grad-shell)"/>
+      <path d="M175 47 C183 42 194 47 196 56 C197 65 188 72 178 71 C170 70 166 63 168 55 C169 51 172 49 175 47 Z" fill="url(#scorp-idm-grad-shell)"/>
+      <path d="M167 31 C176 26 187 31 191 41 C193 49 185 55 175 53 C167 51 162 44 162 37 C163 34 165 32 167 31 Z" fill="url(#scorp-idm-grad-shell)"/>
+      <path d="M148 21 C159 18 171 22 177 31 C180 38 174 44 164 43 C155 42 148 36 145 29 C143 25 144 22 148 21 Z" fill="url(#scorp-idm-grad-shell)"/>
+      <path d="M151 26 C160 24 168 28 171 34 C163 36 153 33 151 26 Z" fill="#FFD978" stroke="none"/>
+      <path d="M171 36 C179 34 185 39 185 45 C177 45 171 41 171 36 Z" fill="#FFD36B" stroke="none"/>
+      <path d="M148 22 C137 20 126 27 125 38 C124 47 129 53 132 59 C134 63 133 70 127 78 C136 74 142 66 142 57 C143 51 148 45 151 37 C153 30 152 24 148 22 Z" fill="url(#scorp-idm-grad-sting)"/>
+      <path d="M141 26 C135 26 130 31 130 38 C130 43 134 46 138 45 C143 43 146 34 141 26 Z" fill="#FFD772" stroke="none"/>
+    </g>
+  </svg>`;
+
   const I18N = {
     ar: {
       dir: 'rtl',
-      mainText: 'تحميل هذا الفيديو - Scorpion IDM',
-      mainAudioText: '🎵 تحميل هذا الصوت - Scorpion IDM',
-      bestHd: '🎬 أفضل جودة تشتغل على أي جهاز (MP4)',
-      audioMp3: '🎵 تحميل الصوت فقط (MP3 Audio)',
-      loadingQualities: '⏳ جاري قراءة الجودات المتاحة...',
+      mainText: 'تحميل بواسطة Scorpion',
+      mainAudioText: 'تحميل الصوت بواسطة Scorpion',
+      bestHd: 'أفضل جودة (MP4)',
+      audioMp3: 'الصوت فقط MP3',
+      loadingQualities: 'جاري قراءة الجودات المتاحة...',
       noQualities: 'تعذر قراءة الجودات — استخدم أفضل جودة',
-      qualityItem: (label) => `🎞️ ${label}`,
-      bestAudioOrig: '🎵 تحميل المقطع الصوتي بأعلى جودة (MP3 32-Port)',
-      convertMp3: '🎧 تحويل وتحميل بصيغة MP3 (192kbps)',
+      qualityItem: (label) => (/mp4/i.test(String(label || '')) ? String(label) : `${label} MP4`),
+      bestAudioOrig: 'أعلى جودة صوتية (MP3)',
+      convertMp3: 'تحويل وتحميل بصيغة MP3',
       directHeader: 'الروابط المباشرة المكتشفة من المشغل:',
-      directItem: (i, isAud) => (isAud ? `🎵 ملف صوتي مباشر #${i}` : `⚡ رابط مباشر #${i}`),
+      directItem: (i, isAud) => (isAud ? `ملف صوتي مباشر #${i}` : `رابط مباشر #${i}`),
       langToggle: 'EN',
       langTitle: 'Switch to English',
       closeTitle: 'إغلاق الشريط',
-      quickTitle: 'اضغط للتحميل بأفضل جودة — أو ▼ لاختيار الجودة',
+      quickTitle: 'اضغط للتحميل بأفضل جودة — أو اختر الجودة من القائمة',
       menuTitle: 'اختيار الجودة',
     },
     en: {
       dir: 'ltr',
-      mainText: 'Download this video - Scorpion IDM',
-      mainAudioText: '🎵 Download this audio - Scorpion IDM',
-      bestHd: '🎬 Best quality that plays everywhere (MP4)',
-      audioMp3: '🎵 Audio Only (MP3 Audio)',
-      loadingQualities: '⏳ Reading available qualities...',
+      mainText: 'Download with Scorpion',
+      mainAudioText: 'Download Audio with Scorpion',
+      bestHd: 'Best Quality MP4',
+      audioMp3: 'Audio Only MP3',
+      loadingQualities: 'Reading available qualities...',
       noQualities: "Couldn't read the qualities — use Best quality",
-      qualityItem: (label) => `🎞️ ${label}`,
-      bestAudioOrig: '🎵 Download Best Audio Quality (MP3 32-Port)',
-      convertMp3: '🎧 Convert & Download as MP3 (192kbps)',
+      qualityItem: (label) => (/mp4/i.test(String(label || '')) ? String(label) : `${label} MP4`),
+      bestAudioOrig: 'Best Audio Quality',
+      convertMp3: 'Audio Only MP3',
       directHeader: 'Direct streams detected from player:',
-      directItem: (i, isAud) => (isAud ? `🎵 Direct Audio Stream #${i}` : `⚡ Direct Stream #${i}`),
+      directItem: (i, isAud) => (isAud ? `Direct Audio #${i}` : `Direct Stream #${i}`),
       langToggle: 'ع',
       langTitle: 'التحويل إلى العربية',
       closeTitle: 'Close bar',
-      quickTitle: 'Click to download in the best quality — or ▼ to pick a quality',
+      quickTitle: 'Click to download in the best quality — or pick a quality',
       menuTitle: 'Pick a quality',
     },
   };
@@ -722,6 +776,7 @@
       }
       if (msg && msg.action === 'SCORPION_URL_CHANGED') {
         resetRouteStreams();
+        qualityCache.clear();
         dismissedForUrl = '';
         scheduleViewportRefresh();
         return false;
@@ -803,16 +858,17 @@
     triggerEl.type = 'button';
     triggerEl.className = 'scorpion-idm-trigger';
     triggerEl.innerHTML = `
-      <span aria-hidden="true">🦂</span>
-      <span class="scorpion-btn-text">${currentMainLabel()}</span>
+      ${SCORPION_INLINE_SVG}
+      <span class="scorpion-btn-text"></span>
     `;
     labelEl = triggerEl.querySelector('.scorpion-btn-text');
+    labelEl.textContent = currentMainLabel();
     triggerEl.title = tr.quickTitle;
 
     badgeEl = document.createElement('button');
     badgeEl.type = 'button';
     badgeEl.className = 'scorpion-idm-badge';
-    badgeEl.textContent = '▼';
+    badgeEl.innerHTML = '&#9662;';
     badgeEl.title = tr.menuTitle;
     badgeEl.setAttribute('aria-label', tr.menuTitle);
     badgeEl.setAttribute('aria-haspopup', 'menu');
@@ -1126,15 +1182,16 @@
       presets = [
         {
           label: tr.bestAudioOrig,
-          tag: isDirectAudioFile ? detectAudioExt(targetUrl) : 'MP3 32-PORT',
+          tag: isDirectAudioFile ? detectAudioExt(targetUrl) : 'BEST',
           quality: isDirectAudioFile ? 'direct' : 'audio',
           type: 'audio',
           url: targetUrl,
           filename: `${pageTitle}.${extLower}`,
+          selected: true,
         },
         {
           label: tr.convertMp3,
-          tag: 'MP3 192K',
+          tag: 'MP3',
           quality: 'audio',
           type: 'audio',
           url: isDirectAudioFile ? targetUrl : effectivePageUrl,
@@ -1145,14 +1202,15 @@
       presets = [
         {
           label: tr.bestHd,
-          tag: 'BEST HD',
+          tag: 'BEST',
           quality: 'best',
           type: 'video',
           url: targetUrl,
+          selected: true,
         },
         {
           label: tr.audioMp3,
-          tag: 'MP3',
+          tag: 'M4A',
           quality: 'audio',
           type: 'audio',
           url: targetUrl,
@@ -1160,20 +1218,35 @@
       ];
     }
 
+    const optionButtons = [];
+    const setSelectedButton = (chosen) => {
+      for (const b of optionButtons) {
+        const active = b === chosen;
+        b.classList.toggle('is-selected', active);
+        const chk = b.querySelector('.scorpion-idm-opt-check');
+        if (chk) chk.textContent = active ? '✓' : '';
+      }
+    };
+
     const makeOption = (opt) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.setAttribute('role', 'menuitem');
-      btn.className = 'scorpion-idm-option';
+      btn.className = 'scorpion-idm-option' + (opt.selected ? ' is-selected' : '');
       btn.innerHTML = `
-        <span></span>
+        <span class="scorpion-idm-opt-main">
+          <span class="scorpion-idm-opt-check" aria-hidden="true">${opt.selected ? '&#10003;' : ''}</span>
+          <span class="scorpion-idm-opt-label"></span>
+        </span>
         <span class="scorpion-idm-option-tag"></span>
       `;
-      btn.children[0].textContent = opt.label;
-      btn.children[1].textContent = opt.tag;
+      btn.querySelector('.scorpion-idm-opt-label').textContent = opt.label;
+      btn.querySelector('.scorpion-idm-option-tag').textContent = opt.tag || '';
+      optionButtons.push(btn);
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         e.preventDefault();
+        setSelectedButton(btn);
         triggerVideoDownload({
           url: opt.url,
           pageUrl: effectivePageUrl,
@@ -1188,13 +1261,17 @@
       });
       return btn;
     };
-    presets.forEach((opt) => dropdownEl.appendChild(makeOption(opt)));
+    const presetButtons = presets.map((opt) => {
+      const b = makeOption(opt);
+      dropdownEl.appendChild(b);
+      return b;
+    });
 
     // Every quality the video really offers, read by the app (yt-dlp), listed under "best"
     if (!(activeMode === 'audio' || isMusicPlatform || ScorpionMedia.isTelegram(pageUrl))) {
       const box = document.createElement('div');
       const status = document.createElement('div');
-      status.style.cssText = 'font-size:11px;color:#94a3b8;padding:6px 10px;';
+      status.style.cssText = 'font-size:11px;color:#989aa6;padding:6px 10px;';
       status.textContent = tr.loadingQualities;
       box.appendChild(status);
       dropdownEl.insertBefore(box, dropdownEl.children[1] || null);
@@ -1206,12 +1283,23 @@
           return;
         }
         status.remove();
-        list.forEach((q) => {
+        let firstQualityBtn = null;
+        list.forEach((q, idx) => {
           const size = q.size ? `~${q.size >= 1073741824 ? (q.size / 1073741824).toFixed(1) + ' GB' : Math.round(q.size / 1048576) + ' MB'}` : '';
-          box.appendChild(
-            makeOption({ label: t().qualityItem(q.label), tag: size || q.quality, quality: q.quality, type: 'video', url: targetUrl })
-          );
+          const qBtn = makeOption({
+            label: t().qualityItem(q.label),
+            tag: size || q.quality,
+            quality: q.quality,
+            type: 'video',
+            url: targetUrl,
+            selected: idx === 0,
+          });
+          if (idx === 0) firstQualityBtn = qBtn;
+          box.appendChild(qBtn);
         });
+        if (firstQualityBtn && presetButtons.length) {
+          setSelectedButton(firstQualityBtn);
+        }
       });
     }
 
@@ -1219,7 +1307,7 @@
     if (!isMusicPlatform && scopedStreams.length > 0) {
       const sep = document.createElement('div');
       sep.style.cssText =
-        'border-top:1px solid #1e293b;margin:4px 0;padding-top:4px;font-size:10px;color:#94a3b8;padding-inline:8px;';
+        'border-top:1px solid rgba(255,255,255,0.08);margin:4px 0;padding-top:4px;font-size:10px;color:#989aa6;padding-inline:8px;';
       sep.textContent = tr.directHeader;
       dropdownEl.appendChild(sep);
 
@@ -1230,9 +1318,14 @@
         btn.setAttribute('role', 'menuitem');
         btn.className = 'scorpion-idm-option';
         btn.innerHTML = `
-          <span>${tr.directItem(idx + 1, st.isAudio)}</span>
+          <span class="scorpion-idm-opt-main">
+            <span class="scorpion-idm-opt-check" aria-hidden="true"></span>
+            <span class="scorpion-idm-opt-label"></span>
+          </span>
           <span class="scorpion-idm-option-tag">${tag}</span>
         `;
+        btn.querySelector('.scorpion-idm-opt-label').textContent = tr.directItem(idx + 1, st.isAudio);
+        optionButtons.push(btn);
         btn.title = st.url;
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -1255,14 +1348,11 @@
     }
   }
 
-  // Qualities per address, partitioned by cookie/auth mode so anonymous prefetch never hides authenticated formats
+  // Qualities per address, strictly partitioned by cookie/auth mode so anonymous prefetches never read auth results
   const qualityCache = new Map();
   function listQualities(url, referer, candidates, allowCookies = false) {
     const baseKey = `${url}|${(candidates || []).join(',')}`;
     const modeKey = `${allowCookies ? 'auth' : 'anon'}|${baseKey}`;
-    if (!allowCookies && qualityCache.has(`auth|${baseKey}`)) {
-      return qualityCache.get(`auth|${baseKey}`);
-    }
     if (!qualityCache.has(modeKey)) {
       if (qualityCache.size >= 32) {
         qualityCache.delete(qualityCache.keys().next().value);
@@ -1494,7 +1584,7 @@
     positionPanelOverMedia(media);
     if (reason === 'hover' || reason === 'play' || reason === 'explicit') {
       try {
-        chrome.runtime.sendMessage({ action: 'SCORPION_MARK_ACTIVE_FRAME' }, () => void chrome.runtime.lastError);
+        chrome.runtime.sendMessage({ action: 'SCORPION_MARK_ACTIVE_FRAME', reason }, () => void chrome.runtime.lastError);
       } catch (_) {}
     }
     const session = mediaSession();

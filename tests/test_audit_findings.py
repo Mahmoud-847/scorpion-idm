@@ -606,7 +606,8 @@ class AuditFindingsRegressionTests(unittest.TestCase):
         self.assertFalse(check({"X-Scorpion-Client": "1"}))
         self.assertFalse(check({"Origin": "https://evil.test", "X-Scorpion-Client": "1", "X-Scorpion-Token": "secret-xyz"}))
         self.assertTrue(check({"X-Scorpion-Client": "1", "X-Scorpion-Token": "secret-xyz"}))
-        self.assertTrue(check({"Origin": "chrome-extension://hgcdbjpjlfgnejhceobphikeebmhmgcj", "X-Scorpion-Client": "1"}))
+        self.assertFalse(check({"Origin": "chrome-extension://hgcdbjpjlfgnejhceobphikeebmhmgcj", "X-Scorpion-Client": "1"}))
+        self.assertTrue(check({"Origin": "chrome-extension://hgcdbjpjlfgnejhceobphikeebmhmgcj", "X-Scorpion-Client": "1", "X-Scorpion-Token": "secret-xyz"}))
 
     def test_22_check_for_updates_filters_extension_zips_and_requires_sha256(self):
         with tempfile.TemporaryDirectory() as td:
@@ -653,6 +654,252 @@ class AuditFindingsRegressionTests(unittest.TestCase):
         with patch.object(auto_publish, "active_downloads_count", return_value=2):
             with self.assertRaises(RuntimeError):
                 auto_publish.stop_running_scorpion(force=False)
+
+        with patch.object(auto_publish, "active_downloads_count", return_value=-1):
+            with self.assertRaises(RuntimeError):
+                auto_publish.stop_running_scorpion(force=False)
+
+    def test_25_gzip_200_fallback_saves_full_decompressed_bytes(self):
+        import gzip
+
+        source = b"A" * 300000
+        compressed = gzip.compress(source)
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(compressed)))
+                self.end_headers()
+                self.wfile.write(compressed)
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                e = _make_engine(Path(td))
+                it = e.add_download({
+                    "url": f"http://127.0.0.1:{srv.server_port}/file.bin",
+                    "filename": "file.bin",
+                    "totalSize": len(compressed),
+                    "connections": 1,
+                    "supportsRange": True,
+                    "startImmediately": False,
+                })
+                e.start_download(it["id"])
+                _wait_download_done(it)
+                self.assertEqual(it["status"], "completed")
+                self.assertEqual(Path(it["filePath"]).read_bytes(), source)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_26_resume_requires_comparable_validator_for_no_validator_and_type_change(self):
+        old, new = b"A" * 262144, b"B" * 262144
+        served = {"etag": None, "lm": None}
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_GET(self):
+                rng = (self.headers.get("Range") or "bytes=0-0")[6:]
+                start, end = map(int, rng.split("-"))
+                body = new[start:end + 1]
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(new)}")
+                self.send_header("Content-Length", str(len(body)))
+                if served["etag"]:
+                    self.send_header("ETag", served["etag"])
+                if served["lm"]:
+                    self.send_header("Last-Modified", served["lm"])
+                self.end_headers()
+                self.wfile.write(body)
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                url = f"http://127.0.0.1:{srv.server_port}/f.bin"
+                for name, init_kw, etag_s, lm_s in (
+                    ("none", {}, None, None),
+                    ("type_swap", {"etag": '"v1"'}, None, "Tue, 17 Nov 2026 10:00:00 GMT"),
+                ):
+                    served["etag"], served["lm"] = etag_s, lm_s
+                    e = _make_engine(root / name)
+                    it = e.add_download({
+                        "url": url, "filename": "f.bin", "totalSize": len(new),
+                        "connections": 1, "supportsRange": True, "startImmediately": False, **init_kw
+                    })
+                    Path(it["tempFilePath"]).parent.mkdir(parents=True, exist_ok=True)
+                    Path(it["tempFilePath"]).write_bytes(old[:131072])
+                    it["downloadedBytes"] = 131072
+                    it["segments"][0].update(currentByte=131072, downloaded=131072)
+                    e.start_download(it["id"])
+                    _wait_download_done(it)
+                    self.assertEqual(it["status"], "completed")
+                    self.assertEqual(Path(it["filePath"]).read_bytes(), new)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_27_strict_http_session_preserves_host_only_through_prepare_and_redirect(self):
+        with tempfile.TemporaryDirectory() as td:
+            e = _make_engine(Path(td))
+            cookies = [{"name": "sid", "value": "secret", "domain": "media.example.test", "path": "/", "secure": True, "hostOnly": True}]
+            with e._http_session(cookies) as sess:
+                p_http = sess.prepare_request(requests.Request("GET", "http://media.example.test/file"))
+                p_host = sess.prepare_request(requests.Request("GET", "https://media.example.test/file"))
+                p_sub = sess.prepare_request(requests.Request("GET", "https://child.media.example.test/file"))
+                self.assertIsNone(p_http.headers.get("Cookie"))
+                self.assertIn("sid=secret", p_host.headers.get("Cookie") or "")
+                self.assertIsNone(p_sub.headers.get("Cookie"))
+                # Simulate redirect copy
+                p_redir = p_host.copy()
+                p_redir.url = "https://child.media.example.test/next"
+                p_redir.headers.pop("Cookie", None)
+                p_redir.prepare_cookies(p_redir._cookies)
+                self.assertIsNone(p_redir.headers.get("Cookie"))
+
+    def test_28_update_post_commit_callback_failure_keeps_live_app(self):
+        with tempfile.TemporaryDirectory() as td:
+            local = Path(td) / "local"
+            app_py = local / "Programs" / "ScorpionIDM" / "app" / "scorpion_qt.py"
+            app_py.parent.mkdir(parents=True)
+            app_py.write_bytes(b"old app")
+            pkg = Path(td) / "payload.zip"
+            with zipfile.ZipFile(pkg, "w") as zf:
+                zf.writestr("app/scorpion_qt.py", b"new app")
+            pkg_sha = hashlib.sha256(pkg.read_bytes()).hexdigest()
+
+            def bad_cb(pct):
+                if pct == 100:
+                    raise RuntimeError("UI callback failed")
+
+            e = _make_engine(Path(td))
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(local)}):
+                ok, _ = e.install_update_package(str(pkg), pkg_sha, bad_cb)
+            self.assertTrue(ok)
+            self.assertTrue(app_py.exists())
+            self.assertEqual(app_py.read_bytes(), b"new app")
+
+    def test_29_quality_cache_isolates_accounts_and_anonymous(self):
+        from unittest.mock import MagicMock
+
+        with tempfile.TemporaryDirectory() as td:
+            e = _make_engine(Path(td))
+            e._js_runtime_opts = Mock(return_value={})
+            e._build_media_headers = Mock(return_value={})
+            e._write_cookiefile = Mock(return_value="")
+            e._extract_with_fallback = Mock(side_effect=[
+                {"title": "Account A Title", "formats": [{"height": 720, "vcodec": "h264", "acodec": "aac", "filesize": 1000}]},
+                {"title": "Account B Title", "formats": [{"height": 1080, "vcodec": "h264", "acodec": "aac", "filesize": 2000}]},
+                {"title": "Public Anon Title", "formats": [{"height": 360, "vcodec": "h264", "acodec": "aac", "filesize": 500}]},
+            ])
+            fake_ydl = types.SimpleNamespace(YoutubeDL=lambda _o: MagicMock())
+            url = "https://video.example.test/private"
+            with patch.object(sq, "HAS_YTDLP", True), patch.object(sq, "yt_dlp", fake_ydl, create=True):
+                r_a = e.list_video_qualities(url, cookies=[{"name": "S", "value": "A", "domain": "video.example.test"}])
+                r_b = e.list_video_qualities(url, cookies=[{"name": "S", "value": "B", "domain": "video.example.test"}])
+                r_anon = e.list_video_qualities(url, cookies=None)
+            self.assertEqual(e._extract_with_fallback.call_count, 3)
+            self.assertEqual(r_a["title"], "Account A Title")
+            self.assertEqual(r_b["title"], "Account B Title")
+            self.assertEqual(r_anon["title"], "Public Anon Title")
+
+    def test_30_browser_transfer_pacing_abort_and_unified_torrent_budget(self):
+        import base64
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            e = _make_engine(root)
+            e.settings["globalSpeedLimitKbps"] = 1
+            chunk_b = base64.b64encode(b"x" * 524288).decode("ascii")
+            start_res = e.begin_browser_transfer({"url": "https://web.telegram.org/a/progressive/1", "filename": "v.mp4", "totalSize": 1048576})
+            tok = start_res["transferId"]
+            item, ctrl = e._browser_transfers[tok]
+            worker_errs = []
+
+            def _run_chunk():
+                try:
+                    e.receive_browser_transfer("chunk", {"transferId": tok, "offset": 0, "data": chunk_b})
+                except ValueError as exc:
+                    worker_errs.append(str(exc))
+
+            t_worker = threading.Thread(target=_run_chunk, daemon=True)
+            t_worker.start()
+            _REAL_SLEEP(0.12)
+            cancelled = threading.Event()
+
+            def _cancel():
+                e.pause_download(item["id"])
+                cancelled.set()
+
+            threading.Thread(target=_cancel, daemon=True).start()
+            self.assertTrue(cancelled.wait(0.25), "pause_download must not block on bandwidth limiter sleep")
+            t_worker.join(2)
+            self.assertTrue(worker_errs)
+
+            # Unified torrent + native global budget must sum to <= globalSpeedLimitKbps
+            e2 = _make_engine(root / "budget")
+            e2.settings["globalSpeedLimitKbps"] = 100
+            e2.downloads = {
+                "nat": {"id": "nat", "speedLimitKbps": 0, "status": "downloading"},
+                "tor": {"id": "tor", "speedLimitKbps": 0, "status": "downloading", "isTorrent": True},
+            }
+            e2.controllers = {"nat": {}, "tor": {"isTorrent": True}}
+            tor_cap, nat_budget = e2._global_budget_split()
+            self.assertLessEqual(tor_cap + nat_budget, 100)
+
+    def test_31_primary_ext_receives_bridge_auth_and_publisher_locks_tested_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            primary = root / "Programs" / "ScorpionIDM" / "browser-extension"
+            secondary = root / "ScorpionIDM" / "browser-extension"
+            primary.mkdir(parents=True)
+            (primary / "manifest.json").write_text("{}", encoding="utf-8")
+            e = _make_engine(root)
+            e.ext_source_dir = str(primary)
+            e.legacy_prog_ext_dir = str(primary)
+            e.appdata_ext_dir = str(secondary)
+            e.bridge_token = "t" * 64
+            selected = e.get_permanent_ext_dir()
+            self.assertEqual(selected, str(primary))
+            self.assertTrue((primary / "bridge-auth.json").is_file())
+            self.assertTrue((secondary / "bridge-auth.json").is_file())
+
+        # Publisher rejects mutation happening during validate_release_sources
+        pub_src = (ROOT / "auto_publish.py").read_text(encoding="utf-8")
+        tree = ast.parse(pub_src)
+        pub_cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "AutoPublisherWindow")
+        trig = next(n for n in pub_cls.body if isinstance(n, ast.FunctionDef) and n.name == "trigger_build_and_publish")
+        worker_fn = next(n for n in trig.body if isinstance(n, ast.FunctionDef) and n.name == "worker")
+        state = {"s": "A"}
+        reached_build = [False]
+        finished_err = []
+
+        def mutating_validate(_log):
+            state["s"] = "B"
+
+        sig = types.SimpleNamespace(
+            progress=types.SimpleNamespace(emit=lambda *a: None),
+            log=types.SimpleNamespace(emit=lambda *a: None),
+            finished=types.SimpleNamespace(emit=lambda ok, msg: finished_err.append((ok, msg))),
+        )
+        ns = {
+            "self": types.SimpleNamespace(signals=sig),
+            "do_bump": False,
+            "note_ar": "",
+            "ensure_on_up_to_date_main": lambda: None,
+            "validate_release_sources": mutating_validate,
+            "compute_snapshot": lambda: dict(state),
+            "read_current_version": lambda: "2.1.27",
+            "stop_running_scorpion": lambda **kw: reached_build.__setitem__(0, True),
+        }
+        exec(compile(ast.Module(body=[worker_fn], type_ignores=[]), "auto_publish.py", "exec"), ns)
+        ns["worker"]()
+        self.assertFalse(reached_build[0])
+        self.assertEqual(finished_err[0][0], False)
 
 
 if __name__ == "__main__":

@@ -35,7 +35,32 @@ import urllib.parse
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+_APP_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _APP_MODULE_DIR not in sys.path:
+    sys.path.insert(0, _APP_MODULE_DIR)
+
 from media_transfer import BrowserTransferMixin, browser_local_url, fragment_url, finite_duration, validate_media
+from scorpion_brand import (
+    PALETTES as BRAND_PALETTES,
+    TOKENS as BRAND_TOKENS,
+    build_qss as brand_build_qss,
+    outline_icon,
+    outline_pixmap,
+    prefers_reduced_motion,
+    scorpion_emblem_icon,
+    scorpion_emblem_pixmap,
+)
+from scorpion_cards import (
+    DownloadCardRowDelegate,
+    DownloadCardTableWidget,
+    QueueSchedulerDialog,
+    ROLE_CARD_META,
+    SIDEBAR_ROLE_ICON,
+    ScorpionTitleBar,
+    SidebarDelegate,
+    TorrentInlinePanel,
+    apply_win32_window_effects,
+)
 
 # Verify HTTPS with the Windows certificate store (like browsers do), so antivirus or company HTTPS
 # inspection (e.g. Kaspersky) doesn't fail every check while certificates stay verified
@@ -54,7 +79,7 @@ try:
 except ImportError:
     HAS_YTDLP = False
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSize, QRectF, QPointF, QTime, QByteArray, QPoint, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSize, QRectF, QPointF, QTime, QByteArray, QPoint, QPropertyAnimation, QEasingCurve, QEvent
 from PyQt6.QtGui import QIcon, QFont, QColor, QPainter, QPen, QLinearGradient, QAction, QClipboard, QPainterPath, QPolygonF, QShortcut, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
@@ -72,6 +97,7 @@ from PyQt6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
+    QMenuBar,
     QPushButton,
     QLabel,
     QLineEdit,
@@ -95,29 +121,14 @@ from PyQt6.QtWidgets import (
 )
 
 # ==============================================================================
-# STYLESHEETS (LIGHT MODE & DARK MODE - NATIVE WINDOWS 11 FLUENT STYLE)
+# STYLESHEETS (OBSIDIAN & AMBER DESIGN TOKENS + COORDINATED LIGHT MODE)
 # ==============================================================================
-PALETTES = {
-    "light": {
-        "bg": "#f4f5f7", "surface": "#ffffff", "surface2": "#f1f3f6", "border": "#dce0e7",
-        "text": "#181d27", "muted": "#525866", "accent": "#1d4ed8", "accent_hover": "#1e40af",
-        "primary_bg": "#1d4ed8", "primary_hover": "#1e40af",
-        "accent_soft": "#e8effd", "danger": "#b91c1c", "success": "#15803d", "warn": "#b45309",
-        "track": "#e2e6ed",
-    },
-    "dark": {
-        "bg": "#0f1115", "surface": "#171a21", "surface2": "#1e222b", "border": "#2a2f3a",
-        "text": "#e6e8ec", "muted": "#94a0b2", "accent": "#60a5fa", "accent_hover": "#93c5fd",
-        "primary_bg": "#2563eb", "primary_hover": "#1d4ed8",
-        "accent_soft": "#17223b", "danger": "#f87171", "success": "#4ade80", "warn": "#fbbf24",
-        "track": "#262b35",
-    },
-}
+PALETTES = BRAND_PALETTES
 
 
 def _is_dark_theme() -> bool:
     app = QApplication.instance()
-    return bool(app and app.property("scorpionTheme") == "dark")
+    return True if app is None else (app.property("scorpionTheme") != "light")
 
 
 def pal() -> dict:
@@ -149,6 +160,8 @@ def mode_color(mode: str) -> str:
         "error": p["danger"],
         "paused": p["warn"],
         "merging": p["accent"],
+        "verifying": p["accent"],
+        "saving": p["accent"],
     }.get(mode, p["accent"])
 
 
@@ -166,7 +179,10 @@ def _icon_font_family() -> str:
 
 
 def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
-    """Monochrome icon drawn from the built-in Windows icon font (Segoe Fluent / MDL2)."""
+    """Returns crisp unified vector outline icon when named, falling back to OS icon font."""
+    col = color or pal()["text"]
+    if isinstance(code, str) and code.startswith("svg:"):
+        return outline_icon(code[4:], col, size)
     from PyQt6.QtGui import QPixmap
 
     pm = QPixmap(size * 2, size * 2)
@@ -176,14 +192,14 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     f = QFont(_icon_font_family())
     f.setPixelSize(int(size * 1.6))
     p.setFont(f)
-    p.setPen(QColor(color or pal()["text"]))
+    p.setPen(QColor(col))
     p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, code)
     p.end()
     pm.setDevicePixelRatio(2.0)
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.26"
+APP_VERSION = "2.1.27"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -423,10 +439,8 @@ def video_format_for(quality: str, has_ffmpeg: bool = True) -> str:
 BRIDGE_CLIENT_HEADER = "X-Scorpion-Client"
 BRIDGE_TOKEN_HEADER = "X-Scorpion-Token"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
-TRUSTED_EXTENSION_ORIGINS = (
-    "chrome-extension://hgcdbjpjlfgnejhceobphikeebmhmgcj",
-    "extension://hgcdbjpjlfgnejhceobphikeebmhmgcj",
-)
+NATIVE_HOST_NAME = "com.scorpionidm.bridge"
+OFFICIAL_EXTENSION_ID = "hgcdbjpjlfgnejhceobphikeebmhmgcj"
 
 
 def load_or_create_bridge_token(app_data_dir: str = "") -> str:
@@ -453,7 +467,98 @@ def load_or_create_bridge_token(app_data_dir: str = "") -> str:
     return val
 
 
+def _discover_unpacked_extension_origins() -> list:
+    import glob
+
+    origins = [f"chrome-extension://{OFFICIAL_EXTENSION_ID}/"]
+    if os.name != "nt":
+        return origins
+    local = os.environ.get("LOCALAPPDATA", "")
+    if not local:
+        return origins
+    for rel in ("Microsoft/Edge/User Data", "Google/Chrome/User Data", "BraveSoftware/Brave-Browser/User Data"):
+        base = os.path.join(local, rel)
+        for pattern in (os.path.join(base, "*", "Preferences"), os.path.join(base, "*", "Secure Preferences")):
+            for pref_path in glob.glob(pattern):
+                try:
+                    with open(pref_path, "r", encoding="utf-8", errors="ignore") as f:
+                        settings = (json.load(f).get("extensions") or {}).get("settings") or {}
+                    for ext_id, info in settings.items():
+                        if not isinstance(info, dict) or not re.fullmatch(r"[a-p]{32}", str(ext_id or "")):
+                            continue
+                        ext_p = str(info.get("path") or "").lower()
+                        ext_n = str(((info.get("manifest") or {}).get("name")) or "").lower()
+                        if "scorpion" in ext_p or "scorpion" in ext_n:
+                            orig = f"chrome-extension://{ext_id}/"
+                            if orig not in origins:
+                                origins.append(orig)
+                except Exception:
+                    pass
+    return origins
+
+
+def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool = True):
+    """Register HKCU native messaging host manifest so extensions obtain bridge_token securely."""
+    base = app_data_dir or os.path.join(os.path.expanduser("~"), "AppData", "Local", "ScorpionIDM")
+    try:
+        os.makedirs(base, exist_ok=True)
+        bat_path = os.path.join(base, "native_host.bat")
+        manifest_path = os.path.join(base, f"{NATIVE_HOST_NAME}.json")
+        exe_cand = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ScorpionIDM", "ScorpionIDM.exe")
+        inst_site = os.path.join(os.path.dirname(exe_cand), "app", "sitecustomize.py")
+        if os.path.isfile(exe_cand) and os.path.isfile(inst_site):
+            bat_cmd = f'@echo off\r\n"{exe_cand}" "{inst_site}" --native-messaging %*\r\n'
+        else:
+            dev_site = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sitecustomize.py")
+            bat_cmd = f'@echo off\r\n"{sys.executable}" "{dev_site}" --native-messaging %*\r\n'
+        with open(bat_path, "w", encoding="utf-8") as bf:
+            bf.write(bat_cmd)
+        manifest = {
+            "name": NATIVE_HOST_NAME,
+            "description": "Scorpion IDM Local Bridge Pairing Host",
+            "path": bat_path,
+            "type": "stdio",
+            "allowed_origins": _discover_unpacked_extension_origins(),
+        }
+        with open(manifest_path, "w", encoding="utf-8") as mf:
+            json.dump(manifest, mf, indent=2)
+        if write_registry and os.name == "nt":
+            real_base = os.path.normcase(os.path.abspath(os.path.join(os.path.expanduser("~"), "AppData", "Local", "ScorpionIDM")))
+            if os.path.normcase(os.path.abspath(base)) == real_base:
+                import winreg
+
+                for root_sub in (
+                    r"Software\Microsoft\Edge\NativeMessagingHosts",
+                    r"Software\Google\Chrome\NativeMessagingHosts",
+                    r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts",
+                ):
+                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"{root_sub}\\{NATIVE_HOST_NAME}") as key:
+                        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, manifest_path)
+    except Exception:
+        pass
+
+
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.27",
+        "date": "2026-11-17",
+        "title_ar": "الإصدار 2.1.27 — الهوية الذهبية الجديدة وواجهة Obsidian وتطوير الإضافة وتعزيز الأمان",
+        "title_en": "Version 2.1.27 — Golden-Scorpion Brand Identity, Obsidian Desktop & Extension UI, and Integrity Hardening",
+        "ar": [
+            "تصميم جديد بالكامل بالهوية البصرية للعقرب الذهبي وأيقونات متجهة موحدة وواجهة Obsidian داكنة ببطاقات تحميل مكدسة وقائمة اختيار ملفات التورنت المباشرة، مع تحديث نافذة إضافة المتصفح وزر تحميل الفيديو العائم.",
+            "معالجة استجابات HTTP 200 المضغوطة (gzip/deflate) عند الرجوع لاتصال واحد دون اقتطاع المحتوى المفكوك، ومنع خلط النسخ عند غياب أو تغيّر نوع محدد الهوية عند الاستكمال.",
+            "الحفاظ على قيود الكوكيز hostOnly عبر جلسة HTTP وإعادة التوجيه، وفصل ذاكرة الجودات ببصمة الجلسة لكل حساب.",
+            "فصل نقطة الالتزام النهائية في التحديثات حتى لا يتسبب خطأ لاحق في حذف التطبيق، وتوفير انتظار حد السرعة التعاوني لنقل المتصفح وتوحيد ميزانية التورنت.",
+            "إصلاح تزويد bridge-auth.json التلقائي لكل مسارات الإضافة اليدوية مع دعم Native Messaging وإلزام التحقق بالمفتاح السري الحقيقي.",
+        ],
+        "en": [
+            "Complete Golden-Scorpion brand identity & unified vector icons with the new dark Obsidian & Amber desktop interface, stacked download cards, inline torrent file selection, redesigned extension popup, and updated “Download with Scorpion” floating video control.",
+            "Prevent false completion on compressed HTTP 200 fallbacks, and require comparable saved validators on partial resume to avoid mixing resource versions.",
+            "Enforce hostOnly cookie policy across requests sessions and redirects, and isolate quality caches by irreversible cookie fingerprint per account.",
+            "Enforce an explicit post-swap commit boundary in update installation, make browser-transfer rate limiting lock-free and abortable, and share a unified global budget with torrents.",
+            "Fix bridge-auth.json provisioning across all local unpacked extension paths, add Native Messaging token handoff, and require valid bridge tokens on all requests.",
+        ],
+    },
     {
         "version": "2.1.26",
         "date": "2026-11-17",
@@ -816,79 +921,16 @@ def _ver_tuple(v: str) -> tuple:
 
 
 ICONS = {
-    "add": "\uE710", "video": "\uE714", "torrent": "\uE71B", "play": "\uE768", "pause": "\uE769", "stop": "\uE71A",
-    "delete": "\uE74D", "clear": "\uE894", "browser": "\uE774", "moon": "\uE708", "sun": "\uE706",
-    "lang": "\uE8C1", "folder": "\uE838", "open": "\uE8A7", "close": "\uE711", "hide": "\uE921",
-    "download": "\uE896", "settings": "\uE713", "update": "\uE777",
-    "search": "\uE721", "chevron": "\uE70D", "probe": "\uE773", "clock": "\uE823",
+    "add": "svg:add", "video": "svg:video", "torrent": "svg:torrents", "play": "svg:play", "pause": "svg:pause", "stop": "svg:stop",
+    "delete": "svg:delete", "clear": "svg:clear", "browser": "svg:browser", "moon": "svg:moon", "sun": "svg:sun",
+    "lang": "svg:lang", "folder": "svg:folder", "open": "svg:open_file", "close": "svg:close", "hide": "svg:minimize",
+    "download": "svg:download", "settings": "svg:settings", "update": "svg:update",
+    "search": "svg:search", "chevron": "svg:chevron_down", "probe": "svg:probe", "clock": "svg:clock", "calendar": "svg:calendar",
 }
 
 
 def build_qss(p: dict) -> str:
-    return f"""
-* {{ font-family: "Segoe UI", Tahoma; font-size: 13px; color: {p['text']}; }}
-QMainWindow, QDialog {{ background: {p['bg']}; }}
-QFrame#ToolbarFrame {{ background: {p['surface']}; border: none; border-bottom: 1px solid {p['border']}; }}
-QFrame#CardFrame {{ background: {p['surface']}; border: 1px solid {p['border']}; border-radius: 10px; }}
-QFrame#VSep {{ background: {p['border']}; min-width: 1px; max-width: 1px; border: none; }}
-QLabel {{ background: transparent; }}
-QLabel#Muted {{ color: {p['muted']}; }}
-QLabel#Caption {{ color: {p['muted']}; font-size: 12px; }}
-QLabel#Value {{ font-size: 19px; font-weight: 600; }}
-QLabel#Title {{ font-size: 16px; font-weight: 600; }}
-QLabel#Url {{ color: {p['muted']}; font-size: 12px; }}
-QLabel#EmptyState {{ color: {p['muted']}; font-size: 14px; }}
-QLabel#StatusBar {{ color: {p['muted']}; background: {p['surface']}; border-top: 1px solid {p['border']}; padding: 7px 16px; font-size: 12px; }}
-QPushButton {{ background: {p['surface']}; border: 1px solid {p['border']}; border-radius: 7px; padding: 7px 16px; font-weight: 600; }}
-QPushButton:hover {{ background: {p['surface2']}; }}
-QPushButton:pressed {{ background: {p['track']}; }}
-QPushButton:disabled {{ color: {p['muted']}; background: {p['surface2']}; }}
-QPushButton#PrimaryBtn, QPushButton#SuccessBtn {{ background: {p['primary_bg']}; border-color: {p['primary_bg']}; color: #ffffff; }}
-QPushButton#PrimaryBtn:hover, QPushButton#SuccessBtn:hover {{ background: {p['primary_hover']}; border-color: {p['primary_hover']}; }}
-QPushButton#PrimaryBtn:pressed, QPushButton#SuccessBtn:pressed {{ background: {p['primary_hover']}; border-color: {p['primary_hover']}; }}
-QPushButton#PrimaryBtn:disabled, QPushButton#SuccessBtn:disabled {{ background: {p['surface2']}; border-color: {p['border']}; color: {p['muted']}; }}
-QPushButton#DangerBtn {{ color: {p['danger']}; }}
-QPushButton#DangerBtn:hover {{ background: rgba(220, 38, 38, 0.10); border-color: {p['danger']}; }}
-QPushButton#ToolBtn {{ background: transparent; border: 1px solid transparent; padding: 7px 11px; }}
-QPushButton#ToolBtn:hover {{ background: {p['surface2']}; border-color: {p['border']}; }}
-QPushButton#ToolBtn:disabled {{ background: transparent; color: {p['muted']}; }}
-QLineEdit, QComboBox, QSpinBox, QTimeEdit {{ background: {p['surface']}; border: 1px solid {p['border']}; border-radius: 7px; padding: 6px 10px; selection-background-color: {p['primary_bg']}; selection-color: #ffffff; }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTimeEdit:focus {{ border-color: {p['accent']}; }}
-QPushButton:focus {{ border-color: {p['accent']}; }}
-QPushButton#ToolBtn:focus {{ border-color: {p['accent']}; background: {p['surface2']}; }}
-QSpinBox::up-button, QSpinBox::down-button, QTimeEdit::up-button, QTimeEdit::down-button {{ width: 16px; border: none; background: transparent; }}
-QComboBox QAbstractItemView {{ background: {p['surface']}; border: 1px solid {p['border']}; selection-background-color: {p['accent_soft']}; selection-color: {p['text']}; padding: 4px; }}
-QTreeWidget, QTableWidget {{ background: {p['surface']}; border: 1px solid {p['border']}; border-radius: 10px; outline: 0; gridline-color: transparent; alternate-background-color: {p['surface']}; }}
-QTreeWidget:focus, QTableWidget:focus {{ border: 1.5px solid {p['accent']}; }}
-QTreeWidget::item {{ padding: 8px 6px; border: none; }}
-QTreeWidget::item:hover {{ background: {p['surface2']}; }}
-QTreeWidget::item:selected {{ background: {p['accent_soft']}; color: {p['accent']}; }}
-QTableWidget::item {{ padding: 0px 8px; border: none; border-bottom: 1px solid {p['surface2']}; }}
-QTableWidget::item:hover {{ background: {p['surface2']}; }}
-QTableWidget::item:selected {{ background: {p['accent_soft']}; color: {p['text']}; }}
-QHeaderView {{ background: transparent; border: none; }}
-QHeaderView::section {{ background: transparent; color: {p['muted']}; font-size: 12px; font-weight: 600; padding: 9px 8px; border: none; border-bottom: 1px solid {p['border']}; }}
-QTableCornerButton::section {{ background: transparent; border: none; }}
-QTabWidget::pane {{ border: 1px solid {p['border']}; border-radius: 10px; background: {p['surface']}; top: -1px; }}
-QTabBar::tab {{ background: transparent; color: {p['muted']}; padding: 9px 18px; border: none; border-bottom: 2px solid transparent; font-weight: 600; }}
-QTabBar::tab:selected {{ color: {p['accent']}; border-bottom: 2px solid {p['accent']}; }}
-QTabBar::tab:hover {{ color: {p['text']}; }}
-QCheckBox {{ spacing: 8px; }}
-QMenu {{ background: {p['surface']}; border: 1px solid {p['border']}; border-radius: 8px; padding: 6px; }}
-QMenu::item {{ padding: 7px 22px; border-radius: 6px; }}
-QMenu::item:selected {{ background: {p['accent_soft']}; color: {p['accent']}; }}
-QMenu::separator {{ height: 1px; background: {p['border']}; margin: 5px 8px; }}
-QToolTip {{ background: {p['surface']}; color: {p['text']}; border: 1px solid {p['border']}; padding: 5px 8px; }}
-QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: {p['track']}; border-radius: 4px; min-height: 30px; }}
-QScrollBar::handle:vertical:hover {{ background: {p['muted']}; }}
-QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
-QScrollBar::handle:horizontal {{ background: {p['track']}; border-radius: 4px; min-width: 30px; }}
-QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{ background: none; height: 0px; width: 0px; }}
-QProgressBar {{ background: {p['track']}; border: none; border-radius: 5px; text-align: center; font-weight: 600; }}
-QProgressBar::chunk {{ background: {p['accent']}; border-radius: 5px; }}
-QSplitter::handle {{ background: transparent; }}
-"""
+    return brand_build_qss(p)
 
 
 LIGHT_QSS = build_qss(PALETTES["light"])
@@ -1110,7 +1152,7 @@ class RingProgress(QWidget):
 
     def set_state(self, pct: float, mode: str):
         self.target = max(0.0, min(100.0, float(pct or 0)))
-        if not self._has_state or mode in ("paused", "done", "error", "merging") or self.mode != mode:
+        if not self._has_state or mode in ("paused", "done", "error", "merging", "verifying", "saving") or self.mode != mode:
             self.shown = self.target
         self.mode = mode
         self._has_state = True
@@ -1120,7 +1162,7 @@ class RingProgress(QWidget):
         self.shown += (self.target - self.shown) * 0.15
         if abs(self.target - self.shown) < 0.05:
             self.shown = self.target
-        if self.mode in ("active", "connecting", "merging"):
+        if self.mode in ("active", "connecting", "merging", "verifying", "saving"):
             self.angle = (self.angle + 6) % 360
         self.update()
 
@@ -1144,13 +1186,13 @@ class RingProgress(QWidget):
         else:
             if self.mode == "done":
                 span = 100.0
-            elif self.mode == "merging" and self.target >= 99.0:
+            elif self.mode in ("merging", "verifying", "saving") and self.target >= 99.0:
                 span = 100.0
             else:
                 span = self.shown
             if span > 0:
                 p.drawArc(r, 90 * 16, int(-span * 3.6 * 16))
-            if self.mode in ("active", "merging") and (self.mode == "merging" or span < 100):
+            if (not prefers_reduced_motion()) and self.mode in ("active", "merging", "verifying", "saving") and (self.mode != "active" or span < 100):
                 # small moving glow dot on the track to show activity
                 glow = QColor(col)
                 glow.setAlpha(110)
@@ -1183,7 +1225,7 @@ class SlimProgressBar(QWidget):
 
     def set_state(self, pct: float, mode: str):
         self.target = max(0.0, min(100.0, float(pct or 0)))
-        if not self._has_state or mode in ("paused", "done", "error", "merging") or self.mode != mode:
+        if not self._has_state or mode in ("paused", "done", "error", "merging", "verifying", "saving") or self.mode != mode:
             self.shown = self.target
         self.mode = mode
         self._has_state = True
@@ -1207,13 +1249,24 @@ class SlimProgressBar(QWidget):
         p.setClipPath(track)
         col = QColor(mode_color(self.mode))
         if self.mode == "connecting" and self.shown < 0.5:
+            if prefers_reduced_motion():
+                p.fillRect(QRectF(0, 0, w * 0.25, h), col)
+                return
             bw = w * 0.25
             x = -bw + (w + bw) * ((time.time() * 0.6) % 1.0)
             p.fillRect(QRectF(x, 0, bw, h), col)
             return
         fw = w * (100.0 if self.mode == "done" else self.shown) / 100.0
-        p.fillRect(QRectF(0, 0, fw, h), col)
-        if self.mode in ("active", "merging") and fw > 20:
+        if fw > 0:
+            fill_rect = QRectF(0, 0, fw, h)
+            if self.mode in ("active", "merging", "verifying", "saving", "done", "connecting"):
+                g_fill = QLinearGradient(0, 0, fw, 0)
+                g_fill.setColorAt(0.0, QColor(c["accent"]))
+                g_fill.setColorAt(1.0, QColor(c["accent_intense"]))
+                p.fillRect(fill_rect, g_fill)
+            else:
+                p.fillRect(fill_rect, col)
+        if (not prefers_reduced_motion()) and self.mode in ("active", "merging", "verifying", "saving") and fw > 20:
             sw = 80
             x = -sw + (fw + sw) * ((time.time() * 0.5) % 1.0)
             g = QLinearGradient(x, 0, x + sw, 0)
@@ -1404,17 +1457,15 @@ class FluentComboBox(QComboBox):
         txt = self.fontMetrics().elidedText(self.currentText(), Qt.TextElideMode.ElideRight, int(text_r.width()))
         p.drawText(text_r, align, txt)
 
-        f_ico = QFont(_icon_font_family())
-        f_ico.setPixelSize(11)
-        p.setFont(f_ico)
-        p.setPen(QColor(c["muted"]))
-        p.drawText(arrow_r, Qt.AlignmentFlag.AlignCenter, ICONS["chevron"])
+        pm = outline_pixmap("chevron_down", c["muted"], 12, 1.9)
+        p.drawPixmap(int(arrow_r.center().x() - 6), int(arrow_r.center().y() - 6), pm)
 
 
 def confirm_action_dialog(title: str, text: str, is_ar: bool, yes_label: str = "", no_label: str = "") -> bool:
     """Modal confirmation guaranteed to appear centered and above always-on-top cards."""
     box = QMessageBox(QMessageBox.Icon.Question, title, text, QMessageBox.StandardButton.NoButton, None)
     box.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+    box.setWindowIcon(scorpion_emblem_icon())
     box.setLayoutDirection(Qt.LayoutDirection.RightToLeft if is_ar else Qt.LayoutDirection.LeftToRight)
     yes_btn = box.addButton(
         yes_label or ("نعم، إلغاء وحذف" if is_ar else "Yes, cancel & delete"),
@@ -1466,6 +1517,8 @@ class IDMProgressDialog(QDialog):
         )
         if parent is not None and not parent.windowIcon().isNull():
             self.setWindowIcon(parent.windowIcon())
+        else:
+            self.setWindowIcon(scorpion_emblem_icon())
         self.setWindowTitle("Scorpion")
         self.resize(640, 440)
         self.setMinimumWidth(560)
@@ -1682,7 +1735,7 @@ class IDMProgressDialog(QDialog):
 
     def _apply_icons(self):
         c = pal()
-        self.btn_open_file.setIcon(glyph_icon(ICONS["open"], "#ffffff"))
+        self.btn_open_file.setIcon(glyph_icon(ICONS["open"], c["primary_text"]))
         self.btn_cancel.setIcon(glyph_icon(ICONS["close"], c["danger"]))
         self.btn_open_folder.setIcon(glyph_icon(ICONS["folder"], c["text"]))
         self.btn_hide.setIcon(glyph_icon(ICONS["hide"], c["text"]))
@@ -1737,6 +1790,10 @@ class IDMProgressDialog(QDialog):
             mode, st = "connecting", T("في انتظار اختيار ملفات التورنت", "Waiting for file selection")
         elif phase == "merging":
             mode, st = "merging", T("جاري دمج الصوت والصورة", "Merging audio & video")
+        elif phase == "verifying":
+            mode, st = "verifying", T("جاري التحقق من سلامة الملف", "Verifying file integrity")
+        elif phase == "saving":
+            mode, st = "saving", T("جاري حفظ الملف النهائي", "Saving final file")
         elif phase == "connecting" or done == 0:
             mode = "connecting"
             if item.get("isTorrent"):
@@ -1827,7 +1884,7 @@ class IDMProgressDialog(QDialog):
             and (not is_drm_err)
             and (not browser_owned or status not in ("downloading", "error"))
         )
-        self.btn_toggle.setEnabled(phase != "merging")
+        self.btn_toggle.setEnabled(phase not in ("merging", "verifying", "saving"))
         self.btn_cancel.setVisible(not finished)
         self.btn_open_folder.setEnabled(
             any(os.path.exists(pth) for pth in (item.get("filePath") or "", item.get("tempFilePath") or "", item.get("saveDir") or "") if pth)
@@ -1839,7 +1896,7 @@ class IDMProgressDialog(QDialog):
             self.btn_toggle.style().polish(self.btn_toggle)
         if status == "downloading":
             self.btn_toggle.setText(T("إيقاف مؤقت", "Pause"))
-            self.btn_toggle.setIcon(glyph_icon(ICONS["pause"], pal()["muted"] if phase == "merging" else pal()["text"]))
+            self.btn_toggle.setIcon(glyph_icon(ICONS["pause"], pal()["muted"] if phase in ("merging", "verifying", "saving") else pal()["text"]))
         else:
             if status in ("queued", "scheduled"):
                 self.btn_toggle.setText(T("تشغيل الآن", "Start now"))
@@ -1847,7 +1904,7 @@ class IDMProgressDialog(QDialog):
                 self.btn_toggle.setText(T("إعادة المحاولة", "Retry"))
             else:
                 self.btn_toggle.setText(T("استئناف", "Resume"))
-            self.btn_toggle.setIcon(glyph_icon(ICONS["play"], "#ffffff"))
+            self.btn_toggle.setIcon(glyph_icon(ICONS["play"], pal()["primary_text"]))
 
         if item.get("checksumSha256"):
             self.lbl_hash.setText(f"SHA-256: {item['checksumSha256']}\nMD5: {item.get('checksumMd5', '')}")
@@ -2091,7 +2148,7 @@ class AddDownloadDialog(QDialog):
         btn_row.setSpacing(8)
         btn_start = QPushButton("بدء التحميل الآن" if self.is_ar else "Start Download Now")
         btn_start.setObjectName("PrimaryBtn")
-        btn_start.setIcon(glyph_icon(ICONS["download"], "#ffffff"))
+        btn_start.setIcon(glyph_icon(ICONS["download"], c["primary_text"]))
         btn_start.setMinimumWidth(160)
         btn_start.clicked.connect(lambda: self.accept_download(True))
         btn_row.addWidget(btn_start)
@@ -2343,6 +2400,42 @@ class EngineSignals(QObject):
     update_available = pyqtSignal(dict)
 
 
+class _StrictCookieJar(requests.cookies.RequestsCookieJar):
+    """RequestsCookieJar that always preserves hostOnly (DomainStrictNonDomain) across copies."""
+
+    def __init__(self, policy=None):
+        super().__init__(
+            policy=policy
+            or http.cookiejar.DefaultCookiePolicy(
+                strict_ns_domain=http.cookiejar.DefaultCookiePolicy.DomainStrictNonDomain
+            )
+        )
+
+    def copy(self):
+        new_jar = _StrictCookieJar()
+        new_jar.update(self)
+        return new_jar
+
+
+class _StrictCookieSession(requests.Session):
+    """requests.Session that enforces DomainStrictNonDomain across prepare_request and HTTP redirects."""
+
+    def __init__(self, jar=None):
+        super().__init__()
+        self.cookies = _StrictCookieJar()
+        if jar is not None:
+            self.cookies.update(jar)
+
+    def prepare_request(self, request):
+        prepared = super().prepare_request(request)
+        strict_jar = _StrictCookieJar()
+        if prepared._cookies is not None:
+            strict_jar.update(prepared._cookies)
+        prepared.headers.pop("Cookie", None)
+        prepared.prepare_cookies(strict_jar)
+        return prepared
+
+
 class ScorpionNativeEngine(BrowserTransferMixin):
     REQUIRED_EXT_FILES = (
         "manifest.json",
@@ -2355,6 +2448,11 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         "popup.html",
         "popup.js",
         "icon.png",
+        "scorpion-logo.svg",
+        "icons/icon-16.png",
+        "icons/icon-32.png",
+        "icons/icon-48.png",
+        "icons/icon-128.png",
     )
 
     def __init__(self):
@@ -2393,6 +2491,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "autoCheckUpdates": True,
             "updateUrl": "https://github.com/Mahmoud-847/scorpion-idm.git",
             "lastSeenVersion": "",
+            "theme": "dark",
+            "lang": "ar",
         }
         self.total_speed = 0
         self.downloads = {}
@@ -2745,6 +2845,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         stage_root = os.path.normcase(os.path.abspath(stage_dir))
         staged_files = []
         swapped = []
+        committed = False
         try:
             os.makedirs(stage_dir, exist_ok=True)
             with zipfile.ZipFile(pkg_path, "r") as zf:
@@ -2767,9 +2868,12 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         dst_f.flush()
                     staged_files.append((member.filename, staged_path))
                     if progress_cb and (idx % 15 == 0 or idx == total):
-                        progress_cb(int(50 + 40 * idx / total))
+                        try:
+                            progress_cb(min(90, int(50 + 40 * idx / total)))
+                        except Exception:
+                            pass
 
-            # Phase 2: Atomic per-file swap with rollback on any failure
+            # Phase 2: Atomic per-file swap with full rollback if any replacement fails
             for idx, (rel_name, staged_path) in enumerate(staged_files, 1):
                 target_path = os.path.normpath(os.path.join(install_dir, rel_name))
                 os.makedirs(os.path.dirname(target_path), exist_ok=True)
@@ -2787,26 +2891,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                             pass
                     raise
                 swapped.append((target_path, backup_path))
-
-            for _tp, bp in swapped:
-                if bp and os.path.exists(bp):
-                    try:
-                        os.remove(bp)
-                    except OSError:
-                        pass
-            _rm_tree(stage_dir)
-            if progress_cb:
-                progress_cb(100)
-
-            if hasattr(self, "sync_and_repair_browser_extensions"):
-                self.sync_and_repair_browser_extensions()
-            if hasattr(self, "settings") and "ensure_app_shortcuts" in globals():
-                ensure_app_shortcuts(self.settings)
-            if os.path.exists(exe_path):
-                subprocess.Popen([exe_path], cwd=install_dir)
-                if hasattr(self, "signals"):
-                    self.signals.quit_requested.emit()
-            return True, "restarting"
+            committed = True
         except Exception as e:
             for tp, bp in reversed(swapped):
                 try:
@@ -2821,6 +2906,39 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         pass
             _rm_tree(stage_dir)
             return False, str(e)
+
+        # Commit point passed: never rollback or remove live files on any post-commit step.
+        if committed:
+            for _tp, bp in swapped:
+                if bp and os.path.exists(bp):
+                    try:
+                        os.remove(bp)
+                    except OSError:
+                        pass
+            _rm_tree(stage_dir)
+            if progress_cb:
+                try:
+                    progress_cb(100)
+                except Exception:
+                    pass
+            try:
+                if hasattr(self, "sync_and_repair_browser_extensions"):
+                    self.sync_and_repair_browser_extensions()
+            except Exception:
+                pass
+            try:
+                if hasattr(self, "settings") and "ensure_app_shortcuts" in globals():
+                    ensure_app_shortcuts(self.settings)
+            except Exception:
+                pass
+            try:
+                if os.path.exists(exe_path):
+                    subprocess.Popen([exe_path], cwd=install_dir)
+                    if hasattr(self, "signals"):
+                        self.signals.quit_requested.emit()
+            except Exception:
+                pass
+            return True, "restarting"
 
     def _apply_install_prefs(self):
         """One-time choices written by the installer (start with Windows / torrent association / shortcut)."""
@@ -2886,28 +3004,73 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
     def sync_and_repair_browser_extensions(self) -> dict:
         """
-        Ensures all browser extension files are present and up to date in:
-        1. Primary workspace folder (project_root/browser-extension)
-        2. ~/AppData/Local/Programs/ScorpionIDM/browser-extension (so existing Chrome/Edge entries work via Retry without removing/re-adding!)
-        3. ~/AppData/Local/ScorpionIDM/browser-extension
+        Ensures all browser extension files and per-install bridge-auth.json exist across:
+        1. Declared extension directories (ext_source_dir, legacy_prog_ext_dir, appdata_ext_dir)
+        2. Any unpacked local copy under ~/Downloads/Scorpion-Browser-Extension or browser Preferences.
+        Never writes bridge-auth.json inside a checked-out git workspace root.
         """
         repaired_paths = []
-        for target_dir in (self.legacy_prog_ext_dir, self.appdata_ext_dir):
+        src_abs = os.path.normcase(os.path.abspath(self.ext_source_dir))
+        candidate_dirs = [self.ext_source_dir, self.legacy_prog_ext_dir, self.appdata_ext_dir]
+        # Avoid touching user Downloads in isolated temporary test environments (e.g. legacy_prog_ext_dir under TEMP)
+        is_isolated_temp = os.path.normcase(os.path.abspath(self.legacy_prog_ext_dir)).startswith(
+            os.path.normcase(os.path.abspath(os.environ.get("TEMP", "") or "__none__"))
+        )
+        if not is_isolated_temp:
+            dl_ext = os.path.join(os.path.expanduser("~"), "Downloads", "Scorpion-Browser-Extension")
+            if os.path.isdir(dl_ext):
+                candidate_dirs.append(dl_ext)
+            if os.name == "nt":
+                import glob
+
+                local = os.environ.get("LOCALAPPDATA", "")
+                if local:
+                    for rel in ("Microsoft/Edge/User Data", "Google/Chrome/User Data", "BraveSoftware/Brave-Browser/User Data"):
+                        for pat in (os.path.join(local, rel, "*", "Preferences"), os.path.join(local, rel, "*", "Secure Preferences")):
+                            for pref_p in glob.glob(pat):
+                                try:
+                                    with open(pref_p, "r", encoding="utf-8", errors="ignore") as pf:
+                                        st = (json.load(pf).get("extensions") or {}).get("settings") or {}
+                                    for _eid, info in st.items():
+                                        if not isinstance(info, dict):
+                                            continue
+                                        ep = str(info.get("path") or "")
+                                        if ep and os.path.isdir(ep) and "scorpion" in ep.lower():
+                                            candidate_dirs.append(ep)
+                                except Exception:
+                                    pass
+
+        seen_dirs = set()
+        tok = getattr(self, "bridge_token", "")
+        for target_dir in candidate_dirs:
+            if not target_dir:
+                continue
             try:
-                if os.path.normcase(os.path.abspath(target_dir)) == os.path.normcase(os.path.abspath(self.ext_source_dir)):
+                tgt_abs = os.path.normcase(os.path.abspath(target_dir))
+                if tgt_abs in seen_dirs:
                     continue
-                os.makedirs(target_dir, exist_ok=True)
-                for fname in self.REQUIRED_EXT_FILES:
-                    src = os.path.join(self.ext_source_dir, fname)
-                    dst = os.path.join(target_dir, fname)
-                    if os.path.exists(src):
-                        shutil.copy2(src, dst)
-                tok = getattr(self, "bridge_token", "")
-                if tok:
+                seen_dirs.add(tgt_abs)
+                same_as_src = tgt_abs == src_abs
+                if not same_as_src:
+                    os.makedirs(target_dir, exist_ok=True)
+                    for fname in self.REQUIRED_EXT_FILES:
+                        src = os.path.join(self.ext_source_dir, fname)
+                        dst = os.path.join(target_dir, fname)
+                        if os.path.exists(src):
+                            os.makedirs(os.path.dirname(dst), exist_ok=True)
+                            shutil.copy2(src, dst)
+                    repaired_paths.append(target_dir)
+                parent_git = os.path.isdir(os.path.join(os.path.dirname(os.path.abspath(target_dir)), ".git"))
+                if tok and not parent_git and (same_as_src or os.path.isdir(target_dir)):
                     auth_file = os.path.join(target_dir, "bridge-auth.json")
                     with open(auth_file, "w", encoding="utf-8") as af:
                         json.dump({"token": tok}, af)
-                repaired_paths.append(target_dir)
+            except Exception:
+                pass
+
+        if "register_native_messaging_hosts" in globals() and hasattr(self, "app_data"):
+            try:
+                register_native_messaging_hosts(self.app_data, write_registry=not is_isolated_temp)
             except Exception:
                 pass
 
@@ -2992,13 +3155,6 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
                 if not self._origin_allowed() or self.headers.get(BRIDGE_CLIENT_HEADER) != "1":
                     return False
-                origin = (self.headers.get("Origin") or "").strip().lower()
-                trusted_ids = (
-                    "chrome-extension://hgcdbjpjlfgnejhceobphikeebmhmgcj",
-                    "extension://hgcdbjpjlfgnejhceobphikeebmhmgcj",
-                )
-                if origin in trusted_ids:
-                    return True
                 try:
                     expected_tok = getattr(engine_ref, "bridge_token", "")
                 except NameError:
@@ -3037,30 +3193,34 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     return
                 if parsed.path == "/ping":
                     qs = urllib.parse.parse_qs(parsed.query)
-                    if qs.get("ext") and self._is_trusted_client():
+                    is_auth = self._is_trusted_client()
+                    if qs.get("ext") and not is_auth:
+                        self._reject()
+                        return
+                    if qs.get("ext") and is_auth:
                         br = (qs.get("browser") or ["chrome"])[0]
                         engine_ref.record_browser_connection(br)
-                    if qs.get("set_lang") and self._is_trusted_client():
+                    if qs.get("set_lang") and is_auth:
                         new_lang = (qs.get("set_lang") or [""])[0].strip().lower()
                         if new_lang in ("ar", "en") and engine_ref.settings.get("lang") != new_lang:
                             engine_ref.settings["lang"] = new_lang
                             engine_ref.save_state()
                             engine_ref.signals.lang_changed.emit(new_lang)
                     self._send_cors(200)
-                    self.wfile.write(
-                        json.dumps(
-                            {
-                                "ok": True,
-                                "app": "Scorpion IDM Native",
-                                "version": APP_VERSION,
-                                "uiReady": bool(getattr(engine_ref, "_ui_ready", False)),
-                                "uiVisible": bool(getattr(engine_ref, "_ui_visible", False)),
-                                "uiPlatform": getattr(engine_ref, "_ui_platform", ""),
-                                "lang": engine_ref.settings.get("lang", "ar"),
-                                "activeCount": engine_ref.active_count(),
-                            }
-                        ).encode("utf-8")
-                    )
+                    ping_payload = {
+                        "ok": True,
+                        "app": "Scorpion IDM Native",
+                        "version": APP_VERSION,
+                        "authenticated": bool(is_auth),
+                        "uiReady": bool(getattr(engine_ref, "_ui_ready", False)),
+                        "uiVisible": bool(getattr(engine_ref, "_ui_visible", False)),
+                        "uiPlatform": getattr(engine_ref, "_ui_platform", ""),
+                        "lang": engine_ref.settings.get("lang", "ar"),
+                        "activeCount": engine_ref.active_count(),
+                    }
+                    if is_auth:
+                        ping_payload["totalCount"] = len(engine_ref.downloads)
+                    self.wfile.write(json.dumps(ping_payload).encode("utf-8"))
                     return
                 if parsed.path == "/focus":
                     engine_ref.signals.focus_requested.emit()
@@ -3279,19 +3439,18 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
         if not cookies:
             return None
-        if isinstance(cookies, requests.cookies.RequestsCookieJar):
-            cookies.set_policy(
-                http.cookiejar.DefaultCookiePolicy(
-                    strict_ns_domain=http.cookiejar.DefaultCookiePolicy.DomainStrictNonDomain
-                )
-            )
-            return cookies
-        jar = requests.cookies.RequestsCookieJar()
-        jar.set_policy(
-            http.cookiejar.DefaultCookiePolicy(
-                strict_ns_domain=http.cookiejar.DefaultCookiePolicy.DomainStrictNonDomain
-            )
+        strict_pol = http.cookiejar.DefaultCookiePolicy(
+            strict_ns_domain=http.cookiejar.DefaultCookiePolicy.DomainStrictNonDomain
         )
+        if isinstance(cookies, requests.cookies.RequestsCookieJar):
+            if "_StrictCookieJar" in globals() and not isinstance(cookies, _StrictCookieJar):
+                s_jar = _StrictCookieJar()
+                s_jar.update(cookies)
+                return s_jar
+            cookies.set_policy(strict_pol)
+            return cookies
+        jar = _StrictCookieJar() if "_StrictCookieJar" in globals() else requests.cookies.RequestsCookieJar()
+        jar.set_policy(strict_pol)
         now = time.time()
         if isinstance(cookies, dict):
             for k, v in cookies.items():
@@ -3362,6 +3521,10 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     hdrs["Origin"] = f"{pr.scheme}://{pr.netloc}"
         return hdrs
 
+    def _http_session(self, cookies=None) -> requests.Session:
+        jar = self._cookies_to_jar(cookies) if cookies is not None else None
+        return _StrictCookieSession(jar)
+
     def probe_url(self, url: str, referer: str = "", cookies=None) -> dict:
         hdrs = {
             "User-Agent": (self.settings.get("userAgent") or BROWSER_UA),
@@ -3371,11 +3534,19 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         if referer:
             hdrs["Referer"] = referer
         jar = self._cookies_to_jar(cookies)
-        r = requests.get(url, headers=hdrs, cookies=jar, stream=True, timeout=12, allow_redirects=True)
-        final_url = r.url
-        status = r.status_code
-        resp_headers = dict(r.headers)
-        r.close()
+        sess = self._http_session(jar) if hasattr(self, "_http_session") else None
+        try:
+            if sess is not None:
+                r = sess.get(url, headers=hdrs, stream=True, timeout=12, allow_redirects=True)
+            else:
+                r = requests.get(url, headers=hdrs, cookies=jar, stream=True, timeout=12, allow_redirects=True)
+            final_url = r.url
+            status = r.status_code
+            resp_headers = dict(r.headers)
+            r.close()
+        finally:
+            if sess is not None:
+                sess.close()
 
         etag = (resp_headers.get("ETag") or resp_headers.get("etag") or "").strip()
         last_modified = (resp_headers.get("Last-Modified") or resp_headers.get("last-modified") or "").strip()
@@ -3739,7 +3910,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
             if item.get("isTorrent") or self._is_torrent_source(item.get("url", ""), item):
                 item["isTorrent"] = True
-                ctrl = {"aborted": False, "last_bytes": item["downloadedBytes"], "last_time": time.time(), "file_lock": threading.Lock()}
+                ctrl = {"aborted": False, "isTorrent": True, "last_bytes": item["downloadedBytes"], "last_time": time.time(), "file_lock": threading.Lock()}
                 self.controllers[dl_id] = ctrl
                 self.save_state()
                 threading.Thread(target=self._run_torrent_worker, args=(item, ctrl), daemon=True).start()
@@ -3816,15 +3987,46 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         for seg in segs_to_start:
             threading.Thread(target=self._run_segment_worker, args=(item, seg, ctrl), daemon=True).start()
 
-    def _consume_token_bucket(self, key: str, rate_bps: float, num_bytes: int, ctrl: dict = None):
+    def _global_budget_split(self) -> tuple:
+        """Divide globalSpeedLimitKbps cleanly between active torrents (aria2c) and native/video/browser tasks."""
+        global_limit = int(self.settings.get("globalSpeedLimitKbps") or 0)
+        if global_limit <= 0:
+            return 0, 0
+        ctrls = dict(self.controllers or {})
+        downloads = self.downloads or {}
+        torrent_ids = []
+        other_ids = []
+        for did, c in ctrls.items():
+            it = downloads.get(did) or {}
+            if it.get("isTorrent") or (isinstance(c, dict) and c.get("isTorrent")):
+                torrent_ids.append(did)
+            else:
+                other_ids.append(did)
+        if not torrent_ids:
+            return 0, global_limit
+        total_active = max(1, len(torrent_ids) + len(other_ids))
+        share = max(1, global_limit // total_active)
+        reserved = 0
+        for tid in torrent_ids:
+            it_lim = int((downloads.get(tid) or {}).get("speedLimitKbps") or 0)
+            reserved += min(share, it_lim) if it_lim > 0 else share
+        non_torrent_budget = max(1, global_limit - reserved) if other_ids else global_limit
+        return share, non_torrent_budget
+
+    def _consume_token_bucket(
+        self, key: str, rate_bps: float, num_bytes: int, ctrl: dict = None, max_wait_s: float = None
+    ) -> float:
         if rate_bps <= 0 or num_bytes <= 0:
-            return
+            return 0.0
         buckets = self.__dict__.setdefault("_bw_buckets", {})
         bw_lock = self.__dict__.setdefault("_bw_lock", threading.Lock())
-        max_burst = max(float(num_bytes), min(rate_bps * 0.25, 256 * 1024.0))
-        while True:
+        max_burst = max(1024.0, min(rate_bps * 0.5, 256 * 1024.0))
+        remaining = float(num_bytes)
+        started_at = time.monotonic()
+        while remaining > 0:
             if ctrl and ctrl.get("aborted"):
-                return
+                return 0.0
+            step = min(remaining, max_burst)
             with bw_lock:
                 now = time.monotonic()
                 b = buckets.get(key)
@@ -3834,29 +4036,44 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 elapsed = max(0.0, now - b["ts"])
                 b["ts"] = now
                 b["tokens"] = min(max_burst, b["tokens"] + elapsed * rate_bps)
-                if b["tokens"] >= num_bytes:
-                    b["tokens"] -= num_bytes
-                    return
-                deficit = num_bytes - b["tokens"]
+                if b["tokens"] >= step:
+                    b["tokens"] -= step
+                    remaining -= step
+                    continue
+                deficit = step - b["tokens"]
                 wait_s = min(0.05, max(0.005, deficit / rate_bps))
+                if max_wait_s is not None and (now - started_at) + wait_s > max_wait_s:
+                    needed_s = max(0.0, (remaining - max(0.0, b["tokens"])) / rate_bps)
+                    b["tokens"] = 0.0
+                    b["ts"] = now
+                    return needed_s
             time.sleep(wait_s)
+        return 0.0
 
-    def consume_bandwidth(self, item: dict, num_bytes: int, ctrl: dict = None):
-        """Unified token-bucket limiter shared across direct, video, and browser transfer tasks."""
+    def consume_bandwidth(self, item: dict, num_bytes: int, ctrl: dict = None, max_wait_s: float = None) -> float:
+        """Unified token-bucket limiter shared across direct, video, browser transfer, and torrent tasks."""
         if num_bytes <= 0:
-            return
+            return 0.0
+        extra_wait = 0.0
         item_limit = int(item.get("speedLimitKbps") or 0)
-        global_limit = int(self.settings.get("globalSpeedLimitKbps") or 0)
         if item_limit > 0:
-            self._consume_token_bucket(f"item:{item.get('id', '')}", item_limit * 1024.0, num_bytes, ctrl)
-        if global_limit > 0:
-            self._consume_token_bucket("global", global_limit * 1024.0, num_bytes, ctrl)
+            w_item = self._consume_token_bucket(
+                f"item:{item.get('id', '')}", item_limit * 1024.0, num_bytes, ctrl, max_wait_s=max_wait_s
+            )
+            extra_wait = max(extra_wait, w_item)
+        _tor_share, non_tor_kbps = self._global_budget_split()
+        if non_tor_kbps > 0:
+            w_glob = self._consume_token_bucket(
+                "global", non_tor_kbps * 1024.0, num_bytes, ctrl, max_wait_s=max_wait_s
+            )
+            extra_wait = max(extra_wait, w_glob)
+        return extra_wait
 
     def _throttle(self, item: dict, num_bytes: int = 65536, ctrl: dict = None):
         self.consume_bandwidth(item, num_bytes, ctrl)
 
     def _restart_single_connection(self, item: dict, ctrl: dict):
-        """Server ignores Range requests: restart the download over one plain connection."""
+        """Server ignores Range requests or serves compressed 200 OK: restart over one plain connection."""
         with ctrl["act_lock"]:
             if ctrl.get("restarting"):
                 return
@@ -3875,9 +4092,10 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             except Exception:
                 pass
             item["supportsRange"] = False
+            item["totalSize"] = 0
             item["downloadedBytes"] = 0
             item["progress"] = 0.0
-            item["segments"] = self._create_segments(item.get("totalSize") or 0, 1)
+            item["segments"] = self._create_segments(0, 1)
             item["status"] = "paused"
             self.save_state()
         self.start_download(item["id"])
@@ -3970,9 +4188,16 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     req_start = seg["currentByte"]
                     req_end = seg["endByte"]
                     ranged = item["supportsRange"] and req_end >= req_start
+                    hdrs["Accept-Encoding"] = "identity"
                     if ranged:
                         hdrs["Range"] = f"bytes={req_start}-{req_end}"
-                        hdrs["Accept-Encoding"] = "identity"
+                        if req_start > 0 or ctrl.get("resumed_from_partial"):
+                            if_etag = (item.get("etag") or "").strip()
+                            if_lm = (item.get("lastModified") or "").strip()
+                            if if_etag and not if_etag.startswith("W/"):
+                                hdrs["If-Range"] = if_etag
+                            elif if_lm:
+                                hdrs["If-Range"] = if_lm
                     elif req_start > 0:
                         with ctrl["file_lock"]:
                             if ctrl["aborted"]:
@@ -3985,108 +4210,87 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         req_start = 0
 
                     jar = None if item.get("incognito") else self._cookies_to_jar(self.__dict__.get("_site_cookies", {}).get(item["id"]))
-                    with requests.get(
-                        item["url"], headers=hdrs, cookies=jar, stream=True, timeout=(15, 180), allow_redirects=True
-                    ) as r:
-                        if r.status_code in (429, 503, 509, 403, 500, 502, 504):
-                            retry_reason = f"HTTP {r.status_code}"
-                        elif r.status_code not in (200, 206):
-                            seg["status"] = "error"
-                            seg["info"] = f"HTTP {r.status_code}"
-                            return
-                        elif r.status_code == 200 and ranged and (req_start > 0 or len(item.get("segments") or []) > 1):
-                            threading.Thread(target=self._restart_single_connection, args=(item, ctrl), daemon=True).start()
-                            return
-                        else:
-                            resp_hdrs = dict(r.headers)
-                            srv_etag = (resp_hdrs.get("ETag") or resp_hdrs.get("etag") or "").strip()
-                            srv_lm = (resp_hdrs.get("Last-Modified") or resp_hdrs.get("last-modified") or "").strip()
-                            resp_ce = (resp_hdrs.get("Content-Encoding") or resp_hdrs.get("content-encoding") or "").strip().lower()
-                            if ranged and resp_ce not in ("", "identity"):
+                    with self._http_session(jar) as _sess:
+                        with _sess.get(item["url"], headers=hdrs, stream=True, timeout=(15, 180), allow_redirects=True) as r:
+                            if r.status_code in (429, 503, 509, 403, 500, 502, 504):
+                                retry_reason = f"HTTP {r.status_code}"
+                            elif r.status_code not in (200, 206):
+                                seg["status"] = "error"
+                                seg["info"] = f"HTTP {r.status_code}"
+                                return
+                            elif r.status_code == 200 and ranged and (req_start > 0 or len(item.get("segments") or []) > 1):
                                 threading.Thread(target=self._restart_single_connection, args=(item, ctrl), daemon=True).start()
                                 return
+                            else:
+                                if r.status_code == 200 and ranged:
+                                    ranged = False
+                                    item["supportsRange"] = False
+                                    seg["endByte"] = -1
+                                    req_end = -1
+                                resp_hdrs = dict(r.headers)
+                                srv_etag = (resp_hdrs.get("ETag") or resp_hdrs.get("etag") or "").strip()
+                                srv_strong = "" if srv_etag.startswith("W/") else srv_etag
+                                srv_lm = (resp_hdrs.get("Last-Modified") or resp_hdrs.get("last-modified") or "").strip()
+                                resp_ce = (resp_hdrs.get("Content-Encoding") or resp_hdrs.get("content-encoding") or "").strip().lower()
+                                if ranged and resp_ce not in ("", "identity"):
+                                    threading.Thread(target=self._restart_single_connection, args=(item, ctrl), daemon=True).start()
+                                    return
 
-                            with self.lock:
-                                stored_etag = (item.get("etag") or "").strip()
-                                stored_lm = (item.get("lastModified") or "").strip()
-                                v_rec = bool(item.get("validatorRecorded"))
-                                mismatch = False
-                                if stored_etag and srv_etag and srv_etag != stored_etag:
-                                    mismatch = True
-                                elif stored_lm and srv_lm and srv_lm != stored_lm:
-                                    mismatch = True
-                                elif ctrl.get("resumed_from_partial") and (
-                                    (not v_rec and (srv_etag or srv_lm))
-                                    or (v_rec and (stored_etag or stored_lm) and not (srv_etag or srv_lm))
-                                ):
-                                    mismatch = True
-                                elif ranged and srv_etag.startswith("W/") and (req_start > 0 or len(item.get("segments") or []) > 1):
-                                    mismatch = True
-                                elif not v_rec and ((srv_etag and not srv_etag.startswith("W/")) or srv_lm):
-                                    item["etag"] = "" if srv_etag.startswith("W/") else srv_etag
-                                    item["lastModified"] = srv_lm
-                                    item["validatorRecorded"] = True
-                            if mismatch:
-                                threading.Thread(
-                                    target=self._restart_clean_from_source_change,
-                                    args=(item, ctrl, srv_etag, srv_lm, int(item.get("totalSize") or 0)),
-                                    daemon=True,
-                                ).start()
-                                return
-
-                            if seg["id"] == 1 and seg["currentByte"] == 0 and r.status_code == 200:
-                                if int(item.get("totalSize") or 0) <= 0:
-                                    cl_disc = resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or ""
-                                    if str(cl_disc).isdigit() and int(cl_disc) > 0:
-                                        item["totalSize"] = int(cl_disc)
-                                        if len(item.get("segments") or []) == 1 and seg.get("endByte", -1) == -1:
-                                            seg["endByte"] = int(cl_disc) - 1
-                                            req_end = seg["endByte"]
-                                better_name = extract_filename(r.url or item["url"], resp_hdrs)
-                                has_cd_name = "filename" in (resp_hdrs.get("Content-Disposition") or resp_hdrs.get("content-disposition") or "").lower()
-                                if better_name not in ("scorpion_file.bin", "download_file") and (
-                                    not os.path.splitext(item.get("filename") or "")[1] or has_cd_name
-                                ):
-                                    with self.lock:
-                                        new_cat = detect_category(better_name, resp_hdrs.get("Content-Type") or "")
-                                        if item.get("customSaveDir"):
-                                            new_dir = item["saveDir"]
+                                with self.lock:
+                                    stored_etag = (item.get("etag") or "").strip()
+                                    stored_strong = "" if stored_etag.startswith("W/") else stored_etag
+                                    stored_lm = (item.get("lastModified") or "").strip()
+                                    v_rec = bool(item.get("validatorRecorded"))
+                                    mismatch = False
+                                    if ctrl.get("resumed_from_partial"):
+                                        if stored_strong:
+                                            if srv_strong != stored_strong:
+                                                mismatch = True
+                                            elif stored_lm and srv_lm and srv_lm != stored_lm:
+                                                mismatch = True
+                                        elif stored_lm:
+                                            if not srv_lm or srv_lm != stored_lm or srv_strong:
+                                                mismatch = True
                                         else:
-                                            new_dir = os.path.join(self.settings["downloadsRoot"], new_cat)
-                                            os.makedirs(new_dir, exist_ok=True)
-                                            item["category"] = new_cat
-                                            item["saveDir"] = new_dir
-                                        item["filePath"] = self._available_media_path(os.path.join(new_dir, better_name), item["id"])
-                                        item["filename"] = os.path.basename(item["filePath"])
+                                            mismatch = True
+                                    else:
+                                        if stored_strong and srv_strong != stored_strong:
+                                            mismatch = True
+                                        elif stored_lm and (not srv_lm or srv_lm != stored_lm):
+                                            mismatch = True
+                                        elif ranged and srv_etag.startswith("W/") and (req_start > 0 or len(item.get("segments") or []) > 1):
+                                            mismatch = True
+                                        elif not v_rec and (srv_strong or srv_lm):
+                                            item["etag"] = srv_strong
+                                            item["lastModified"] = srv_lm
+                                            item["validatorRecorded"] = True
+                                if mismatch:
+                                    threading.Thread(
+                                        target=self._restart_clean_from_source_change,
+                                        args=(item, ctrl, srv_etag, srv_lm, int(item.get("totalSize") or 0) if (r.status_code == 206 or resp_ce in ("", "identity")) else 0),
+                                        daemon=True,
+                                    ).start()
+                                    return
 
-                            resp_end = req_end
-                            expected_body_len = None
-                            if r.status_code == 206 and ranged:
-                                cr_raw = (resp_hdrs.get("Content-Range") or resp_hdrs.get("content-range") or "").strip()
-                                m_cr = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+)", cr_raw, re.I)
-                                if not m_cr:
-                                    self._abort_all_segments_with_error(item, ctrl, "The server returned an invalid byte range")
-                                    return
-                                cr_start, cr_end, cr_total = map(int, m_cr.groups())
-                                known_total = int(item.get("totalSize") or 0)
-                                if (
-                                    cr_start != req_start
-                                    or cr_end < req_start
-                                    or cr_end > req_end
-                                    or cr_total <= 0
-                                    or (known_total > 0 and cr_total != known_total)
-                                ):
-                                    self._abort_all_segments_with_error(item, ctrl, "The server returned the wrong byte range")
-                                    return
-                                if known_total <= 0:
-                                    item["totalSize"] = cr_total
-                                resp_end = cr_end
-                                expected_body_len = cr_end - cr_start + 1
-                                cl_hdr = (resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or "").strip()
-                                if cl_hdr.isdigit() and int(cl_hdr) != expected_body_len:
-                                    self._abort_all_segments_with_error(item, ctrl, "The server returned the wrong byte range length")
-                                    return
-                                if seg["id"] == 1 and req_start == 0:
+                                compressed_200 = (r.status_code == 200) and (resp_ce not in ("", "identity"))
+                                compressed_wire_len = None
+                                if compressed_200:
+                                    item["supportsRange"] = False
+                                    item["totalSize"] = 0
+                                    seg["endByte"] = -1
+                                    req_end = -1
+                                    cl_comp = (resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or "").strip()
+                                    if cl_comp.isdigit() and int(cl_comp) > 0:
+                                        compressed_wire_len = int(cl_comp)
+
+                                if seg["id"] == 1 and seg["currentByte"] == 0 and r.status_code == 200:
+                                    if not compressed_200:
+                                        cl_disc = (resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or "").strip()
+                                        if cl_disc.isdigit() and int(cl_disc) > 0:
+                                            item["totalSize"] = int(cl_disc)
+                                            if len(item.get("segments") or []) == 1:
+                                                seg["endByte"] = int(cl_disc) - 1
+                                                req_end = seg["endByte"]
                                     better_name = extract_filename(r.url or item["url"], resp_hdrs)
                                     has_cd_name = "filename" in (resp_hdrs.get("Content-Disposition") or resp_hdrs.get("content-disposition") or "").lower()
                                     if better_name not in ("scorpion_file.bin", "download_file") and (
@@ -4103,50 +4307,102 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                                                 item["saveDir"] = new_dir
                                             item["filePath"] = self._available_media_path(os.path.join(new_dir, better_name), item["id"])
                                             item["filename"] = os.path.basename(item["filePath"])
-                            elif r.status_code == 200:
-                                cl_hdr = (resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or "").strip()
-                                if cl_hdr.isdigit():
-                                    expected_body_len = int(cl_hdr)
 
-                            seg["info"] = "Receiving data..."
-                            resp_read = 0
-                            for chunk in r.iter_content(chunk_size=65536):
-                                if ctrl["aborted"] or item["status"] != "downloading":
-                                    return
-                                if not chunk:
-                                    continue
-                                with ctrl["file_lock"]:
-                                    if ctrl["aborted"]:
+                                resp_end = req_end
+                                expected_body_len = None
+                                if r.status_code == 206 and ranged:
+                                    cr_raw = (resp_hdrs.get("Content-Range") or resp_hdrs.get("content-range") or "").strip()
+                                    m_cr = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+)", cr_raw, re.I)
+                                    if not m_cr:
+                                        self._abort_all_segments_with_error(item, ctrl, "The server returned an invalid byte range")
                                         return
-                                    to_write = len(chunk)
-                                    if resp_end != -1:
-                                        rem = resp_end - seg["currentByte"] + 1
-                                        if rem <= 0:
-                                            break
-                                        to_write = min(to_write, rem)
-                                    ctrl["file"].seek(seg["currentByte"])
-                                    ctrl["file"].write(chunk[:to_write])
-                                    seg["currentByte"] += to_write
-                                    seg["downloaded"] += to_write
-                                    item["downloadedBytes"] += to_write
-                                    resp_read += to_write
-                                self.consume_bandwidth(item, to_write, ctrl)
-                                if resp_end != -1 and seg["currentByte"] > resp_end:
-                                    break
-                            exact_len_ok = (expected_body_len is None) or (resp_read == expected_body_len)
-                            if not exact_len_ok:
-                                retry_reason = "Connection dropped"
-                            elif seg["endByte"] == -1 or seg["currentByte"] > seg["endByte"]:
-                                if not ctrl["aborted"]:
-                                    with ctrl["act_lock"]:
-                                        ctrl["active"] = max(0, ctrl["active"] - 1)
-                                    released = True
-                                    self._on_segment_done(item, seg, ctrl)
-                                return
-                            else:
-                                # Server returned a valid smaller prefix sub-range: continue immediately without counting a failure
-                                attempt = 0
-                                continue
+                                    cr_start, cr_end, cr_total = map(int, m_cr.groups())
+                                    known_total = int(item.get("totalSize") or 0)
+                                    if (
+                                        cr_start != req_start
+                                        or cr_end < req_start
+                                        or cr_end > req_end
+                                        or cr_total <= 0
+                                        or (known_total > 0 and cr_total != known_total)
+                                    ):
+                                        self._abort_all_segments_with_error(item, ctrl, "The server returned the wrong byte range")
+                                        return
+                                    if known_total <= 0:
+                                        item["totalSize"] = cr_total
+                                    resp_end = cr_end
+                                    expected_body_len = cr_end - cr_start + 1
+                                    cl_hdr = (resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or "").strip()
+                                    if cl_hdr.isdigit() and int(cl_hdr) != expected_body_len:
+                                        self._abort_all_segments_with_error(item, ctrl, "The server returned the wrong byte range length")
+                                        return
+                                    if seg["id"] == 1 and req_start == 0:
+                                        better_name = extract_filename(r.url or item["url"], resp_hdrs)
+                                        has_cd_name = "filename" in (resp_hdrs.get("Content-Disposition") or resp_hdrs.get("content-disposition") or "").lower()
+                                        if better_name not in ("scorpion_file.bin", "download_file") and (
+                                            not os.path.splitext(item.get("filename") or "")[1] or has_cd_name
+                                        ):
+                                            with self.lock:
+                                                new_cat = detect_category(better_name, resp_hdrs.get("Content-Type") or "")
+                                                if item.get("customSaveDir"):
+                                                    new_dir = item["saveDir"]
+                                                else:
+                                                    new_dir = os.path.join(self.settings["downloadsRoot"], new_cat)
+                                                    os.makedirs(new_dir, exist_ok=True)
+                                                    item["category"] = new_cat
+                                                    item["saveDir"] = new_dir
+                                                item["filePath"] = self._available_media_path(os.path.join(new_dir, better_name), item["id"])
+                                                item["filename"] = os.path.basename(item["filePath"])
+                                elif r.status_code == 200 and not compressed_200:
+                                    cl_hdr = (resp_hdrs.get("Content-Length") or resp_hdrs.get("content-length") or "").strip()
+                                    if cl_hdr.isdigit():
+                                        expected_body_len = int(cl_hdr)
+
+                                seg["info"] = "Receiving data..."
+                                resp_read = 0
+                                for chunk in r.iter_content(chunk_size=65536):
+                                    if ctrl["aborted"] or item["status"] != "downloading":
+                                        return
+                                    if not chunk:
+                                        continue
+                                    with ctrl["file_lock"]:
+                                        if ctrl["aborted"]:
+                                            return
+                                        to_write = len(chunk)
+                                        if resp_end != -1:
+                                            rem = resp_end - seg["currentByte"] + 1
+                                            if rem <= 0:
+                                                break
+                                            to_write = min(to_write, rem)
+                                        ctrl["file"].seek(seg["currentByte"])
+                                        ctrl["file"].write(chunk[:to_write])
+                                        seg["currentByte"] += to_write
+                                        seg["downloaded"] += to_write
+                                        item["downloadedBytes"] += to_write
+                                        resp_read += to_write
+                                    self.consume_bandwidth(item, to_write, ctrl)
+                                    if resp_end != -1 and seg["currentByte"] > resp_end:
+                                        break
+                                exact_len_ok = (expected_body_len is None) or (resp_read == expected_body_len)
+                                if exact_len_ok and compressed_wire_len is not None:
+                                    try:
+                                        raw_pos = r.raw.tell()
+                                        if raw_pos > 0 and raw_pos != compressed_wire_len:
+                                            exact_len_ok = False
+                                    except Exception:
+                                        pass
+                                if not exact_len_ok:
+                                    retry_reason = "Connection dropped"
+                                elif seg["endByte"] == -1 or seg["currentByte"] > seg["endByte"]:
+                                    if not ctrl["aborted"]:
+                                        with ctrl["act_lock"]:
+                                            ctrl["active"] = max(0, ctrl["active"] - 1)
+                                        released = True
+                                        self._on_segment_done(item, seg, ctrl)
+                                    return
+                                else:
+                                    # Server returned a valid smaller prefix sub-range: continue immediately without counting a failure
+                                    attempt = 0
+                                    continue
                 except Exception as e:
                     retry_reason = str(e)[:45]
                 finally:
@@ -4239,7 +4495,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         cookiejar = getattr(tls_ydl, "cookiejar", None)
         req_cookies = cookiejar if isinstance(cookiejar, http.cookiejar.CookieJar) else None
         try:
-            html = requests.get(page_url, headers=hdrs, cookies=req_cookies, timeout=15).text
+            with self._http_session(req_cookies) as _sess:
+                html = _sess.get(page_url, headers=hdrs, timeout=15).text
         except Exception:
             return []
         html = html.replace("\\/", "/").replace("\\u002F", "/").replace("&amp;", "&")
@@ -4735,12 +4992,34 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             return {"ok": False, "qualities": []}
         cache = self.__dict__.setdefault("_quality_cache", {})
         candidate_urls = [candidate for candidate in (candidates or []) if isinstance(candidate, str)][:10]
-        has_auth = bool(cookies)
+        auth_scope = "anon"
+        if cookies:
+            now_ts = time.time()
+            norm_cookies = []
+            for ck in (cookies if isinstance(cookies, (list, tuple)) else []):
+                if not isinstance(ck, dict) or not ck.get("name"):
+                    continue
+                try:
+                    exp_f = float(ck.get("expirationDate") or 0)
+                except (TypeError, ValueError):
+                    exp_f = 0.0
+                if exp_f > 0 and exp_f <= now_ts:
+                    continue
+                norm_cookies.append((
+                    str(ck.get("domain") or "").lower(),
+                    str(ck.get("path") or "/"),
+                    str(ck.get("name") or ""),
+                    str(ck.get("value") or ""),
+                    bool(ck.get("secure", False)),
+                    bool(ck.get("hostOnly", False)),
+                ))
+            if norm_cookies:
+                norm_cookies.sort()
+                raw_fp = json.dumps(norm_cookies, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+                auth_scope = "auth:" + hashlib.sha256(raw_fp).hexdigest()
         base_key = (url, bool(strict_target), tuple(candidate_urls) if strict_target else ())
-        cache_key = (*base_key, has_auth)
+        cache_key = (*base_key, auth_scope)
         hit = cache.get(cache_key)
-        if not hit and not has_auth:
-            hit = cache.get((*base_key, True))
         if hit and time.time() - hit[0] < 600:
             return hit[1]
 
@@ -4839,11 +5118,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         try:
             h = dict(headers or {})
             h["Range"] = "bytes=0-0"
-            r = requests.get(url, headers=h, cookies=cookies, stream=True, timeout=10, allow_redirects=True)
-            status = r.status_code
-            cr = r.headers.get("Content-Range", "")
-            cl = r.headers.get("Content-Length", "")
-            r.close()
+            h["Accept-Encoding"] = "identity"
+            with self._http_session(cookies) as _sess:
+                r = _sess.get(url, headers=h, stream=True, timeout=10, allow_redirects=True)
+                status = r.status_code
+                cr = r.headers.get("Content-Range", "")
+                cl = r.headers.get("Content-Length", "")
+                r.close()
             match = re.fullmatch(r"bytes 0-0/(\d+)", cr.strip())
             if status == 206 and match and int(match[1]) > 0:
                 return int(match[1]), True
@@ -5034,35 +5315,35 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 req_end = min(seg["localEnd"], req_start + block_size - 1) if is_yt_cdn else seg["localEnd"]
                 hdrs = dict(sp["headers"])
                 hdrs["Range"] = f"bytes={req_start}-{req_end}"
+                hdrs["Accept-Encoding"] = "identity"
                 try:
-                    with requests.get(
-                        sp["url"], headers=hdrs, cookies=cookiejar, stream=True, timeout=20, allow_redirects=True
-                    ) as resp:
-                        content_range = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", resp.headers.get("Content-Range", "").strip())
-                        if resp.status_code != 206 or not content_range or tuple(map(int, content_range.groups())) != (req_start, req_end, sp["size"]):
-                            raise RuntimeError("The server returned the wrong byte range")
-                        before = seg["localCur"]
-                        for chunk in resp.iter_content(chunk_size=65536):
-                            if ctrl["aborted"]:
-                                return
-                            if not chunk:
-                                continue
-                            rem = req_end - seg["localCur"] + 1
-                            if rem <= 0:
-                                break
-                            to_write = min(len(chunk), rem)
-                            with sp["lock"]:
+                    with self._http_session(cookiejar) as _sess:
+                        with _sess.get(sp["url"], headers=hdrs, stream=True, timeout=20, allow_redirects=True) as resp:
+                            content_range = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", resp.headers.get("Content-Range", "").strip())
+                            if resp.status_code != 206 or not content_range or tuple(map(int, content_range.groups())) != (req_start, req_end, sp["size"]):
+                                raise RuntimeError("The server returned the wrong byte range")
+                            before = seg["localCur"]
+                            for chunk in resp.iter_content(chunk_size=65536):
                                 if ctrl["aborted"]:
                                     return
-                                sp["fh"].seek(seg["localCur"])
-                                sp["fh"].write(chunk[:to_write])
-                                seg["localCur"] += to_write
-                                seg["currentByte"] += to_write
-                                seg["downloaded"] += to_write
-                                item["downloadedBytes"] += to_write
-                            self.consume_bandwidth(item, to_write, ctrl)
-                            if seg["localCur"] > req_end:
-                                break
+                                if not chunk:
+                                    continue
+                                rem = req_end - seg["localCur"] + 1
+                                if rem <= 0:
+                                    break
+                                to_write = min(len(chunk), rem)
+                                with sp["lock"]:
+                                    if ctrl["aborted"]:
+                                        return
+                                    sp["fh"].seek(seg["localCur"])
+                                    sp["fh"].write(chunk[:to_write])
+                                    seg["localCur"] += to_write
+                                    seg["currentByte"] += to_write
+                                    seg["downloaded"] += to_write
+                                    item["downloadedBytes"] += to_write
+                                self.consume_bandwidth(item, to_write, ctrl)
+                                if seg["localCur"] > req_end:
+                                    break
                     if seg["localCur"] == before:
                         raise RuntimeError("The server returned an empty video range")
                     retries = 0
@@ -5397,11 +5678,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 or os.path.splitext(fp or "")[1].lower() in CATEGORY_MAP["Music"]
             )
             expect_audio = not is_audio_dl and any(f.get("acodec") not in (None, "none") for f in reqs)
+            item["phase"] = "verifying"
             item["actualDuration"] = self._validate_video_output(
                 fp, item, info.get("duration"), expect_audio, audio_only=is_audio_dl
             )
             if ctrl["aborted"]:
                 return
+            item["phase"] = "saving"
             final_dest = self._available_media_path(base_no_ext + os.path.splitext(fp)[1], item["id"])
             os.makedirs(os.path.dirname(final_dest), exist_ok=True)
             # Publish only after validation, and never overwrite a previous or concurrent download.
@@ -5588,9 +5871,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             files_resolved = False
             def effective_limit() -> int:
                 per_item = int(item.get("speedLimitKbps") or 0)
-                glob = int(self.settings.get("globalSpeedLimitKbps") or 0)
-                active_other = max(1, len(self.controllers))
-                shared_glob = max(1, glob // active_other) if glob > 0 else 0
+                shared_glob, _ = self._global_budget_split()
                 lims = [x for x in (per_item, shared_glob) if x > 0]
                 return min(lims) if lims else 0
 
@@ -5637,14 +5918,19 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 followed = st_obj.get("followedBy")
                 if followed and isinstance(followed, list) and followed[0]:
                     gid = followed[0]
+                    ctrl["aria2_gid"] = gid
                     continue
 
+                ctrl["aria2_gid"] = gid
+                ctrl["aria2_rpc_call"] = rpc_call
                 st = st_obj.get("status", "active")
                 tot_b = int(st_obj.get("totalLength") or 0)
                 dl_b = int(st_obj.get("completedLength") or 0)
                 spd = int(st_obj.get("downloadSpeed") or 0)
                 peers = int(st_obj.get("connections") or 0)
                 seeders = int(st_obj.get("numSeeders") or 0)
+                item["torrentPeers"] = peers
+                item["torrentSeeders"] = seeders
                 bt_info = (st_obj.get("bittorrent") or {}).get("info") or {}
                 bt_name = bt_info.get("name")
                 is_metadata_phase = (not bt_info) and tot_b < 256 * 1024 and src.lower().startswith("magnet:?")
@@ -5727,6 +6013,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         s["info"] = f"Peers: {peers} (Seeders: {seeders})"
 
                 if st == "complete" and not is_metadata_phase:
+                    item["phase"] = "saving"
                     files = st_obj.get("files") or []
                     # Stop the engine so no file handles stay open, then move finished data out of temp
                     if proc and proc.poll() is None:
@@ -5850,9 +6137,11 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             if item.get("totalSize") and actual_size != item["totalSize"]:
                 raise RuntimeError("الملف لم يصل بحجمه الكامل. أعد المحاولة.")
             if item.get("category") == "Video" or item.get("expectedDuration"):
+                item["phase"] = "verifying"
                 item["actualDuration"] = self._validate_video_output(item["tempFilePath"], item)
             if ctrl["aborted"]:
                 return
+            item["phase"] = "saving"
             destination = self._available_media_path(item["filePath"], item["id"])
             shutil.move(item["tempFilePath"], destination)
             item["filePath"] = destination
@@ -5874,6 +6163,26 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         item["status"] = "completed"
         self.save_state()
         self.signals.completed.emit(item["id"])
+
+    def apply_torrent_selection(self, dl_id: str, selection: list) -> bool:
+        """Persists selected torrent file indices and applies live option update if aria2c is active."""
+        with self.lock:
+            item = self.downloads.get(dl_id)
+            if not item or not selection:
+                return False
+            clean_sel = [int(i) for i in selection]
+            item["torrentSelection"] = clean_sel
+            ctrl = self.controllers.get(dl_id)
+        if ctrl and ctrl.get("aria2_rpc_call") and ctrl.get("aria2_gid"):
+            try:
+                ctrl["aria2_rpc_call"](
+                    "aria2.changeOption",
+                    [ctrl["aria2_gid"], {"select-file": ",".join(str(i) for i in clean_sel)}],
+                )
+            except Exception:
+                pass
+        self.save_state()
+        return True
 
     def pause_download(self, dl_id: str):
         # A transfer fed by a browser tab cannot be resumed from here: pausing it cancels it cleanly
@@ -6393,6 +6702,10 @@ class BrowserSetupDialog(QDialog):
         tb_layout.setContentsMargins(16, 12, 16, 12)
         tb_layout.setSpacing(10)
 
+        wiz_icon = QLabel()
+        wiz_icon.setFixedSize(26, 26)
+        wiz_icon.setPixmap(scorpion_emblem_pixmap(26, small=False))
+        tb_layout.addWidget(wiz_icon)
         wiz_title = QLabel(
             "معالج ربط المتصفحات التفاعلي" if self.is_ar else "Interactive Browser Setup Wizard"
         )
@@ -6437,7 +6750,7 @@ class BrowserSetupDialog(QDialog):
         for idx, pill in enumerate(self.step_pills):
             if idx == current_idx:
                 pill.setStyleSheet(
-                    f"background: {p['primary_bg']}; color: #ffffff; font-weight: 700; font-size: 12px; "
+                    f"background: {p['primary_bg']}; color: {p['primary_text']}; font-weight: 700; font-size: 12px; "
                     f"padding: 4px 12px; border-radius: 12px;"
                 )
             elif idx < current_idx:
@@ -7358,7 +7671,7 @@ class UpdateDialog(QDialog):
 
         self.btn_update_now = QPushButton(self.T("تحديث البرنامج الآن", "Update Now"))
         self.btn_update_now.setObjectName("PrimaryBtn")
-        self.btn_update_now.setIcon(glyph_icon(ICONS["download"], "#ffffff"))
+        self.btn_update_now.setIcon(glyph_icon(ICONS["download"], c["primary_text"]))
         self.btn_update_now.setMinimumWidth(165)
         self.btn_update_now.clicked.connect(self._start_update_now)
 
@@ -7590,6 +7903,7 @@ class TorrentFilesDialog(QDialog):
         self.is_ar = lang == "ar"
         T = (lambda ar, en: ar) if self.is_ar else (lambda ar, en: en)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowIcon(parent.windowIcon() if parent is not None and not parent.windowIcon().isNull() else scorpion_emblem_icon())
         self.setWindowTitle(T("اختيار ملفات التورنت", "Select torrent files") + f" — {item.get('filename', '')}")
         self.resize(680, 480)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if self.is_ar else Qt.LayoutDirection.LeftToRight)
@@ -7601,6 +7915,7 @@ class TorrentFilesDialog(QDialog):
         lay.addWidget(self.lbl_total)
 
         self.tree = QTreeWidget()
+        self.tree.setObjectName("DialogTree")
         self.tree.setColumnCount(2)
         self.tree.setHeaderLabels([T("الملف", "File"), T("الحجم", "Size")])
         self.tree.setRootIsDecorated(False)
@@ -7828,6 +8143,7 @@ def ensure_app_shortcuts(settings: dict):
     if not os.path.exists(icon_path):
         icon_path = target_exe
 
+    force_refresh = settings.get("shortcutIconVer") != APP_VERSION
     start_lnk = os.path.join(
         os.environ.get("APPDATA", ""),
         "Microsoft",
@@ -7836,18 +8152,32 @@ def ensure_app_shortcuts(settings: dict):
         "Programs",
         "Scorpion Download Manager.lnk",
     )
-    if not os.path.exists(start_lnk):
-        create_shortcut_native(start_lnk, target_exe, work_dir, icon_path)
+    changed = False
+    if force_refresh or not os.path.exists(start_lnk):
+        if create_shortcut_native(start_lnk, target_exe, work_dir, icon_path):
+            changed = True
 
     desktop_lnk = os.path.join(os.path.expanduser("~"), "Desktop", "Scorpion Download Manager.lnk")
-    if settings.get("desktopShortcut", True) and not os.path.exists(desktop_lnk):
-        create_shortcut_native(desktop_lnk, target_exe, work_dir, icon_path)
+    if settings.get("desktopShortcut", True) and (force_refresh or not os.path.exists(desktop_lnk)):
+        if create_shortcut_native(desktop_lnk, target_exe, work_dir, icon_path):
+            changed = True
+
+    if force_refresh:
+        settings["shortcutIconVer"] = APP_VERSION
+    if changed:
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)
+        except Exception:
+            pass
 
 
 def apply_shell_integration(settings: dict):
     set_start_with_windows(bool(settings.get("startWithWindows", True)))
     set_torrent_association(bool(settings.get("associateTorrents", True)))
     ensure_app_shortcuts(settings)
+    register_native_messaging_hosts()
 
 
 def item_mode(it: dict) -> str:
@@ -7859,9 +8189,10 @@ def item_mode(it: dict) -> str:
     if st in ("paused", "queued", "scheduled"):
         return "paused"
     if st == "downloading":
-        if it.get("phase") == "merging":
-            return "merging"
-        if it.get("phase") in ("connecting", "selecting") or not it.get("downloadedBytes"):
+        ph = it.get("phase")
+        if ph in ("merging", "verifying", "saving"):
+            return ph
+        if ph in ("connecting", "selecting") or not it.get("downloadedBytes"):
             return "connecting"
     return "active"
 
@@ -7875,6 +8206,10 @@ def item_status_text(it: dict, is_ar: bool) -> str:
         return "مجدول" if is_ar else "Scheduled"
     if m == "merging":
         return "جاري الدمج..." if is_ar else "Merging..."
+    if m == "verifying":
+        return "جاري التحقق..." if is_ar else "Verifying file..."
+    if m == "saving":
+        return "جاري الحفظ..." if is_ar else "Saving file..."
     if it.get("phase") == "selecting":
         return "اختيار الملفات" if is_ar else "Select files"
     if m == "connecting":
@@ -7894,11 +8229,11 @@ def item_status_text(it: dict, is_ar: bool) -> str:
 
 
 class DownloadCard(QWidget):
-    """Small card in the screen corner for one download: live progress, then Open / Show in folder."""
+    """Compact corner progress card matching the obsidian reference UI without stealing focus."""
 
     action = pyqtSignal(str, str)  # download id, action
 
-    W, H = 448, 176
+    W, H = 400, 114
 
     def __init__(self, dl_id: str, is_ar: bool):
         super().__init__(
@@ -7921,62 +8256,77 @@ class DownloadCard(QWidget):
         c = pal()
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setContentsMargins(6, 6, 6, 6)
         self.body = QFrame()
         self.body.setObjectName("ToastCard")
         self.body.setStyleSheet(
-            f"#ToastCard {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 12px; }}"
+            f"#ToastCard {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 11px; }}"
             f"#ToastCard QLabel {{ background: transparent; }}"
         )
         outer.addWidget(self.body)
 
         lay = QVBoxLayout(self.body)
-        lay.setContentsMargins(14, 11, 14, 11)
-        lay.setSpacing(6)
+        lay.setContentsMargins(14, 10, 12, 10)
+        lay.setSpacing(5)
+
+        # Row 1: Stage heading + Dismiss button (never cancels the download)
         top = QHBoxLayout()
-        top.setSpacing(8)
+        top.setSpacing(6)
         self.icon = QLabel()
-        self.icon.setFixedSize(22, 22)
+        self.icon.setFixedSize(16, 16)
         top.addWidget(self.icon)
-        self.name = QLabel()
-        self.name.setAlignment(self._lead_align | Qt.AlignmentFlag.AlignVCenter)
-        self.name.setStyleSheet("font-weight: 600;")
-        top.addWidget(self.name, 1)
+        self.lbl_stage = QLabel(self.T("جاري التحميل:", "Downloading:"))
+        self.lbl_stage.setStyleSheet(f"color: {c['muted']}; font-size: 11.5px; font-weight: 500;")
+        self.lbl_stage.setAlignment(self._lead_align | Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(self.lbl_stage, 1)
+
         self.btn_close = QPushButton()
         self.btn_close.setObjectName("ToolBtn")
-        self.btn_close.setFixedSize(24, 24)
-        self.btn_close.setIcon(glyph_icon(ICONS["close"], c["muted"], 12))
-        self.btn_close.setToolTip(self.T("إغلاق", "Close"))
+        self.btn_close.setFixedSize(22, 22)
+        self.btn_close.setIcon(outline_icon("close", c["muted"], 11, 2.0))
+        self.btn_close.setAccessibleName(self.T("إغلاق البطاقة", "Dismiss card"))
+        self.btn_close.setToolTip(self.T("إخفاء البطاقة (يستمر التحميل)", "Dismiss card (download continues)"))
         self.btn_close.clicked.connect(lambda: self.action.emit(self.dl_id, "close"))
         top.addWidget(self.btn_close)
         lay.addLayout(top)
 
+        # Row 2: Filename (clickable for full details) + optional error line
+        self.name = QLabel()
+        self.name.setAlignment(self._lead_align | Qt.AlignmentFlag.AlignVCenter)
+        self.name.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {c['text']};")
+        lay.addWidget(self.name)
+
         self.status = QLabel()
         self.status.setObjectName("Muted")
-        self.status.setMinimumHeight(20)
+        self.status.setVisible(False)
         self.status.setAlignment(self._lead_align | Qt.AlignmentFlag.AlignVCenter)
         lay.addWidget(self.status)
-        self.bar = SlimProgressBar()
-        self.bar.setFixedHeight(7)
-        lay.addWidget(self.bar)
 
-        btns = QHBoxLayout()
-        btns.setSpacing(6)
+        # Row 3: Glowing progress bar + percentage + contextual action button(s)
+        prog_row = QHBoxLayout()
+        prog_row.setSpacing(8)
+        self.bar = SlimProgressBar()
+        self.bar.setFixedHeight(6)
+        prog_row.addWidget(self.bar, 1)
+
+        self.lbl_pct = QLabel("0%")
+        self.lbl_pct.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {c['text_sec']};")
+        self.lbl_pct.setMinimumWidth(34)
+        self.lbl_pct.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        prog_row.addWidget(self.lbl_pct)
+
         self.btn_a = QPushButton()
         self.btn_b = QPushButton()
         self.btn_c = QPushButton()
         for b in (self.btn_a, self.btn_b, self.btn_c):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setFixedHeight(30)
-            b.setStyleSheet("padding: 2px 12px;")
-        btns.addWidget(self.btn_a)
-        btns.addWidget(self.btn_b)
-        btns.addStretch()
-        btns.addWidget(self.btn_c)
+            b.setFixedHeight(26)
+            b.setStyleSheet("padding: 2px 11px; font-size: 11.5px; border-radius: 7px;")
+            prog_row.addWidget(b)
         self.btn_a.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_a.property("act")))
         self.btn_b.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_b.property("act")))
         self.btn_c.clicked.connect(lambda: self.action.emit(self.dl_id, self.btn_c.property("act")))
-        lay.addLayout(btns)
+        lay.addLayout(prog_row)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self._anim_timer = QTimer(self)
@@ -7986,33 +8336,54 @@ class DownloadCard(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.body.geometry())
-        for expand, dy, alpha in ((6, 3, 4), (4, 2, 8), (2, 1, 14), (1, 1, 20)):
+        for expand, dy, alpha in ((5, 3, 18), (3, 2, 28), (1, 1, 40)):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(0, 0, 0, alpha))
-            p.drawRoundedRect(r.adjusted(-expand, -expand + dy, expand, expand + dy), 14, 14)
+            p.drawRoundedRect(r.adjusted(-expand, -expand + dy, expand, expand + dy), 13, 13)
 
     def _tick_anim(self):
-        if self.state in ("connecting", "active", "merging"):
+        if prefers_reduced_motion():
+            self._anim_timer.stop()
+            return
+        if self.state in ("connecting", "active", "merging", "verifying", "saving"):
             self.bar.tick()
         else:
             self._anim_timer.stop()
 
-    def _set_buttons(self, a: tuple, b: tuple, c: tuple | None = None, primary_a: bool = False, danger_c: bool = True):
+    def _set_buttons(self, a: tuple, b: tuple, c: tuple | None = None, primary_a: bool = False, danger_c: bool = False):
+        pal_c = pal()
         for btn, spec in ((self.btn_a, a), (self.btn_b, b), (self.btn_c, c)):
             if spec is None:
                 btn.setVisible(False)
                 btn.setText("")
+                btn.setIcon(QIcon())
                 btn.setProperty("act", "")
             else:
                 text, act = spec
                 btn.setVisible(True)
-                btn.setText(text)
+                if act == "cancel" and not text:
+                    btn.setFixedWidth(26)
+                    btn.setText("")
+                    btn.setIcon(outline_icon("stop", "#FF6B2B", 11, 2.0))
+                    btn.setAccessibleName(self.T("إلغاء التحميل", "Cancel download"))
+                    btn.setToolTip(btn.accessibleName())
+                else:
+                    btn.setMinimumWidth(0)
+                    btn.setMaximumWidth(160)
+                    btn.setText(text)
+                    btn.setIcon(QIcon())
+                    btn.setAccessibleName(text)
+                    btn.setToolTip("")
                 btn.setProperty("act", act)
         self.btn_a.setObjectName("PrimaryBtn" if primary_a else "")
         self.btn_c.setObjectName("DangerBtn" if (c and danger_c) else "")
         for btn in (self.btn_a, self.btn_c):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
+        if primary_a:
+            self.btn_a.setStyleSheet(f"background: {pal_c['primary_bg']}; color: {pal_c['primary_text']}; border: 1px solid {pal_c['primary_bg']}; padding: 2px 11px; font-size: 11.5px; border-radius: 7px; font-weight: 700;")
+        else:
+            self.btn_a.setStyleSheet("padding: 2px 11px; font-size: 11.5px; border-radius: 7px;")
 
     def update_from(self, item: dict):
         T = self.T
@@ -8023,40 +8394,44 @@ class DownloadCard(QWidget):
         if getattr(self, "_full_name", None) != name:
             self._full_name = name
             self._elide_name()
-            self.icon.setPixmap(file_type_icon(name).pixmap(22, 22))
+            self.icon.setPixmap(scorpion_emblem_pixmap(16, small=True))
+
+        # Stage title + border emphasis
+        stage_labels = {
+            "connecting": T("جاري الاتصال:", "Connecting:"),
+            "active": T("جاري التحميل:", "Downloading:"),
+            "merging": T("جاري الدمج:", "Finalizing (Merging):"),
+            "verifying": T("جاري التحقق:", "Finalizing (Verifying):"),
+            "saving": T("جاري الحفظ:", "Finalizing (Saving):"),
+            "paused": T("متوقف مؤقتاً:", "Paused:"),
+            "done": T("اكتمل التحميل:", "Completed:"),
+            "error": T("تعذر التحميل:", "Download Failed:"),
+        }
+        stage_txt = stage_labels.get(mode, T("جاري التحميل:", "Downloading:"))
+        spd = int(item.get("speed") or 0)
+        if mode == "active" and spd > 0:
+            stage_txt = f"{stage_txt}  {L(_fmt_speed_card(spd))}"
+        self.lbl_stage.setText(stage_txt)
+
         if mode == "error":
             reason = localize_error_msg(item.get("errorMsg") or T("سبب غير معروف", "Unknown reason"), self.is_ar)
-            # An English reason inside an Arabic line keeps its own direction
             if self.is_ar and not re.search(r"[؀-ۿ]", reason):
-                reason = "⁦" + reason + "⁩"  # LRI ... PDI: isolated left-to-right run
-            text = T("فشل: ", "Failed: ") + reason
+                reason = "⁦" + reason + "⁩"
+            self.status.setVisible(True)
             self.status.setWordWrap(True)
-            self.status.setMinimumHeight(38)
-            self.status.setAlignment(self._lead_align | Qt.AlignmentFlag.AlignTop)
-            self.status.setToolTip(text)
+            self.status.setStyleSheet(f"color: {c['danger']}; font-size: 11.5px;")
+            self.status.setToolTip(reason)
             fm = self.status.fontMetrics()
-            max_w = max(240, (self.status.width() or (self.W - 56)) * 2 - 24)
-            self.status.setText(fm.elidedText(text, Qt.TextElideMode.ElideRight, max_w))
+            self.status.setText(fm.elidedText(reason, Qt.TextElideMode.ElideRight, max(240, self.W - 50) * 2))
+            if self.height() != 136:
+                self.setFixedSize(self.W, 136)
         else:
-            self.status.setWordWrap(False)
-            self.status.setMinimumHeight(20)
-            self.status.setAlignment(self._lead_align | Qt.AlignmentFlag.AlignVCenter)
-            sep_dot = "  \u200f•\u200f  " if self.is_ar else "  •  "
-            if mode == "done":
-                size = item.get("totalSize") or item.get("downloadedBytes") or 0
-                text = T("✓ اكتمل التحميل", "✓ Download complete") + (f"{sep_dot}{L(format_bytes(size))}" if size else "")
-            elif mode == "active":
-                parts = [L(f"{pct:.0f}%"), L(format_speed(item.get("speed", 0)))]
-                if item.get("timeLeft"):
-                    parts.append(T("متبقي ", "") + L(format_eta(item.get("timeLeft"))) + T("", " left"))
-                text = sep_dot.join(parts)
-            elif mode == "paused" and pct > 0:
-                text = f"{item_status_text(item, self.is_ar)}{sep_dot}{L(f'{pct:.0f}%')}"
-            else:
-                text = item_status_text(item, self.is_ar)
-            _set_elided(self.status, text, Qt.TextElideMode.ElideRight)
-        color = {"done": c["success"], "error": c["danger"]}.get(mode, c["muted"])
-        self.status.setStyleSheet(f"color: {color};")
+            if self.status.isVisible():
+                self.status.setVisible(False)
+            if self.height() != self.H:
+                self.setFixedSize(self.W, self.H)
+
+        self.lbl_pct.setText(L("100%") if mode == "done" else L(f"{pct:.0f}%"))
         self.bar.set_state(pct, mode)
         self.bar.tick()
 
@@ -8065,50 +8440,47 @@ class DownloadCard(QWidget):
         )
         if mode != self.state:
             self.state = mode
-            if self.isVisible() and mode in ("connecting", "active", "merging"):
+            self.body.setStyleSheet(
+                f"#ToastCard {{ background: {c['surface']}; "
+                f"border: 1px solid {c['border_amber'] if mode in ('active', 'merging', 'verifying', 'saving') else (c['danger'] if mode == 'error' else c['border'])}; "
+                f"border-radius: 11px; }}"
+                f"#ToastCard QLabel {{ background: transparent; }}"
+            )
+            if self.isVisible() and mode in ("connecting", "active", "merging", "verifying", "saving") and not prefers_reduced_motion():
                 if not self._anim_timer.isActive():
                     self._anim_timer.start(40)
             else:
                 self._anim_timer.stop()
             browser_owned = item.get("browserTransfer")
             if is_drm_err or (browser_owned and mode == "error"):
-                # DRM or browser-owned failure cannot be restarted directly
-                self._set_buttons(
-                    (T("التفاصيل", "Details"), "details"),
-                    None,
-                    (T("إغلاق", "Close"), "close"),
-                    primary_a=False,
-                    danger_c=False,
-                )
+                self._set_buttons((T("التفاصيل", "Details"), "details"), None, None)
                 self.dismiss_at = time.time() + 15
             elif browser_owned and mode != "done":
-                self._set_buttons((T("التفاصيل", "Details"), "details"), None, (T("إلغاء", "Cancel"), "cancel"))
+                self._set_buttons((T("التفاصيل", "Details"), "details"), None, ("", "cancel"))
                 self.dismiss_at = None
             elif mode == "done":
                 self._set_buttons(
                     (T("تشغيل", "Open"), "open"),
-                    (T("فتح المجلد", "Show in folder"), "folder"),
-                    (T("إغلاق", "Close"), "close"),
+                    (T("المجلد", "Folder"), "folder"),
+                    None,
                     primary_a=True,
-                    danger_c=False,
                 )
                 self.dismiss_at = time.time() + 6
             elif mode == "error":
-                self._set_buttons((T("إعادة المحاولة", "Retry"), "retry"), (T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"), True)
+                self._set_buttons((T("إعادة", "Retry"), "retry"), None, ("", "cancel"), primary_a=True)
                 self.dismiss_at = time.time() + 15
             elif mode == "paused":
-                self._set_buttons((T("استئناف", "Resume"), "resume"), (T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"), True)
+                self._set_buttons((T("استئناف", "Resume"), "resume"), None, ("", "cancel"), primary_a=True)
                 self.dismiss_at = None
             else:
-                self._set_buttons((T("إيقاف مؤقت", "Pause"), "pause"), (T("التفاصيل", "Details"), "details"), (T("إلغاء", "Cancel"), "cancel"))
+                self._set_buttons((T("إيقاف مؤقت", "Pause"), "pause"), None, ("", "cancel"))
                 self.dismiss_at = None
-        if mode in ("connecting", "active", "merging"):
-            self.btn_a.setEnabled(mode != "merging")
+        if mode in ("connecting", "active", "merging", "verifying", "saving"):
+            self.btn_a.setEnabled(mode not in ("merging", "verifying", "saving"))
         else:
             self.btn_a.setEnabled(True)
 
     def _elide_name(self):
-        # Shortened to the label's width, which is only known once the card is laid out
         if self.name.width() > 20:
             _elide_filename(self.name, self._full_name)
         else:
@@ -8117,8 +8489,9 @@ class DownloadCard(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         QTimer.singleShot(0, self._elide_name)
-        if self.state in ("connecting", "active", "merging") and not self._anim_timer.isActive():
-            self._anim_timer.start(40)
+        if self.state in ("connecting", "active", "merging", "verifying", "saving") and not prefers_reduced_motion():
+            if not self._anim_timer.isActive():
+                self._anim_timer.start(40)
 
     def hideEvent(self, event):
         super().hideEvent(event)
@@ -8143,15 +8516,19 @@ class DownloadCard(QWidget):
         super().mouseReleaseEvent(event)
 
 
+def _fmt_speed_card(bps: int) -> str:
+    return format_speed(bps)
+
+
 class DownloadCardManager(QObject):
-    """Stacks download cards above the tray (newest at the bottom, at most 3) with slide and fade."""
+    """Stacks download cards in the bottom-right screen corner without stealing focus."""
 
     MAX = 3
 
     def __init__(self, window):
         super().__init__(window)
         self.win = window
-        self.cards = {}  # download id -> card, in creation order
+        self.cards = {}
         self._anims = []
 
     def show_for(self, dl_id: str):
@@ -8172,8 +8549,13 @@ class DownloadCardManager(QObject):
         card = self.cards.pop(dl_id, None)
         if card is None:
             return
+        if prefers_reduced_motion():
+            card.close()
+            card.deleteLater()
+            self._layout()
+            return
         anim = QPropertyAnimation(card, b"windowOpacity", self)
-        anim.setDuration(180)
+        anim.setDuration(160)
         anim.setStartValue(card.windowOpacity())
         anim.setEndValue(0.0)
         anim.finished.connect(card.close)
@@ -8204,14 +8586,22 @@ class DownloadCardManager(QObject):
         visible = list(self.cards.values())[-self.MAX:]
         for card in list(self.cards.values())[: -self.MAX] if len(self.cards) > self.MAX else []:
             card.hide()
-        for i, card in enumerate(reversed(visible)):
-            target = QPoint(avail.right() - card.W - 6, avail.bottom() - (i + 1) * (card.H - 6) - 2)
+        y_cursor = avail.bottom() - 8
+        for card in reversed(visible):
+            ch = card.height() or card.H
+            target = QPoint(avail.right() - card.W - 8, y_cursor - ch)
+            y_cursor = target.y() - 6
+            if prefers_reduced_motion():
+                card.setWindowOpacity(1.0)
+                card.move(target)
+                card.show()
+                continue
             if card is new:
                 card.setWindowOpacity(0.0)
-                card.move(target + QPoint(0, 18))
+                card.move(target + QPoint(0, 14))
                 card.show()
                 fade = QPropertyAnimation(card, b"windowOpacity", self)
-                fade.setDuration(200)
+                fade.setDuration(180)
                 fade.setStartValue(0.0)
                 fade.setEndValue(1.0)
                 self._keep(fade)
@@ -8220,7 +8610,7 @@ class DownloadCardManager(QObject):
                 card.move(target)
                 card.show()
             slide = QPropertyAnimation(card, b"pos", self)
-            slide.setDuration(240)
+            slide.setDuration(220)
             slide.setStartValue(card.pos())
             slide.setEndValue(target)
             slide.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -8338,27 +8728,43 @@ class ScorpionMainWindow(QMainWindow):
         super().__init__()
         self.app = app
         self.engine = ScorpionNativeEngine()
-        self.theme = self.engine.settings.get("theme", "light")
+        self.theme = self.engine.settings.get("theme", "dark")
         self.lang = self.engine.settings.get("lang", "ar")
         self.filter_state = "all"
         self.filter_cat = "ALL"
         self.open_progress_dialogs = {}
+        self._expanded_torrents: set[str] = set()
+        self._expanded_panels: dict[str, TorrentInlinePanel] = {}
+        self._free_space_cache = (0.0, 0)
         self.cards = DownloadCardManager(self)
         self.taskbar = TaskbarProgress()
         self._seen_status = {}
         self._tray_badge_count = None
+        self._edge_cursor_active = False
 
-        icon_path = os.path.join(RESOURCE_ROOT, "build", "icon.ico")
-        self.app_icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowMinMaxButtonsHint
+            | Qt.WindowType.WindowSystemMenuHint
+        )
+        self.setMinimumSize(640, 480)
+        self.setMouseTracking(True)
+
+        self.app_icon = scorpion_emblem_icon()
+        if self.app_icon.isNull():
+            icon_path = os.path.join(RESOURCE_ROOT, "build", "icon.ico")
+            self.app_icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
         if not self.app_icon.isNull():
             self.setWindowIcon(self.app_icon)
 
         avail = QApplication.primaryScreen().availableGeometry()
-        self.resize(min(1180, avail.width() - 40), min(720, avail.height() - 40))
+        self.resize(min(980, avail.width() - 40), min(680, avail.height() - 40))
         self.setup_ui()
         self.setup_tray()
         self.apply_theme_and_lang()
         self._restore_window_geometry()
+        apply_win32_window_effects(self, self.theme == "dark")
 
         # Clipboard monitoring for direct links
         self.clipboard = QApplication.clipboard()
@@ -8392,13 +8798,87 @@ class ScorpionMainWindow(QMainWindow):
             QTimer.singleShot(3000, self._background_check_updates)
         self.engine._ui_platform = QApplication.platformName()
         self.engine._ui_ready = True
+        self.app.installEventFilter(self)
+
+    def _hit_resize_edges(self, global_pos) -> Qt.Edge:
+        if not self.isVisible() or self.isMaximized() or self.isMinimized():
+            return Qt.Edge(0)
+        lp = self.mapFromGlobal(global_pos)
+        x, y, w, h = lp.x(), lp.y(), self.width(), self.height()
+        if x < 0 or y < 0 or x >= w or y >= h:
+            return Qt.Edge(0)
+        bw = 6
+        edges = Qt.Edge(0)
+        if x < bw:
+            edges |= Qt.Edge.LeftEdge
+        elif x >= w - bw:
+            edges |= Qt.Edge.RightEdge
+        if y < bw:
+            edges |= Qt.Edge.TopEdge
+        elif y >= h - bw:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    def _set_edge_cursor(self, shape):
+        if shape is None:
+            if getattr(self, "_edge_cursor_active", False):
+                QApplication.restoreOverrideCursor()
+                self._edge_cursor_active = False
+            return
+        if getattr(self, "_edge_cursor_active", False):
+            QApplication.changeOverrideCursor(shape)
+        else:
+            QApplication.setOverrideCursor(shape)
+            self._edge_cursor_active = True
+
+    def eventFilter(self, obj, event):
+        etype = event.type()
+        if etype not in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress, QEvent.Type.Leave):
+            return False
+        try:
+            if not isinstance(obj, QWidget) or obj.window() is not self:
+                return False
+            if etype == QEvent.Type.Leave:
+                if obj is self:
+                    self._set_edge_cursor(None)
+                return False
+            if self.isMaximized() or not self.isVisible():
+                self._set_edge_cursor(None)
+                return False
+            edges = self._hit_resize_edges(event.globalPosition().toPoint())
+            if etype == QEvent.Type.MouseMove:
+                if event.buttons() != Qt.MouseButton.NoButton or not edges:
+                    self._set_edge_cursor(None)
+                elif (edges == (Qt.Edge.LeftEdge | Qt.Edge.TopEdge)) or (edges == (Qt.Edge.RightEdge | Qt.Edge.BottomEdge)):
+                    self._set_edge_cursor(Qt.CursorShape.SizeFDiagCursor)
+                elif (edges == (Qt.Edge.RightEdge | Qt.Edge.TopEdge)) or (edges == (Qt.Edge.LeftEdge | Qt.Edge.BottomEdge)):
+                    self._set_edge_cursor(Qt.CursorShape.SizeBDiagCursor)
+                elif edges & (Qt.Edge.LeftEdge | Qt.Edge.RightEdge):
+                    self._set_edge_cursor(Qt.CursorShape.SizeHorCursor)
+                else:
+                    self._set_edge_cursor(Qt.CursorShape.SizeVerCursor)
+                return False
+            if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton and edges:
+                wh = self.windowHandle()
+                if wh is not None:
+                    self._set_edge_cursor(None)
+                    if wh.startSystemResize(edges):
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def changeEvent(self, event):
+        if event.type() == event.Type.WindowStateChange and hasattr(self, "title_bar"):
+            self.title_bar.refresh_max_icon()
+        super().changeEvent(event)
 
     def setup_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self.tray_icon = None
             return
         self.tray_icon = QSystemTrayIcon(self.app_icon, self)
-        self.tray_icon.setToolTip(f"Scorpion Download Manager v{APP_VERSION}")
+        self.tray_icon.setToolTip(f"Scorpion IDM v{APP_VERSION}")
         self._rebuild_tray_menu()
         self.tray_icon.activated.connect(
             lambda reason: self.bring_to_front()
@@ -8413,9 +8893,9 @@ class ScorpionMainWindow(QMainWindow):
         is_ar = self.lang == "ar"
         tray_menu = QMenu(self)
         for text, slot in [
-            ("إظهار البرنامج" if is_ar else "Show Scorpion", self.bring_to_front),
+            ("إظهار البرنامج" if is_ar else "Show Scorpion IDM", self.bring_to_front),
             ("إضافة رابط" if is_ar else "Add URL", lambda: self.open_add_dialog("", False)),
-            ("ربط المتصفحات" if is_ar else "Browsers", self.open_browser_setup_dialog),
+            ("ربط المتصفحات" if is_ar else "Browser Integration", self.open_browser_setup_dialog),
             ("التحديثات وسجل الإضافات" if is_ar else "Updates & What's New", self.open_update_dialog),
             ("الإعدادات" if is_ar else "Settings", self.open_settings_dialog),
             (None, None),
@@ -8434,7 +8914,7 @@ class ScorpionMainWindow(QMainWindow):
         self.setWindowState((self.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
         self.raise_()
         self.activateWindow()
-        if os.name == "nt":
+        if os.name == "nt" and QApplication.platformName() == "windows":
             try:
                 import ctypes
 
@@ -8450,94 +8930,154 @@ class ScorpionMainWindow(QMainWindow):
 
     def setup_ui(self):
         central = QWidget()
+        central.setObjectName("MainShell")
         self.setCentralWidget(central)
         root_layout = QVBoxLayout(central)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # 1. Toolbar: one primary action, the rest are calm flat tool buttons
+        # 1. Custom Reference Title Bar + Menu Bar Row
+        self.title_bar = ScorpionTitleBar(self)
+        root_layout.addWidget(self.title_bar)
+
+        menu_row = QFrame()
+        menu_row.setObjectName("MenuRowBar")
+        menu_row.setFixedHeight(BRAND_TOKENS["menubar_h"])
+        mr_lay = QHBoxLayout(menu_row)
+        mr_lay.setContentsMargins(6, 0, 12, 0)
+        mr_lay.setSpacing(0)
+        self.menu_bar = QMenuBar()
+        self.menu_bar.setObjectName("TopMenuBar")
+        self.menu_bar.setNativeMenuBar(False)
+        mr_lay.addWidget(self.menu_bar)
+        mr_lay.addStretch(1)
+        root_layout.addWidget(menu_row)
+
+        # 2. Body: Left Navigation Sidebar + Main Download Cards Column
+        body = QWidget()
+        bl = QHBoxLayout(body)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(0)
+
+        self.sidebar_frame = QFrame()
+        self.sidebar_frame.setObjectName("SidebarPanel")
+        self.sidebar_frame.setFixedWidth(BRAND_TOKENS["sidebar_w_full"])
+        sb_lay = QVBoxLayout(self.sidebar_frame)
+        sb_lay.setContentsMargins(14, 14, 14, 12)
+        sb_lay.setSpacing(10)
+
+        self.txt_search = QLineEdit()
+        self.txt_search.setObjectName("SidebarSearch")
+        self.txt_search.setClearButtonEnabled(True)
+        self.txt_search.setMinimumHeight(34)
+        self._search_act = self.txt_search.addAction(
+            outline_icon("search", pal()["muted"], 14),
+            QLineEdit.ActionPosition.TrailingPosition,
+        )
+        self.txt_search.textChanged.connect(lambda _t: self.refresh_all())
+        sb_lay.addWidget(self.txt_search)
+
+        sb_lay.addSpacing(2)
+        self.lbl_categories = QLabel("Categories")
+        self.lbl_categories.setObjectName("CategoriesHdr")
+        sb_lay.addWidget(self.lbl_categories)
+
+        self.tree = QTreeWidget()
+        self.tree.setObjectName("SidebarTree")
+        self.tree.setColumnCount(2)
+        self.tree.setHeaderHidden(True)
+        self.tree.setRootIsDecorated(False)
+        self.tree.setIndentation(0)
+        self.tree.setMouseTracking(True)
+        self.tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.tree.setItemDelegate(SidebarDelegate(self.tree))
+        self.tree.header().setStretchLastSection(False)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self.tree.header().resizeSection(1, 32)
+        self.tree.itemClicked.connect(self.on_tree_clicked)
+        self.tree.currentItemChanged.connect(lambda cur, _prev: self.on_tree_clicked(cur))
+        sb_lay.addWidget(self.tree, 1)
+
+        self.btn_ext_status = QPushButton()
+        self.btn_ext_status.setObjectName("ExtStatusPill")
+        self.btn_ext_status.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_ext_status.setIconSize(QSize(16, 16))
+        self.btn_ext_status.clicked.connect(self.open_browser_setup_dialog)
+        sb_lay.addWidget(self.btn_ext_status)
+        bl.addWidget(self.sidebar_frame)
+
+        # Right content column
+        content_col = QWidget()
+        cl = QVBoxLayout(content_col)
+        cl.setContentsMargins(18, 14, 18, 10)
+        cl.setSpacing(12)
+
         toolbar = QFrame()
         toolbar.setObjectName("ToolbarFrame")
-        # The toolbar never sets the window's minimum width: _apply_layout_mode fits it to the width instead
         toolbar.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         toolbar.setMinimumWidth(0)
         self._toolbar_frame = toolbar
         tb = QHBoxLayout(toolbar)
-        tb.setContentsMargins(14, 10, 14, 10)
-        tb.setSpacing(4)
+        tb.setContentsMargins(0, 0, 0, 2)
+        tb.setSpacing(8)
 
         self._toolbar_buttons = []
 
-        def tool(name, slot, primary=False):
+        def tool(name, slot, primary=False, add_to_bar=True):
             b = QPushButton()
-            self._toolbar_buttons.append(b)
-            b.setObjectName("PrimaryBtn" if primary else "ToolBtn")
+            b.setObjectName("PrimaryBtn" if primary else "ToolbarSecondaryBtn")
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setIconSize(QSize(16, 16))
+            b.setIconSize(QSize(15, 15))
+            b.setFixedHeight(BRAND_TOKENS["control_h"])
             b.clicked.connect(slot)
             setattr(self, name, b)
-            tb.addWidget(b)
+            if add_to_bar:
+                self._toolbar_buttons.append(b)
+                tb.addWidget(b)
+            else:
+                b.setParent(self)
+                b.hide()
             return b
 
-        tool("btn_add", lambda: self.open_add_dialog("", False), primary=True)
-        tb.addSpacing(6)
-        tool("btn_video", lambda: self.open_add_dialog("", True))
-        tool("btn_torrent", lambda: self.open_add_dialog("", False, True))
-        sep = _vsep()
-        sep.setFixedHeight(22)
-        tb.addWidget(sep)
-        tool("btn_resume", self.resume_selected)
-        tool("btn_pause", self.pause_selected)
-        tool("btn_stop_all", self.engine.pause_all)
-        sep2 = _vsep()
-        sep2.setFixedHeight(22)
-        tb.addWidget(sep2)
-        tool("btn_delete", self.delete_selected)
-        tool("btn_clear_done", self.clear_completed)
-        tb.addSpacing(10)
-        self.txt_search = QLineEdit()
-        self.txt_search.setClearButtonEnabled(True)
-        self._search_act = self.txt_search.addAction(
-            glyph_icon(ICONS["search"], pal()["muted"], 14),
-            QLineEdit.ActionPosition.LeadingPosition,
-        )
-        # Shrinks on small screens instead of forcing a wider window
-        self.txt_search.setMinimumWidth(130)
-        self.txt_search.setMaximumWidth(240)
-        self.txt_search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.txt_search.textChanged.connect(lambda _t: self.refresh_all())
-        tb.addWidget(self.txt_search)
-        tb.addStretch()
-        tool("btn_browser_setup", self.open_browser_setup_dialog)
-        tool("btn_updates", self.open_update_dialog)
-        tool("btn_settings", self.open_settings_dialog)
-        tool("btn_theme", self.toggle_theme)
-        tool("btn_lang", self.toggle_lang)
-        root_layout.addWidget(toolbar)
+        tool("btn_add", lambda: self.open_add_dialog("", False), primary=True, add_to_bar=True)
+        tool("btn_start_all", self.start_all_downloads, primary=False, add_to_bar=True)
+        tool("btn_stop_all", self._pause_all_clicked, primary=False, add_to_bar=True)
+        tool("btn_scheduler", self.open_queue_scheduler_dialog, primary=False, add_to_bar=True)
+        tool("btn_settings", self.open_settings_dialog, primary=False, add_to_bar=True)
+        tb.addStretch(1)
 
-        # 2. Body: sidebar + downloads table
-        body = QWidget()
-        bl = QHBoxLayout(body)
-        bl.setContentsMargins(14, 14, 14, 14)
-        bl.setSpacing(14)
+        tool("btn_video", lambda: self.open_add_dialog("", True), add_to_bar=False)
+        tool("btn_torrent", lambda: self.open_add_dialog("", False, True), add_to_bar=False)
+        tool("btn_resume", self.resume_selected, add_to_bar=False)
+        tool("btn_pause", self.pause_selected, add_to_bar=False)
+        tool("btn_delete", self.delete_selected, add_to_bar=False)
+        tool("btn_clear_done", self.clear_completed, add_to_bar=False)
+        tool("btn_browser_setup", self.open_browser_setup_dialog, add_to_bar=False)
+        tool("btn_updates", self.open_update_dialog, add_to_bar=False)
+        tool("btn_theme", self.toggle_theme, add_to_bar=False)
+        tool("btn_lang", self.toggle_lang, add_to_bar=False)
 
-        self.tree = QTreeWidget()
-        self.tree.setColumnCount(2)
-        self.tree.setHeaderHidden(True)
-        self.tree.setFixedWidth(230)
-        self.tree.setRootIsDecorated(False)
-        self.tree.setIndentation(16)
-        self.tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.tree.header().setStretchLastSection(False)
-        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        self.tree.header().resizeSection(1, 44)
-        self.tree.itemClicked.connect(self.on_tree_clicked)
-        self.tree.currentItemChanged.connect(lambda cur, _prev: self.on_tree_clicked(cur))
-        bl.addWidget(self.tree)
+        cl.addWidget(toolbar)
+
+        self.queue_banner = QFrame()
+        self.queue_banner.setObjectName("CardFrame")
+        qbl = QHBoxLayout(self.queue_banner)
+        qbl.setContentsMargins(14, 10, 14, 10)
+        qbl.setSpacing(10)
+        self.lbl_queue_info = QLabel()
+        self.lbl_queue_info.setStyleSheet("font-size: 12.5px; font-weight: 500;")
+        qbl.addWidget(self.lbl_queue_info, 1)
+        self.btn_open_queue_mgr = QPushButton()
+        self.btn_open_queue_mgr.setObjectName("PrimaryBtn")
+        self.btn_open_queue_mgr.setFixedHeight(30)
+        self.btn_open_queue_mgr.clicked.connect(self.open_queue_scheduler_dialog)
+        qbl.addWidget(self.btn_open_queue_mgr)
+        self.queue_banner.setVisible(False)
+        cl.addWidget(self.queue_banner)
 
         self.stack = QStackedWidget()
-        self.table = QTableWidget(0, 6)
+        self.table = DownloadCardTableWidget()
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -8545,17 +9085,18 @@ class ScorpionMainWindow(QMainWindow):
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.table.setIconSize(QSize(20, 20))
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setVerticalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(44)
+        self.table.verticalHeader().setDefaultSectionSize(BRAND_TOKENS["card_h"] + BRAND_TOKENS["card_gap"])
         hh = self.table.horizontalHeader()
+        hh.setVisible(False)
         hh.setHighlightSections(False)
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for col, width in ((1, 105), (2, 175), (3, 112), (4, 100), (5, 150)):
-            hh.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
-            hh.resizeSection(col, width)
-        self.table.setItemDelegateForColumn(0, FilenameDelegate(self.table))
-        self.table.setItemDelegateForColumn(2, ProgressDelegate(self.table))
+        for col in range(1, 6):
+            self.table.setColumnHidden(col, True)
+        self.table.setItemDelegateForColumn(0, DownloadCardRowDelegate(self.table, self))
+        self.table.card_action.connect(self._on_card_action)
         self.table.itemSelectionChanged.connect(self._sync_toolbar_selection)
         self.table.cellDoubleClicked.connect(self.on_row_double_clicked)
         self.table.cellPressed.connect(lambda _r, _c: self.txt_search.clearFocus())
@@ -8563,24 +9104,188 @@ class ScorpionMainWindow(QMainWindow):
         self.table.customContextMenuRequested.connect(self.on_table_context_menu)
         self.stack.addWidget(self.table)
 
+        empty_card = QFrame()
+        empty_card.setObjectName("CardFrame")
+        el = QVBoxLayout(empty_card)
+        el.setSpacing(12)
+        el.addStretch(1)
+        empty_emblem = QLabel()
+        empty_emblem.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_emblem.setPixmap(scorpion_emblem_pixmap(56))
+        el.addWidget(empty_emblem)
         self.empty_label = QLabel()
         self.empty_label.setObjectName("EmptyState")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setWordWrap(True)
-        empty_card = QFrame()
-        empty_card.setObjectName("CardFrame")
-        el = QVBoxLayout(empty_card)
         el.addWidget(self.empty_label)
+        empty_cta_row = QHBoxLayout()
+        empty_cta_row.addStretch()
+        self.btn_empty_add = QPushButton()
+        self.btn_empty_add.setObjectName("PrimaryBtn")
+        self.btn_empty_add.setFixedHeight(34)
+        self.btn_empty_add.clicked.connect(lambda: self.open_add_dialog("", False))
+        empty_cta_row.addWidget(self.btn_empty_add)
+        empty_cta_row.addStretch()
+        el.addLayout(empty_cta_row)
+        el.addStretch(1)
         self.stack.addWidget(empty_card)
-        bl.addWidget(self.stack, 1)
+
+        cl.addWidget(self.stack, 1)
+        bl.addWidget(content_col, 1)
         root_layout.addWidget(body, 1)
 
-        # 3. Status bar
+        # 3. Bottom Aggregate Status Strip
+        self.status_strip_frame = QFrame()
+        self.status_strip_frame.setObjectName("StatusStripFrame")
+        st_lay = QHBoxLayout(self.status_strip_frame)
+        st_lay.setContentsMargins(0, 0, 0, 0)
+        st_lay.setSpacing(0)
         self.lbl_status_bar = QLabel()
         self.lbl_status_bar.setObjectName("StatusBar")
-        root_layout.addWidget(self.lbl_status_bar)
+        st_lay.addWidget(self.lbl_status_bar, 1)
+        root_layout.addWidget(self.status_strip_frame)
+
         self.nav_items = {}
         self._setup_shortcuts()
+
+    def _rebuild_menu_bar(self):
+        if not hasattr(self, "menu_bar"):
+            return
+        is_ar = self.lang == "ar"
+        T = (lambda ar, en: ar) if is_ar else (lambda ar, en: en)
+        self.menu_bar.clear()
+
+        m_file = self.menu_bar.addMenu(T("ملف", "File"))
+        m_file.addAction(T("إضافة رابط جديد\tCtrl+N", "Add URL\tCtrl+N"), lambda: self.open_add_dialog("", False))
+        m_file.addAction(T("سحب فيديو من رابط", "Grab Video URL"), lambda: self.open_add_dialog("", True))
+        m_file.addAction(T("إضافة ملف تورنت / Magnet", "Add Torrent / Magnet"), lambda: self.open_add_dialog("", False, True))
+        m_file.addAction(T("لصق من الحافظة\tCtrl+V", "Paste URL from Clipboard\tCtrl+V"), self._paste_shortcut)
+        m_file.addSeparator()
+        m_file.addAction(T("خروج", "Exit"), self.quit_app)
+
+        m_edit = self.menu_bar.addMenu(T("تحرير", "Edit"))
+        m_edit.addAction(T("بحث في التحميلات\tCtrl+F", "Find Downloads\tCtrl+F"), lambda: (self.txt_search.setFocus(), self.txt_search.selectAll()))
+        m_edit.addSeparator()
+        m_edit.addAction(T("استئناف المحدد", "Resume Selected"), self.resume_selected)
+        m_edit.addAction(T("إيقاف مؤقت للمحدد", "Pause Selected"), self.pause_selected)
+        m_edit.addAction(T("حذف المحدد\tDel", "Delete Selected\tDel"), self.delete_selected)
+        m_edit.addAction(T("مسح المكتمل", "Clear Completed"), self.clear_completed)
+
+        m_view = self.menu_bar.addMenu(T("عرض", "View"))
+        m_view.addAction(
+            T("الوضع الداكن", "Dark Mode") if self.theme == "light" else T("الوضع الفاتح", "Light Mode"),
+            self.toggle_theme,
+        )
+        m_view.addAction("English" if is_ar else "العربية", self.toggle_lang)
+        m_view.addSeparator()
+        m_view.addAction(T("كل التحميلات", "All Downloads"), lambda: self._set_nav_filter("all", "ALL"))
+        m_view.addAction(T("غير المكتملة", "Unfinished"), lambda: self._set_nav_filter("unfinished", "ALL"))
+        m_view.addAction(T("المكتملة", "Completed"), lambda: self._set_nav_filter("completed", "ALL"))
+
+        m_queue = self.menu_bar.addMenu(T("الطابور", "Queue"))
+        m_queue.addAction(T("بدء جميع التحميلات", "Start All"), self.start_all_downloads)
+        m_queue.addAction(T("إيقاف جميع التحميلات", "Pause All"), self._pause_all_clicked)
+        m_queue.addSeparator()
+        m_queue.addAction(T("إدارة الطوابير والجدولة...", "Queues & Scheduler Manager..."), self.open_queue_scheduler_dialog)
+
+        m_tools = self.menu_bar.addMenu(T("أدوات", "Tools"))
+        m_tools.addAction(T("معالج ربط المتصفحات...", "Browser Integration Wizard..."), self.open_browser_setup_dialog)
+        m_tools.addAction(T("الإعدادات...", "Settings..."), self.open_settings_dialog)
+
+        m_help = self.menu_bar.addMenu(T("مساعدة", "Help"))
+        m_help.addAction(T("فحص التحديثات وسجل الإصدارات...", "Updates & Release Notes..."), self.open_update_dialog)
+        def _open_privacy():
+            import webbrowser
+            webbrowser.open("https://github.com/Mahmoud-847/scorpion-idm/blob/main/PRIVACY.md")
+        m_help.addAction(T("سياسة الخصوصية", "Privacy Policy"), _open_privacy)
+        m_help.addSeparator()
+        m_help.addAction(T("حول Scorpion IDM", "About Scorpion IDM"), self._show_about_dialog)
+
+    def _set_nav_filter(self, state: str, cat: str):
+        self.filter_state, self.filter_cat = state, cat
+        for _k, it in self.nav_items.items():
+            if it.data(0, Qt.ItemDataRole.UserRole) == (state, cat):
+                self._rebuilding_tree = True
+                try:
+                    self.tree.setCurrentItem(it)
+                finally:
+                    self._rebuilding_tree = False
+                break
+        self.refresh_all()
+
+    def _show_about_dialog(self):
+        is_ar = self.lang == "ar"
+        QMessageBox.information(
+            self,
+            "Scorpion IDM",
+            (
+                f"Scorpion Download Manager v{APP_VERSION}\n"
+                "مدير تحميلات سريع متعدد القنوات ومتكامل مع المتصفح والتورنت."
+                if is_ar
+                else f"Scorpion Download Manager v{APP_VERSION}\nFast multi-connection, browser, and torrent download manager."
+            ),
+        )
+
+    def start_all_downloads(self):
+        with self.engine.lock:
+            ids = [
+                it["id"]
+                for it in self.engine.downloads.values()
+                if it.get("status") in ("paused", "queued", "scheduled", "error")
+                and not it.get("browserTransfer")
+            ]
+        for dl_id in ids:
+            it = self.engine.downloads.get(dl_id)
+            if it and it.get("status") == "error":
+                it["status"] = "paused"
+            self.engine.start_download(dl_id)
+        self.refresh_all()
+
+    def _pause_all_clicked(self):
+        self.engine.pause_all()
+        self.refresh_all()
+
+    def open_queue_scheduler_dialog(self):
+        dlg = QueueSchedulerDialog(self.engine, self.lang, self)
+        dlg.exec()
+        self.refresh_all()
+
+    def _on_card_action(self, dl_id: str, action: str):
+        item = self.engine.downloads.get(dl_id)
+        if not item:
+            return
+        if action == "toggle_torrent":
+            if dl_id in self._expanded_torrents:
+                self._expanded_torrents.discard(dl_id)
+                panel = self._expanded_panels.pop(dl_id, None)
+                if panel is not None:
+                    panel.deleteLater()
+            else:
+                self._expanded_torrents.add(dl_id)
+            self._row_states.clear()
+            self.refresh_all()
+        elif action == "pause":
+            self.engine.pause_download(dl_id)
+            self.refresh_all()
+        elif action in ("resume", "retry"):
+            if item.get("status") == "error":
+                item["status"] = "paused"
+            self.engine.start_download(dl_id)
+            self.refresh_all()
+        elif action == "cancel":
+            self.reveal_download_in_table(dl_id)
+            self.delete_selected()
+        elif action == "open":
+            fp = item.get("filePath") or ""
+            if fp and os.path.exists(fp):
+                os.startfile(fp)
+        elif action == "folder":
+            self._open_item_folder(item)
+
+    def _on_inline_torrent_applied(self, dl_id: str, indices: list):
+        self.engine.apply_torrent_selection(dl_id, indices)
+        self._row_states.clear()
+        self.refresh_all()
 
     def _setup_shortcuts(self):
         def bind(seq, slot):
@@ -8622,35 +9327,47 @@ class ScorpionMainWindow(QMainWindow):
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if is_ar else Qt.LayoutDirection.LeftToRight)
         self.app.setProperty("scorpionTheme", self.theme)
         self.app.setStyleSheet(LIGHT_QSS if self.theme == "light" else DARK_QSS)
+        apply_win32_window_effects(self, self.theme == "dark")
         c = pal()
-        self.setWindowTitle(f"Scorpion Download Manager v{APP_VERSION}")
+        self.setWindowTitle("Scorpion IDM")
+        self.title_bar.refresh_theme(is_ar=is_ar)
+        self._rebuild_menu_bar()
+
+        self.sidebar_frame.setProperty("rtl", "true" if is_ar else "false")
+        self.sidebar_frame.style().unpolish(self.sidebar_frame)
+        self.sidebar_frame.style().polish(self.sidebar_frame)
+        self.lbl_categories.setText(T("التصنيفات", "Categories"))
+        self.btn_open_queue_mgr.setText(T("إدارة الطوابير والجدول...", "Manage Queue & Schedule..."))
+        self.btn_empty_add.setText(T("+ إضافة رابط", "+ Add URL"))
 
         labels = [
-            (self.btn_add, T("إضافة رابط", "Add URL"), "add", "#ffffff"),
-            (self.btn_video, T("تحميل فيديو", "Grab video"), "video", None),
-            (self.btn_torrent, T("تحميل تورنت", "Torrent"), "torrent", None),
-            (self.btn_resume, T("استئناف", "Resume"), "play", None),
-            (self.btn_pause, T("إيقاف مؤقت", "Pause"), "pause", None),
-            (self.btn_stop_all, T("إيقاف الكل", "Stop all"), "stop", None),
-            (self.btn_delete, T("حذف", "Delete"), "delete", None),
-            (self.btn_clear_done, T("حذف المكتمل", "Clear completed"), "clear", None),
-            (self.btn_browser_setup, T("ربط المتصفحات", "Browsers"), "browser", None),
-            (self.btn_updates, T("التحديثات", "Updates"), "update", None),
-            (self.btn_settings, T("الإعدادات", "Settings"), "settings", None),
+            (self.btn_add, T("إضافة رابط", "Add URL"), "add", c["primary_text"]),
+            (self.btn_start_all, T("بدء الكل", "Start All"), "play", c["text_sec"]),
+            (self.btn_stop_all, T("إيقاف الكل", "Pause All"), "pause", c["text_sec"]),
+            (self.btn_scheduler, T("الجدولة", "Scheduler"), "calendar", c["text_sec"]),
+            (self.btn_settings, T("الإعدادات", "Settings"), "settings", c["text_sec"]),
+            (self.btn_video, T("تحميل فيديو", "Grab video"), "video", c["text_sec"]),
+            (self.btn_torrent, T("تحميل تورنت", "Torrent"), "torrent", c["text_sec"]),
+            (self.btn_resume, T("استئناف", "Resume"), "play", c["text_sec"]),
+            (self.btn_pause, T("إيقاف مؤقت", "Pause"), "pause", c["text_sec"]),
+            (self.btn_delete, T("حذف", "Delete"), "delete", c["text_sec"]),
+            (self.btn_clear_done, T("حذف المكتمل", "Clear completed"), "clear", c["text_sec"]),
+            (self.btn_browser_setup, T("ربط المتصفحات", "Browsers"), "browser", c["text_sec"]),
+            (self.btn_updates, T("التحديثات", "Updates"), "update", c["text_sec"]),
             (self.btn_theme, T("الوضع الداكن", "Dark") if self.theme == "light" else T("الوضع الفاتح", "Light"),
-             "moon" if self.theme == "light" else "sun", None),
-            (self.btn_lang, "English" if is_ar else "العربية", "lang", None),
+             "moon" if self.theme == "light" else "sun", c["text_sec"]),
+            (self.btn_lang, "English" if is_ar else "العربية", "lang", c["text_sec"]),
         ]
         for btn, text, icon, color in labels:
             btn.setProperty("fullText", text)
             btn.setAccessibleName(text)
             btn.setText(text)
-            btn.setIcon(glyph_icon(ICONS[icon], color or c["text"]))
+            btn.setIcon(glyph_icon(ICONS[icon], color, 15))
         self.txt_search.setAccessibleName(T("بحث في التحميلات", "Search downloads"))
         self.tree.setAccessibleName(T("تصنيفات التحميلات", "Download categories"))
         self.table.setAccessibleName(T("قائمة التحميلات", "Downloads list"))
         if getattr(self, "_search_act", None) is not None:
-            self._search_act.setIcon(glyph_icon(ICONS["search"], c["muted"], 14))
+            self._search_act.setIcon(outline_icon("search", c["muted"], 14))
         self._apply_layout_mode(force=True)
 
         self._rebuilding_tree = True
@@ -8658,30 +9375,31 @@ class ScorpionMainWindow(QMainWindow):
             self.tree.clear()
             self.nav_items = {}
 
-            def nav(parent, key, text, data):
-                it = QTreeWidgetItem(parent, [text, ""])
+            def nav(key, text, data, icon_key):
+                it = QTreeWidgetItem(self.tree, [text, ""])
                 it.setData(0, Qt.ItemDataRole.UserRole, data)
+                it.setData(0, SIDEBAR_ROLE_ICON, icon_key)
                 it.setTextAlignment(1, Qt.AlignmentFlag.AlignCenter)
-                it.setForeground(1, QColor(c["muted"]))
                 self.nav_items[key] = it
                 return it
 
-            root_all = nav(self.tree, "all", T("كل التحميلات", "All downloads"), ("all", "ALL"))
-            for cat_id, ar, en in [
-                ("Video", "فيديو", "Video"),
-                ("Music", "صوتيات", "Music"),
-                ("Programs", "برامج", "Programs"),
-                ("Compressed", "ملفات مضغوطة", "Compressed"),
-                ("Documents", "مستندات", "Documents"),
-                ("General", "أخرى", "Other"),
-            ]:
-                nav(root_all, cat_id, T(ar, en), ("all", cat_id))
-            root_all.setExpanded(True)
-            nav(self.tree, "unfinished", T("غير مكتمل", "Unfinished"), ("unfinished", "ALL"))
-            nav(self.tree, "completed", T("مكتمل", "Completed"), ("completed", "ALL"))
-            for key, it in self.nav_items.items():
+            nav("all", T("كل التحميلات", "All Downloads"), ("all", "ALL"), "all_downloads")
+            nav("Video", T("الفيديو", "Videos"), ("all", "Video"), "video")
+            nav("Music", T("الصوتيات", "Music"), ("all", "Music"), "music")
+            nav("Programs", T("البرامج", "Programs"), ("all", "Programs"), "programs")
+            nav("Compressed", T("المضغوطة", "Compressed"), ("all", "Compressed"), "compressed")
+            nav("Documents", T("المستندات", "Documents"), ("all", "Documents"), "documents")
+            nav("Torrents", T("التورنت", "Torrents"), ("torrent", "ALL"), "torrents")
+            nav("Queues", T("الطوابير والجدولة", "Queues & Scheduler"), ("queue", "ALL"), "queues")
+
+            matched = False
+            for _key, it in self.nav_items.items():
                 if it.data(0, Qt.ItemDataRole.UserRole) == (self.filter_state, self.filter_cat):
                     self.tree.setCurrentItem(it)
+                    matched = True
+                    break
+            if not matched and "all" in self.nav_items:
+                self.tree.setCurrentItem(self.nav_items["all"])
         finally:
             self._rebuilding_tree = False
 
@@ -8689,25 +9407,19 @@ class ScorpionMainWindow(QMainWindow):
             [T("اسم الملف", "File name"), T("الحجم", "Size"), T("التقدم", "Progress"),
              T("السرعة", "Speed"), T("الوقت المتبقي", "Time left"), T("الحالة", "Status")]
         )
-        hh = self.table.horizontalHeader()
-        hh.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-        name_hdr = self.table.horizontalHeaderItem(0)
-        if name_hdr:
-            name_hdr.setTextAlignment(
-                ((Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute) if is_ar else Qt.AlignmentFlag.AlignLeft)
-                | Qt.AlignmentFlag.AlignVCenter
-            )
         self.empty_label.setText(
-            T("لا توجد تحميلات هنا بعد\n\nاضغط «إضافة رابط» أو استخدم زر التحميل في المتصفح",
-              "No downloads here yet\n\nClick “Add URL” or use the download button in your browser")
+            T("لا توجد تحميلات هنا بعد\n\nاضغط «+ إضافة رابط» أو استخدم إضافة المتصفح",
+              "No downloads here yet\n\nClick “+ Add URL” or capture a download from your browser")
         )
         self._row_ids = []
         self._row_states = {}
         self._last_nav_counts = None
+        for panel in list(self._expanded_panels.values()):
+            panel.deleteLater()
+        self._expanded_panels.clear()
         self.refresh_all()
 
     def _restyle_cards(self):
-        # Cards are drawn with the current theme and language; reopen them in the new style
         for dl_id in list(self.cards.cards):
             self.cards.cards.pop(dl_id).close()
             self.cards.show_for(dl_id)
@@ -8782,15 +9494,17 @@ class ScorpionMainWindow(QMainWindow):
             act.triggered.connect(slot)
 
         if item["status"] == "completed" and os.path.exists(item["filePath"]):
-            add(T("تشغيل الملف", "Open file"), "open", lambda: os.startfile(item["filePath"]))
-        add(T("فتح المجلد", "Open folder"), "folder", lambda: self._open_item_folder(item))
-        add(T("تفاصيل التحميل", "Download details"), "download", lambda: self.open_progress_window(dl_id))
+            add(T("تشغيل الملف", "Open File"), "open", lambda: os.startfile(item["filePath"]))
+        add(T("فتح المجلد", "Show in Folder"), "folder", lambda: self._open_item_folder(item))
+        add(T("تفاصيل التحميل", "Download Details"), "download", lambda: self.open_progress_window(dl_id))
+        if item.get("isTorrent") and item["status"] != "completed":
+            add(T("تحديد ملفات التورنت", "Select Torrent Files"), "torrent", lambda: self._on_card_action(dl_id, "toggle_torrent"))
         if item["status"] != "completed":
             if item["status"] == "downloading":
                 add(T("إيقاف مؤقت", "Pause"), "pause", lambda: self.engine.pause_download(dl_id))
             else:
                 add(T("استئناف", "Resume"), "play",
-                    lambda: (self.engine.start_download(dl_id), self.open_progress_window(dl_id)))
+                    lambda: (self.engine.start_download(dl_id), self.refresh_all()))
         menu.addSeparator()
         add(T("نسخ الرابط", "Copy URL"), "browser", lambda: self._copy_url_safely(item["url"]))
         add(T("حذف", "Delete"), "delete", self.delete_selected)
@@ -8818,10 +9532,12 @@ class ScorpionMainWindow(QMainWindow):
     def open_browser_setup_dialog(self):
         dlg = BrowserSetupDialog(self.engine, self.lang, self)
         dlg.exec()
+        self.refresh_all()
 
     def open_settings_dialog(self):
         dlg = SettingsDialog(self.engine, self.lang, self)
         dlg.exec()
+        self.refresh_all()
 
     def open_update_dialog(self, update_info: dict = None, just_updated: bool = False):
         if not isinstance(update_info, dict):
@@ -8846,9 +9562,12 @@ class ScorpionMainWindow(QMainWindow):
         item = self.engine.downloads.get(dl_id)
         if not item or item.get("torrentSelection"):
             return
-        dlg = TorrentFilesDialog(item, self.lang, self if self.isVisible() else None)
+        if self.isVisible():
+            self._expanded_torrents.add(dl_id)
+            self.reveal_download_in_table(dl_id)
+            return
+        dlg = TorrentFilesDialog(item, self.lang, None)
         dlg.exec()
-        # Closing the window without choosing = download everything
         item["torrentSelection"] = dlg.selected_indices()
 
     def on_browser_captured(self, payload: dict):
@@ -8860,7 +9579,6 @@ class ScorpionMainWindow(QMainWindow):
         url = (payload.get("url") or "").strip()
         if not url:
             return
-        # Like IDM: only the download window pops up, the main window stays where it is
 
         is_torrent = (
             payload.get("type") == "torrent"
@@ -8963,13 +9681,19 @@ class ScorpionMainWindow(QMainWindow):
         hidden_state = (
             (self.filter_state == "unfinished" and st == "completed")
             or (self.filter_state == "completed" and st != "completed")
+            or (self.filter_state == "torrent" and not item.get("isTorrent"))
+            or (self.filter_state == "queue" and st not in ("queued", "scheduled"))
         )
         hidden_cat = self.filter_cat != "ALL" and cat != self.filter_cat
         if hidden_state or hidden_cat:
             self.filter_state = "all"
             self.filter_cat = "ALL"
             if "all" in getattr(self, "nav_items", {}):
-                self.tree.setCurrentItem(self.nav_items["all"])
+                self._rebuilding_tree = True
+                try:
+                    self.tree.setCurrentItem(self.nav_items["all"])
+                finally:
+                    self._rebuilding_tree = False
         q = self.txt_search.text().strip().lower()
         if q and q not in (item.get("filename") or "").lower() and q not in (item.get("url") or "").lower():
             self.txt_search.blockSignals(True)
@@ -9046,6 +9770,10 @@ class ScorpionMainWindow(QMainWindow):
         dlg = self.open_progress_dialogs.pop(dl_id, None)
         if dlg is not None:
             dlg.close()
+        self._expanded_torrents.discard(dl_id)
+        panel = self._expanded_panels.pop(dl_id, None)
+        if panel is not None:
+            panel.deleteLater()
         self.cards.remove(dl_id)
         self.engine.delete_download(dl_id)
         self.refresh_all()
@@ -9074,7 +9802,6 @@ class ScorpionMainWindow(QMainWindow):
             return
         dlg = self.open_progress_dialogs.get(dl_id)
         if dlg is not None and dlg.isVisible():
-            # The progress window itself switches to the "complete" state
             return
         self.cards.show_for(dl_id)
 
@@ -9107,7 +9834,7 @@ class ScorpionMainWindow(QMainWindow):
             self._tray_badge_count = n
             self.tray_icon.setIcon(self._tray_icon_with_badge(n))
             self.tray_icon.setToolTip(
-                f"Scorpion Download Manager v{APP_VERSION}"
+                f"Scorpion IDM v{APP_VERSION}"
                 + ((f" — {n} تحميل شغال" if self.lang == "ar" else f" — {n} downloading") if n else "")
             )
 
@@ -9122,7 +9849,7 @@ class ScorpionMainWindow(QMainWindow):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(pal()["accent"]))
         p.drawEllipse(QRectF(30, 30, 34, 34))
-        p.setPen(QColor("#ffffff"))
+        p.setPen(QColor(pal()["primary_text"]))
         f = QFont()
         f.setPixelSize(22)
         f.setBold(True)
@@ -9132,48 +9859,43 @@ class ScorpionMainWindow(QMainWindow):
         return QIcon(pm)
 
     def _apply_layout_mode(self, force: bool = False):
-        """
-        Fits any screen, down to half of a laptop screen: toolbar buttons adapt from full -> standard ->
-        compact -> tiny (with full tooltips), the sidebar narrows and less important columns shrink or hide.
-        """
+        """Adapts toolbar buttons and sidebar cleanly down to small laptop/split windows."""
         is_ar = self.lang == "ar"
-        labeled_standard = {
-            self.btn_add,
-            self.btn_video,
-            self.btn_torrent,
-            self.btn_browser_setup,
-        }
+        labeled_standard = {self.btn_add, self.btn_start_all, self.btn_stop_all, self.btn_scheduler, self.btn_settings}
 
         def set_texts(m):
-            # Narrowest layout: tighter gaps and a smaller search box so every button still fits
-            self._toolbar_frame.layout().setSpacing(1 if m == "tiny" else 4)
-            self.txt_search.setMinimumWidth(80 if m == "tiny" else (195 if m == "standard" else 130))
-            self.txt_search.setMaximumWidth(150 if m == "tiny" else 245)
+            self._toolbar_frame.layout().setSpacing(4 if m == "tiny" else 8)
             if m == "tiny":
-                self.txt_search.setPlaceholderText("بحث..." if is_ar else "Search...")
+                self.txt_search.setPlaceholderText("بحث..." if is_ar else "Search")
             elif m == "full":
-                self.txt_search.setPlaceholderText("بحث في التحميلات (Ctrl+F)" if is_ar else "Search downloads (Ctrl+F)")
+                self.txt_search.setPlaceholderText("بحث (Ctrl+F)" if is_ar else "Search")
             else:
-                self.txt_search.setPlaceholderText("بحث في التحميلات..." if is_ar else "Search downloads...")
+                self.txt_search.setPlaceholderText("بحث..." if is_ar else "Search")
             for btn in self._toolbar_buttons:
                 full = btn.property("fullText") or ""
-                keep_text = (
-                    (m == "full")
-                    or (m == "standard" and btn in labeled_standard)
-                    or (btn is self.btn_add and m == "compact")
-                )
+                if btn is self.btn_add:
+                    btn.setText(f"+ {full}" if m != "tiny" else "+")
+                    btn.setToolTip("" if m != "tiny" else full)
+                    continue
+                keep_text = (m == "full") or (m == "standard" and btn in labeled_standard)
                 btn.setText(full if keep_text else "")
                 btn.setToolTip("" if keep_text else full)
 
-        # Width each layout needs, measured for the current language (Arabic labels are longer)
         key = (self.lang, tuple(b.property("fullText") or "" for b in self._toolbar_buttons))
         if force or getattr(self, "_mode_widths_key", None) != key:
             self._mode_widths = {}
             for m in ("full", "standard", "compact", "tiny"):
                 set_texts(m)
-                self._mode_widths[m] = self._toolbar_frame.layout().sizeHint().width()
+                sb_w = {
+                    "full": BRAND_TOKENS["sidebar_w_full"],
+                    "standard": BRAND_TOKENS["sidebar_w_standard"],
+                    "compact": BRAND_TOKENS["sidebar_w_compact"],
+                    "tiny": BRAND_TOKENS["sidebar_w_tiny"],
+                }[m]
+                self._mode_widths[m] = self._toolbar_frame.layout().sizeHint().width() + sb_w + 48
             self._mode_widths_key = key
             self._layout_mode = None
+
         w = self.width()
         mode = (
             "full" if self._mode_widths["full"] <= w
@@ -9184,22 +9906,17 @@ class ScorpionMainWindow(QMainWindow):
             return
         self._layout_mode = mode
         set_texts(mode)
-        self.tree.setFixedWidth({"full": 220, "standard": 210, "compact": 190, "tiny": 168}[mode])
-        widths = {
-            "full": (105, 185, 115, 105, 155),
-            "standard": (105, 175, 112, 100, 150),
-            "compact": (98, 148, 108, 92, 140),
-            "tiny": (88, 118, 102, 0, 126),
+        sb_width = {
+            "full": BRAND_TOKENS["sidebar_w_full"],
+            "standard": BRAND_TOKENS["sidebar_w_standard"],
+            "compact": BRAND_TOKENS["sidebar_w_compact"],
+            "tiny": BRAND_TOKENS["sidebar_w_tiny"],
         }[mode]
-        hh = self.table.horizontalHeader()
-        for col, width in zip((1, 2, 3, 4, 5), widths):
-            self.table.setColumnHidden(col, width == 0)
-            if width:
-                hh.resizeSection(col, width)
+        self.sidebar_frame.setFixedWidth(sb_width)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, "tree"):
+        if hasattr(self, "sidebar_frame"):
             self._apply_layout_mode()
 
     def _restore_window_geometry(self):
@@ -9209,9 +9926,8 @@ class ScorpionMainWindow(QMainWindow):
                 self.restoreGeometry(QByteArray.fromBase64(raw.encode("ascii")))
             except Exception:
                 pass
-        # Never larger than the screen or off it (e.g. saved on a bigger monitor that is now gone)
         avail = (self.screen() or QApplication.primaryScreen()).availableGeometry()
-        w, h = min(self.width(), avail.width()), min(self.height(), avail.height())
+        w, h = min(max(640, self.width()), avail.width()), min(max(480, self.height()), avail.height())
         x = min(max(self.x(), avail.left()), avail.right() - w + 1)
         y = min(max(self.y(), avail.top()), avail.bottom() - h + 1)
         self.setGeometry(x, y, w, h)
@@ -9225,8 +9941,8 @@ class ScorpionMainWindow(QMainWindow):
             pass
 
     def closeEvent(self, event):
+        self._set_edge_cursor(None)
         self._save_window_geometry()
-        # Like IDM: closing the main window keeps Scorpion running in the tray to catch browser downloads
         if getattr(self, "tray_icon", None) is not None and not getattr(self, "_really_quit", False):
             event.ignore()
             self.hide()
@@ -9241,6 +9957,10 @@ class ScorpionMainWindow(QMainWindow):
                     3000,
                 )
             return
+        try:
+            self.app.removeEventFilter(self)
+        except Exception:
+            pass
         super().closeEvent(event)
         self.app.quit()
 
@@ -9253,6 +9973,7 @@ class ScorpionMainWindow(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        apply_win32_window_effects(self, self.theme == "dark")
         QTimer.singleShot(0, self.refresh_all)
 
     def _on_refresh_tick(self):
@@ -9269,6 +9990,20 @@ class ScorpionMainWindow(QMainWindow):
             return
         self.refresh_all()
 
+    def _cached_free_space(self) -> int:
+        now = time.monotonic()
+        if now - self._free_space_cache[0] < 5.0 and self._free_space_cache[1] > 0:
+            return self._free_space_cache[1]
+        free_b = 0
+        try:
+            dl_root = self.engine.settings.get("downloadsRoot") or getattr(self.engine, "default_dl_root", "") or os.path.expanduser("~")
+            target = dl_root if os.path.exists(dl_root) else os.path.dirname(dl_root) or os.path.expanduser("~")
+            free_b = shutil.disk_usage(target).free
+        except Exception:
+            free_b = 0
+        self._free_space_cache = (now, free_b)
+        return free_b
+
     def refresh_all(self):
         self.engine._ui_visible = self.isVisible()
         is_ar = self.lang == "ar"
@@ -9281,26 +10016,50 @@ class ScorpionMainWindow(QMainWindow):
         except Exception:
             pass
 
-        # sidebar counts
         counts = {k: 0 for k in self.nav_items}
         total_spd = 0
         active_n = 0
+        queued_n = 0
+        resumable_n = 0
         for it in items:
             st_val = it.get("status") or "paused"
             if st_val == "downloading":
                 total_spd += int(it.get("speed") or 0)
                 active_n += 1
+            elif st_val in ("queued", "scheduled"):
+                queued_n += 1
+                resumable_n += 1
+            elif st_val in ("paused", "error") and not it.get("browserTransfer"):
+                resumable_n += 1
             counts["all"] = counts.get("all", 0) + 1
             cat = it.get("category") or "General"
             if cat in counts:
                 counts[cat] += 1
-            counts["completed" if st_val == "completed" else "unfinished"] = counts.get(
-                "completed" if st_val == "completed" else "unfinished", 0) + 1
+            if it.get("isTorrent"):
+                counts["Torrents"] = counts.get("Torrents", 0) + 1
+            if st_val in ("queued", "scheduled"):
+                counts["Queues"] = counts.get("Queues", 0) + 1
+
         if counts != getattr(self, "_last_nav_counts", None):
             for key, nav_it in self.nav_items.items():
                 n = counts.get(key, 0)
                 nav_it.setText(1, str(n) if n else "")
             self._last_nav_counts = dict(counts)
+
+        show_q_banner = self.filter_state == "queue"
+        if self.queue_banner.isVisible() != show_q_banner:
+            self.queue_banner.setVisible(show_q_banner)
+        if show_q_banner:
+            sched_on = bool(self.engine.settings.get("schedEnabled"))
+            sched_t = self.engine.settings.get("schedTime") or "02:00"
+            max_c = int(self.engine.settings.get("maxConcurrent") or 4)
+            self.lbl_queue_info.setText(
+                (
+                    f"الحد الأقصى المتزامن: {L(max_c)}   •   الجدول اليومي: {L(sched_t) if sched_on else 'معطّل'}"
+                    if is_ar
+                    else f"Max simultaneous: {max_c}   •   Daily schedule: {sched_t if sched_on else 'Off'}"
+                )
+            )
 
         query = self.txt_search.text().strip().lower()
         filtered = []
@@ -9310,6 +10069,10 @@ class ScorpionMainWindow(QMainWindow):
                 continue
             if self.filter_state == "completed" and st_val != "completed":
                 continue
+            if self.filter_state == "torrent" and not it.get("isTorrent"):
+                continue
+            if self.filter_state == "queue" and st_val not in ("queued", "scheduled"):
+                continue
             if self.filter_cat != "ALL" and (it.get("category") or "General") != self.filter_cat:
                 continue
             if query and query not in (it.get("filename") or "").lower() and query not in (it.get("url") or "").lower():
@@ -9318,102 +10081,211 @@ class ScorpionMainWindow(QMainWindow):
 
         self.stack.setCurrentIndex(0 if filtered else 1)
         if not filtered:
-            self.empty_label.setText(
-                (f"لا توجد نتائج لـ «{query}»" if is_ar else f"No results for “{query}”") if query
-                else ("لا توجد تحميلات هنا بعد\n\nاضغط «إضافة رابط» أو استخدم زر التحميل في المتصفح" if is_ar
-                      else "No downloads here yet\n\nClick “Add URL” or use the download button in your browser")
-            )
+            if query:
+                self.empty_label.setText(f"لا توجد نتائج لـ «{query}»" if is_ar else f"No results for “{query}”")
+            elif self.filter_state == "queue":
+                self.empty_label.setText(
+                    "لا توجد تحميلات في الطابور أو الجدولة حالياً" if is_ar else "No queued or scheduled downloads right now"
+                )
+            else:
+                self.empty_label.setText(
+                    "لا توجد تحميلات هنا بعد\n\nاضغط «+ إضافة رابط» أو استخدم إضافة المتصفح"
+                    if is_ar
+                    else "No downloads here yet\n\nClick “+ Add URL” or capture a download from your browser"
+                )
+
         sel_id = self.get_selected_id()
         ids = [it["id"] for it in filtered]
         prev_states = getattr(self, "_row_states", {})
         new_states = {}
-        if ids != getattr(self, "_row_ids", []):
+        ids_changed = ids != getattr(self, "_row_ids", [])
+        if ids_changed:
+            for dl_id in list(self._expanded_panels):
+                if dl_id not in ids or dl_id not in self._expanded_torrents:
+                    panel = self._expanded_panels.pop(dl_id, None)
+                    if panel is not None:
+                        panel.deleteLater()
             self.table.setRowCount(len(filtered))
             self._row_ids = ids
 
-        center = Qt.AlignmentFlag.AlignCenter
-        lead_align = (
-            ((Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute) if is_ar
-             else (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute))
-            | Qt.AlignmentFlag.AlignVCenter
-        )
+        standard_h = BRAND_TOKENS["card_h"] + BRAND_TOKENS["card_gap"]
+        expanded_h = BRAND_TOKENS["card_torrent_expanded_h"] + BRAND_TOKENS["card_gap"]
+
         for r, it in enumerate(filtered):
+            dl_id = it["id"]
             st_val = it.get("status") or "paused"
             mode = item_mode(it)
             total = int(it.get("totalSize") or 0)
             done = int(it.get("downloadedBytes") or 0)
-            downloading = st_val == "downloading" and mode == "active"
-            spd = int(it.get("speed") or 0) if downloading else 0
-            eta = it.get("timeLeft") if downloading else None
-            pct = round(float(it.get("progress") or 0), 2)
-            raw_name = it.get("filename", "")
-            file_path = it.get("filePath", "")
+            spd = int(it.get("speed") or 0) if mode == "active" else 0
+            eta = it.get("timeLeft") if mode == "active" else None
+            pct = 100.0 if mode == "done" else round(float(it.get("progress") or 0), 2)
+            raw_name = it.get("filename") or ""
+            file_path = it.get("filePath") or ""
             err_msg = (it.get("errorMsg") or "").strip() if st_val == "error" else ""
-            row_sig = (it["id"], st_val, mode, total, done, pct, spd, eta, raw_name, file_path, err_msg)
+            is_tor = bool(it.get("isTorrent"))
+            expanded = is_tor and (dl_id in self._expanded_torrents) and mode != "done"
+            t_peers = int(it.get("torrentPeers") or 0) if is_tor else 0
+            segs = it.get("segments") or []
+            conn_n = int(it.get("connections") or len(segs) or 0)
+            t_files_cnt = len(it.get("torrentFiles") or []) if expanded else 0
+            t_sel_sig = tuple(it.get("torrentSelection") or ()) if expanded else ()
+
+            row_sig = (
+                dl_id, st_val, mode, total, done, pct, spd, eta, raw_name, file_path,
+                err_msg, expanded, t_peers, conn_n, is_ar, t_files_cnt, t_sel_sig,
+            )
             new_states[r] = row_sig
-            if prev_states.get(r) == row_sig and self.table.item(r, 5) is not None:
-                if it["id"] == sel_id and self.table.currentRow() != r:
+            if not ids_changed and prev_states.get(r) == row_sig and self.table.item(r, 0) is not None:
+                if dl_id == sel_id and self.table.currentRow() != r:
                     self.table.setCurrentCell(r, 0)
                 continue
-            cells = [
-                bidi_filename(raw_name),
-                L(format_bytes(total)) if total else (L(format_bytes(done)) if done else "—"),
-                "",
-                L(format_speed(spd)) if downloading else "—",
-                L(format_eta(eta)) if downloading else "—",
-                item_status_text(it, is_ar),
-            ]
-            for col, text in enumerate(cells):
-                cell = self.table.item(r, col)
-                desired_align = center if col else lead_align
-                if cell is None:
-                    cell = QTableWidgetItem()
-                    cell.setTextAlignment(int(desired_align.value))
-                    self.table.setItem(r, col, cell)
-                elif cell.textAlignment() != int(desired_align.value):
-                    cell.setTextAlignment(int(desired_align.value))
-                if cell.text() != text:
-                    cell.setText(text)
-                if col == 0:
-                    if cell.data(ROLE_ID) != it["id"]:
-                        cell.setData(ROLE_ID, it["id"])
-                        cell.setIcon(file_type_icon(raw_name))
-                    if cell.data(ROLE_RAW_NAME) != raw_name:
-                        cell.setData(ROLE_RAW_NAME, raw_name)
-                    if cell.toolTip() != file_path:
-                        cell.setToolTip(file_path)
-                elif col == 2:
-                    cell.setData(ROLE_PCT, float(it.get("progress") or 0))
-                    cell.setData(ROLE_MODE, mode)
-                elif col == 5:
-                    cell.setForeground(QColor(mode_color(mode) if mode != "connecting" else c["muted"]))
-                    tip = ""
-                    if st_val == "error":
-                        reason = localize_error_msg(err_msg, is_ar) if err_msg else ("سبب غير معروف" if is_ar else "Unknown reason")
-                        tip = f"{'سبب الفشل' if is_ar else 'Failure reason'}: {reason}"
-                    if cell.toolTip() != tip:
-                        cell.setToolTip(tip)
-            if it["id"] == sel_id and self.table.currentRow() != r:
-                self.table.setCurrentCell(r, 0)
-        self._row_states = new_states
 
-        self._completed_count = counts.get("completed", 0)
+            if total > 0 and 0 < done < total and st_val != "completed":
+                size_line = L(f"{format_bytes(done)} / {format_bytes(total)}")
+            elif total > 0:
+                size_line = L(format_bytes(total))
+            elif done > 0:
+                size_line = L(format_bytes(done))
+            else:
+                size_line = "—"
+
+            browser_owned = bool(it.get("browserTransfer"))
+            supports_resume = bool(it.get("supportsRange") or it.get("isVideo") or is_tor) and not browser_owned
+            restart_only = bool(browser_owned or is_drm_video_url(it.get("url", "")) or "drm" in err_msg.lower())
+            if mode == "done":
+                stats_line = "100%"
+            elif is_tor and mode == "active":
+                pts = [L(f"{pct:.0f}%"), L(format_speed(spd))]
+                if t_peers > 0:
+                    pts.append(f"{'النظراء' if is_ar else 'Peer'}: {L(t_peers)}")
+                stats_line = "  |  ".join(pts)
+            elif mode == "active":
+                pts = [L(f"{pct:.0f}%"), L(format_speed(spd))]
+                if eta is not None and int(eta) > 0:
+                    pts.append(("المتبقي: " if is_ar else "ETA: ") + L(format_eta(eta)))
+                stats_line = "  |  ".join(pts)
+            elif mode == "paused" and st_val == "paused":
+                if supports_resume:
+                    stats_line = "متوقف مؤقتاً (يدعم الاستئناف)" if is_ar else "Paused (Resume supported)"
+                else:
+                    stats_line = "متوقف مؤقتاً (لا يدعم الاستئناف)" if is_ar else "Paused (Restart required)"
+                if pct > 0:
+                    stats_line = f"{stats_line}  •  {L(f'{pct:.0f}%')}"
+            elif mode == "error":
+                stats_line = "فشل (أعد البدء من المتصفح)" if (is_ar and restart_only) else (
+                    "Failed (Restart in browser)" if restart_only else ("فشل التحميل" if is_ar else "Failed")
+                )
+            else:
+                stats_line = item_status_text(it, is_ar)
+
+            err_short = ""
+            if st_val == "error":
+                reason = localize_error_msg(err_msg, is_ar) if err_msg else ("سبب غير معروف" if is_ar else "Unknown failure")
+                err_short = reason
+
+            meta = {
+                "id": dl_id,
+                "mode": mode,
+                "status": st_val,
+                "progress": pct,
+                "rawName": raw_name,
+                "category": it.get("category") or "General",
+                "isTorrent": is_tor,
+                "browserTransfer": browser_owned,
+                "restartOnly": restart_only,
+                "expanded": expanded,
+                "connCount": conn_n if st_val == "downloading" else 0,
+                "sizeLine": size_line,
+                "statsLine": stats_line,
+                "errorShort": err_short,
+                "isAr": is_ar,
+            }
+
+            cell0 = self.table.item(r, 0)
+            if cell0 is None:
+                cell0 = QTableWidgetItem()
+                self.table.setItem(r, 0, cell0)
+            if cell0.data(ROLE_ID) != dl_id:
+                cell0.setData(ROLE_ID, dl_id)
+            if cell0.data(ROLE_RAW_NAME) != raw_name:
+                cell0.setData(ROLE_RAW_NAME, raw_name)
+            cell0.setData(ROLE_PCT, float(pct))
+            cell0.setData(ROLE_MODE, mode)
+            cell0.setData(ROLE_CARD_META, meta)
+            tip_val = f"{file_path}\n{err_short}" if err_short else file_path
+            if cell0.toolTip() != tip_val:
+                cell0.setToolTip(tip_val)
+
+            target_h = expanded_h if expanded else standard_h
+            if self.table.rowHeight(r) != target_h:
+                self.table.setRowHeight(r, target_h)
+
+            if expanded or self._expanded_panels:
+                idx0 = self.table.model().index(r, 0)
+                cur_widget = self.table.indexWidget(idx0)
+                if expanded:
+                    panel = self._expanded_panels.get(dl_id)
+                    if panel is None or cur_widget is not panel:
+                        panel = TorrentInlinePanel(dl_id, it, is_ar, self.table)
+                        panel.selection_applied.connect(self._on_inline_torrent_applied)
+                        self._expanded_panels[dl_id] = panel
+                        self.table.setIndexWidget(idx0, panel)
+                    else:
+                        panel.update_from(it)
+                elif cur_widget is not None:
+                    self.table.removeCellWidget(r, 0)
+
+            if dl_id == sel_id and self.table.currentRow() != r:
+                self.table.setCurrentCell(r, 0)
+
+        self._row_states = new_states
+        self._completed_count = sum(1 for it in items if it.get("status") == "completed")
+        self.btn_start_all.setEnabled(resumable_n > 0)
+        self.btn_stop_all.setEnabled(active_n > 0)
         self._sync_toolbar_selection()
 
         connected = self.engine.active_connected_browsers(12.0) if hasattr(self.engine, "active_connected_browsers") else []
         rpc_ok = getattr(self.engine, "rpc_alive", False)
         if not rpc_ok:
             bridge = "الجسر المحلي متوقف" if is_ar else "Local bridge offline"
+            ext_txt = "الجسر المحلي متوقف" if is_ar else "Bridge Offline"
+            ext_icon_name, ext_col = "warning", c["danger"]
         elif connected:
             bridge = f"المتصفح متصل ({', '.join(connected)})" if is_ar else f"Browser connected ({', '.join(connected)})"
+            ext_txt = "متصل بالإضافـة" if is_ar else "Connected to Extension"
+            ext_icon_name, ext_col = "pulse", c["success"]
         else:
             bridge = "بانتظار إضافة المتصفح" if is_ar else "Waiting for browser extension"
-        sep = "      •      "
+            ext_txt = "ربط إضافة المتصفح" if is_ar else "Connect Extension"
+            ext_icon_name, ext_col = "browser", c["warn"]
+
+        self.btn_ext_status.setText(ext_txt)
+        self.btn_ext_status.setIcon(outline_icon(ext_icon_name, ext_col, 16, 2.0))
+        self.btn_ext_status.setStyleSheet(
+            f"QPushButton#ExtStatusPill {{ color: {c['text_sec'] if connected else ext_col}; "
+            f"text-align: {'right' if is_ar else 'left'}; }}"
+        )
+
+        free_b = self._cached_free_space()
+        free_str = format_bytes(free_b) if free_b > 0 else "—"
+        sep = "   |   "
         if is_ar:
-            parts = [f"السرعة الكلية {L(format_speed(total_spd))}", f"تحميلات نشطة {L(active_n)}",
-                     f"الإجمالي {L(len(items))}", bridge]
+            parts = [
+                f"السرعة الكلية: {L(format_speed(total_spd))}",
+                f"النشطة: {L(active_n)}",
+                f"في الطابور: {L(queued_n)}",
+                f"المساحة الحرة: {L(free_str)}",
+                bridge,
+            ]
         else:
-            parts = [f"Total speed {format_speed(total_spd)}", f"Active {active_n}", f"Total {len(items)}", bridge]
+            parts = [
+                f"Total Speed: {format_speed(total_spd)}",
+                f"Active: {active_n}",
+                f"Queued: {queued_n}",
+                f"Free Space: {free_str}",
+                bridge,
+            ]
         self.lbl_status_bar.setText(sep.join(parts))
 
     def _sync_toolbar_selection(self):
@@ -9422,7 +10294,7 @@ class ScorpionMainWindow(QMainWindow):
         st = item.get("status") if item else ""
         has_sel = item is not None
         can_resume = has_sel and st in ("paused", "error", "queued", "scheduled")
-        can_pause = has_sel and st == "downloading" and item.get("phase") != "merging"
+        can_pause = has_sel and st == "downloading" and item.get("phase") not in ("merging", "verifying", "saving")
         self.btn_resume.setEnabled(can_resume)
         self.btn_pause.setEnabled(can_pause)
         self.btn_delete.setEnabled(has_sel)

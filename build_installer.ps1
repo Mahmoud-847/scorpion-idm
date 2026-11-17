@@ -69,9 +69,10 @@ $pthContent = @(
 ) -join "`r`n"
 Set-Content -Path (Join-Path $appDir "python$pyNoDot._pth") -Value $pthContent -Encoding ascii
 
-Copy-Item "$root\native_app\scorpion_qt.py", "$root\native_app\sitecustomize.py", "$root\native_app\media_transfer.py" "$appDir\app" -Force
+Copy-Item "$root\native_app\scorpion_qt.py", "$root\native_app\sitecustomize.py", "$root\native_app\media_transfer.py", "$root\native_app\scorpion_brand.py", "$root\native_app\scorpion_cards.py" "$appDir\app" -Force
 Copy-Item "$extPkgStage" "$appDir\browser-extension" -Recurse -Force
-Copy-Item "$root\build\icon.ico", "$root\build\icon.png", "$root\build\tray.png", "$root\build\aria2c.exe" "$appDir\build" -Force
+Copy-Item "$root\build\icon.ico", "$root\build\icon.png", "$root\build\tray.png", "$root\build\scorpion_logo.svg", "$root\build\scorpion_tray.svg", "$root\build\aria2c.exe" "$appDir\build" -Force
+if (Test-Path "$root\build\icons") { Copy-Item "$root\build\icons" "$appDir\build\icons" -Recurse -Force }
 
 # Install pinned dependencies into site-packages
 & $py -m pip install --quiet --disable-pip-version-check --no-compile --no-deps `
@@ -143,7 +144,7 @@ def sha256(path):
     return h.hexdigest()
 
 src_hash = hashlib.sha256()
-for rel in ("native_app/scorpion_qt.py", "native_app/sitecustomize.py", "native_app/media_transfer.py"):
+for rel in ("native_app/scorpion_qt.py", "native_app/sitecustomize.py", "native_app/media_transfer.py", "native_app/scorpion_brand.py", "native_app/scorpion_cards.py"):
     src_hash.update((rel + "\0").encode("utf-8"))
     with open(os.path.join(root, rel), "rb") as sf:
         src_hash.update(sf.read())

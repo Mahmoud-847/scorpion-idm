@@ -243,6 +243,165 @@ class DesktopUIRuntimeTests(unittest.TestCase):
                 win.close()
                 _QAPP.processEvents()
 
+    def test_brand_icon_card_states_inline_torrent_selection_rtl_and_card_dismiss(self):
+        import types
+
+        ico = sq.scorpion_emblem_icon()
+        self.assertFalse(ico.isNull())
+        for px in (16, 32, 64, 128):
+            self.assertFalse(ico.pixmap(px, px).isNull())
+
+        with tempfile.TemporaryDirectory(prefix="scorpion_ui_states_") as tmp:
+            win, offscreen_card_init = _build_test_window(Path(tmp))
+            try:
+                now_ms = int(time.time() * 1000)
+                win.engine.apply_torrent_selection = types.MethodType(sq.ScorpionNativeEngine.apply_torrent_selection, win.engine)
+                win.engine.save_state = lambda: None
+                win.engine.start_download = lambda _id: None
+                win.engine.downloads = {
+                    "dl-active": {
+                        "id": "dl-active",
+                        "url": "https://example.test/video.mp4",
+                        "filename": "Epic Cinematic Trailer (4K).mp4",
+                        "category": "Video",
+                        "totalSize": 1_200_000_000,
+                        "downloadedBytes": 540_000_000,
+                        "progress": 45.0,
+                        "speed": 18_500_000,
+                        "timeLeft": 42,
+                        "connections": 16,
+                        "status": "downloading",
+                        "createdAt": now_ms,
+                    },
+                    "dl-tor": {
+                        "id": "dl-tor",
+                        "url": "magnet:?xt=urn:btih:0123456789abcdef",
+                        "filename": "Ubuntu-24.04-desktop.iso",
+                        "category": "Programs",
+                        "isTorrent": True,
+                        "torrentPeers": 3,
+                        "totalSize": 4_100_000_000,
+                        "downloadedBytes": 3_608_000_000,
+                        "progress": 88.0,
+                        "speed": 12_400_000,
+                        "torrentFiles": [
+                            {"index": 1, "path": "ubuntu/desktop.iso", "length": 4_000_000_000},
+                            {"index": 2, "path": "ubuntu/SHA256SUMS", "length": 100_000_000},
+                        ],
+                        "torrentSelection": [1, 2],
+                        "status": "downloading",
+                        "createdAt": now_ms - 1000,
+                    },
+                    "dl-paused-ok": {
+                        "id": "dl-paused-ok",
+                        "url": "https://example.test/patch.zip",
+                        "filename": "Game_Update_Patch.zip",
+                        "category": "Compressed",
+                        "supportsRange": True,
+                        "totalSize": 8_400_000_000,
+                        "downloadedBytes": 0,
+                        "progress": 0.0,
+                        "status": "paused",
+                        "createdAt": now_ms - 2000,
+                    },
+                    "dl-paused-no": {
+                        "id": "dl-paused-no",
+                        "url": "https://example.test/stream.bin",
+                        "filename": "stream.bin",
+                        "category": "General",
+                        "browserTransfer": True,
+                        "supportsRange": False,
+                        "totalSize": 100_000,
+                        "downloadedBytes": 50_000,
+                        "progress": 50.0,
+                        "status": "paused",
+                        "createdAt": now_ms - 2500,
+                    },
+                    "dl-queued": {
+                        "id": "dl-queued",
+                        "url": "https://example.test/queue.exe",
+                        "filename": "installer.exe",
+                        "category": "Programs",
+                        "totalSize": 50_000_000,
+                        "downloadedBytes": 0,
+                        "progress": 0.0,
+                        "status": "queued",
+                        "createdAt": now_ms - 3000,
+                    },
+                    "dl-done": {
+                        "id": "dl-done",
+                        "url": "https://example.test/report.pdf",
+                        "filename": "Report_Q3_Draft.pdf",
+                        "category": "Documents",
+                        "totalSize": 14_200_000,
+                        "downloadedBytes": 14_200_000,
+                        "progress": 100.0,
+                        "status": "completed",
+                        "createdAt": now_ms - 4000,
+                    },
+                    "dl-err": {
+                        "id": "dl-err",
+                        "url": "https://www.netflix.com/watch/123",
+                        "filename": "protected.mp4",
+                        "category": "Video",
+                        "errorMsg": "DRM",
+                        "status": "error",
+                        "createdAt": now_ms - 5000,
+                    },
+                }
+
+                # Check RTL default vs EN LTR toggle
+                self.assertEqual(win.layoutDirection(), Qt.LayoutDirection.RightToLeft)
+                win.lang = "en"
+                win.apply_theme_and_lang()
+                self.assertEqual(win.layoutDirection(), Qt.LayoutDirection.LeftToRight)
+                self.assertEqual(win.table.rowCount(), 7)
+
+                metas = {
+                    win.table.item(r, 0).data(sq.ROLE_ID): win.table.item(r, 0).data(sq.ROLE_CARD_META)
+                    for r in range(win.table.rowCount())
+                }
+                self.assertEqual(metas["dl-paused-ok"]["statsLine"], "Paused (Resume supported)")
+                self.assertIn("Restart required", metas["dl-paused-no"]["statsLine"])
+                self.assertEqual(metas["dl-queued"]["statsLine"], "Queued")
+                self.assertEqual(metas["dl-done"]["statsLine"], "100%")
+                self.assertIn("Restart in browser", metas["dl-err"]["statsLine"])
+
+                # Expand inline torrent panel, uncheck file #2, apply selection
+                win._on_card_action("dl-tor", "toggle_torrent")
+                _QAPP.processEvents()
+                self.assertIn("dl-tor", win._expanded_torrents)
+                panel = win._expanded_panels.get("dl-tor")
+                self.assertIsNotNone(panel)
+                panel._preview_checks[2].setChecked(False)
+                panel.btn_apply.click()
+                _QAPP.processEvents()
+                self.assertEqual(win.engine.downloads["dl-tor"]["torrentSelection"], [1])
+
+                # Sidebar category filtering: Torrents & Queues
+                win.on_tree_clicked(win.nav_items["Torrents"])
+                self.assertEqual(win.table.rowCount(), 1)
+                self.assertEqual(win.table.item(0, 0).data(sq.ROLE_ID), "dl-tor")
+
+                win.on_tree_clicked(win.nav_items["Queues"])
+                self.assertEqual(win.table.rowCount(), 1)
+                self.assertEqual(win.table.item(0, 0).data(sq.ROLE_ID), "dl-queued")
+
+                # Corner card dismiss ('close') hides card without deleting download
+                with patch.object(sq.DownloadCard, "__init__", offscreen_card_init):
+                    win.show_download_started("dl-active")
+                    _QAPP.processEvents()
+                    self.assertIn("dl-active", win.cards.cards)
+                    win.cards._on_action("dl-active", "close")
+                    _QAPP.processEvents()
+                    self.assertNotIn("dl-active", win.cards.cards)
+                    self.assertIn("dl-active", win.engine.downloads)
+            finally:
+                win.cards.clear()
+                win._really_quit = True
+                win.close()
+                _QAPP.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()
