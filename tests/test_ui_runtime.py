@@ -11,7 +11,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "native_app"))
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 import scorpion_qt as sq
@@ -396,6 +398,95 @@ class DesktopUIRuntimeTests(unittest.TestCase):
                     _QAPP.processEvents()
                     self.assertNotIn("dl-active", win.cards.cards)
                     self.assertIn("dl-active", win.engine.downloads)
+            finally:
+                win.cards.clear()
+                win._really_quit = True
+                win.close()
+                _QAPP.processEvents()
+
+    def test_card_keyboard_shortcuts_and_unpainted_state_changes(self):
+        with tempfile.TemporaryDirectory(prefix="scorpion_ui_keyboard_") as tmp:
+            with patch.object(sq.ScorpionMainWindow, "_open_selected_shortcut") as global_enter:
+                win, _ = _build_test_window(Path(tmp))
+            try:
+                win.lang = "en"
+                win.engine.downloads = {"keyboard": {
+                    "id": "keyboard", "url": "https://example.test/fixture",
+                    "filename": "fixture.bin", "category": "General", "status": "downloading",
+                    "totalSize": 1000, "downloadedBytes": 500, "progress": 50,
+                    "createdAt": int(time.time() * 1000), "speed": 0,
+                }}
+                win.apply_theme_and_lang()
+                win.table.setCurrentCell(0, 0)
+                win.table.card_action.disconnect()
+                actions = []
+                win.table.card_action.connect(lambda did, action: actions.append(action))
+                QApplication.setActiveWindow(win)
+                win.table.setFocus()
+                QTest.qWait(30)
+                self.assertIs(QApplication.activeWindow(), win)
+                QTest.keyClick(win.table, Qt.Key.Key_Right)
+                QTest.keyClick(win.table, Qt.Key.Key_Return)
+                self.assertEqual(actions, ["pause"])
+                global_enter.assert_not_called()
+
+                # A repaint has not yet replaced the cached active-row buttons.
+                self.assertIn("pause", win.table._row_btn_map[0])
+                win.engine.downloads["keyboard"]["status"] = "paused"
+                win.refresh_all()
+                QTest.keyClick(win.table, Qt.Key.Key_Space)
+                self.assertEqual(actions, ["pause", "resume"])
+                QTest.keyClick(win.table, Qt.Key.Key_Escape)
+                self.assertIsNone(win.table._kbd_btn)
+            finally:
+                win.cards.clear()
+                win._really_quit = True
+                win.close()
+                _QAPP.processEvents()
+
+    def test_card_accessibility_peers_and_keyboard_actions(self):
+        with tempfile.TemporaryDirectory(prefix="scorpion_ui_a11y_") as tmp:
+            win, _ = _build_test_window(Path(tmp))
+            try:
+                now_ms = int(time.time() * 1000)
+                win.engine.downloads = {
+                    "dl-tor": {
+                        "id": "dl-tor",
+                        "url": "magnet:?xt=urn:btih:1234",
+                        "filename": "Ubuntu-24.04-desktop.iso",
+                        "category": "Torrent",
+                        "isTorrent": True,
+                        "peers": 3,
+                        "totalSize": 4_100_000_000,
+                        "downloadedBytes": 2_050_000_000,
+                        "progress": 50.0,
+                        "speed": 1_000_000,
+                        "status": "downloading",
+                        "createdAt": now_ms,
+                    },
+                }
+                win.lang = "en"
+                win.apply_theme_and_lang()
+                win.table.setCurrentCell(0, 0)
+                cell0 = win.table.item(0, 0)
+                self.assertIn("Ubuntu-24.04-desktop.iso", cell0.text())
+                self.assertIn("Peer:", cell0.text())
+                self.assertIn("3", cell0.text())
+                self.assertEqual(cell0.data(Qt.ItemDataRole.AccessibleTextRole), cell0.text())
+                self.assertIn("Peer:", cell0.data(Qt.ItemDataRole.AccessibleDescriptionRole))
+                self.assertIn("3", cell0.data(Qt.ItemDataRole.AccessibleDescriptionRole))
+                self.assertIn("keyPressEvent", type(win.table).__dict__)
+
+                emitted = []
+                win.table.card_action.connect(lambda dl_id, act: emitted.append((dl_id, act)))
+                QApplication.sendEvent(win.table, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right, Qt.KeyboardModifier.NoModifier))
+                QApplication.sendEvent(win.table, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right, Qt.KeyboardModifier.NoModifier))
+                QApplication.sendEvent(win.table, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier))
+                _QAPP.processEvents()
+                self.assertEqual(emitted, [("dl-tor", "pause")])
+
+                QApplication.sendEvent(win.table, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
+                self.assertIsNone(win.table._kbd_btn)
             finally:
                 win.cards.clear()
                 win._really_quit = True

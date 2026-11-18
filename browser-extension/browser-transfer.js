@@ -49,7 +49,8 @@
   async function transfer(url, metadata, request, fetcher = fetch, progress = () => {}, rangeReader = readRange) {
     let transferId;
     try {
-      let part = await rangeReader(url, 0, 0, fetcher);
+      // Discover the entity without taking a large initial burst before its limit is known.
+      let part = await rangeReader(url, 0, 0, fetcher, 4096);
       const start = await request('start', { ...metadata, url, totalSize: part.total, mime: part.mime });
       if (!start.ok) throw new Error(start.error || 'تعذر بدء التنزيل. حدّث البرنامج والإضافة.');
       transferId = start.transferId;
@@ -82,7 +83,14 @@
         }
         if (!result.ok) throw new Error(result.error || 'التنزيل اتوقف. أعد المحاولة من الفيديو.');
         if (result.throttleMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, Math.min(60000, Number(result.throttleMs) || 0)));
+          let remWait = Math.max(0, Number(result.throttleMs) || 0);
+          while (remWait > 0) {
+            const stepMs = Math.min(5000, remWait);
+            await new Promise((resolve) => setTimeout(resolve, stepMs));
+            remWait -= stepMs;
+            const alive = await request('heartbeat', { transferId });
+            if (!alive.ok) throw new Error(alive.error || 'التنزيل اتوقف. أعد المحاولة من الفيديو.');
+          }
         }
         offset = nextOffset;
         progress(offset, total);

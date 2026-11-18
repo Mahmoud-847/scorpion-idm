@@ -448,7 +448,7 @@ async function sendToScorpion(payload) {
 }
 
 const activeMediaFrameByTab = new Map();
-const FRAME_REASON_PRIORITY = { explicit: 3, hover: 2, play: 1 };
+const FRAME_REASON_PRIORITY = { explicit: 2, hover: 2, viewport: 2, play: 1 };
 
 function sendMessageToFrame(tabId, message, frameId) {
   return new Promise((resolve) => {
@@ -636,7 +636,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const payload = msg.payload || {};
     const owner = `${sender.tab && sender.tab.id}:${sender.frameId || 0}:${sender.documentId || ''}`;
     if (!sender.tab || !ScorpionMedia.isTelegram(sender.url) ||
-        !['start', 'chunk', 'finish', 'abort'].includes(operation) ||
+        !['start', 'chunk', 'finish', 'abort', 'heartbeat'].includes(operation) ||
         (operation === 'start' && (!ScorpionMedia.isBrowserLocal(payload.url) ||
           new URL(payload.url).origin !== new URL(sender.url).origin))) {
       sendResponse({ ok: false, error: 'مصدر التنزيل غير صالح.' });

@@ -901,6 +901,344 @@ class AuditFindingsRegressionTests(unittest.TestCase):
         self.assertFalse(reached_build[0])
         self.assertEqual(finished_err[0][0], False)
 
+    def test_32_video_range_resume_enforces_strong_entity_validators(self):
+        old = b"A" * 262144
+        new = b"B" * 262144
+        cut = 131072
+        served = {"etag": '"version-2"', "lm": None, "first_byte_reads": 0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_GET(self):
+                rng = (self.headers.get("Range") or "bytes=0-0")[6:]
+                start, end = map(int, rng.split("-"))
+                if start == 0 and end > 0:
+                    served["first_byte_reads"] += 1
+                body = new[start:end + 1]
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(new)}")
+                self.send_header("Content-Length", str(len(body)))
+                if served["etag"]:
+                    self.send_header("ETag", served["etag"])
+                if served["lm"]:
+                    self.send_header("Last-Modified", served["lm"])
+                self.end_headers()
+                self.wfile.write(body)
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                url = f"http://127.0.0.1:{srv.server_port}/video.mp4"
+                cases = [
+                    ("changed_etag", {"etag": '"version-1"'}, '"version-2"', None, False),
+                    ("weak_etag", {"etag": '"version-1"'}, 'W/"version-1"', None, False),
+                    ("missing_validator", {}, None, None, False),
+                    ("matching_etag", {"etag": '"version-1"'}, '"version-1"', None, True),
+                ]
+                for label, init_kw, etag_s, lm_s, should_resume in cases:
+                    served["etag"] = etag_s
+                    served["lm"] = lm_s
+                    served["first_byte_reads"] = 0
+                    e = _make_engine(root / label)
+                    it = e.add_download({
+                        "url": url, "filename": "video.mp4", "isVideo": True,
+                        "totalSize": len(new), "connections": 8, "startImmediately": False, **init_kw
+                    })
+                    part = Path(e.get_item_temp_dir(it["id"])) / "stream0.mp4.part"
+                    part.parent.mkdir(parents=True, exist_ok=True)
+                    part.write_bytes(old[:cut] + b"\0" * (len(old) - cut))
+                    it["videoLayout"] = [[0, len(new), 8]]
+                    it["downloadedBytes"] = cut
+                    it["segments"] = [{
+                        "id": 1, "streamIdx": 0, "localStart": 0, "localCur": cut,
+                        "localEnd": len(new) - 1, "downloaded": cut, "currentByte": cut,
+                        "startByte": 0, "endByte": len(new) - 1, "status": "paused",
+                    }]
+                    ctrl = {"aborted": False}
+                    e.controllers[it["id"]] = ctrl
+                    handled = e._download_video_streams_16ports(
+                        it, ctrl,
+                        [{"url": url, "protocol": "http", "ext": "mp4", "vcodec": "h264", "acodec": "none", "filesize": len(new)}],
+                        str(root / label / "out"), "", False, "best",
+                    )
+                    if label in ("weak_etag", "missing_validator"):
+                        self.assertFalse(handled, label)
+                        self.assertNotIn("_videoOutput", it, label)
+                        continue
+                    self.assertTrue(handled, label)
+                    got = Path(it["_videoOutput"]).read_bytes()
+                    if should_resume:
+                        self.assertEqual(got, old[:cut] + new[cut:], label)
+                        self.assertEqual(served["first_byte_reads"], 0, label)
+                    else:
+                        self.assertEqual(got, new, label)
+                        self.assertGreaterEqual(served["first_byte_reads"], 1, label)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_33_low_speed_browser_transfer_returns_unclamped_throttle_and_tracks_debt(self):
+        import base64
+
+        now = [0.0]
+
+        class _Clock:
+            def monotonic(self):
+                return now[0]
+
+            def sleep(self, sec):
+                now[0] += float(sec)
+
+        clk = _Clock()
+        with tempfile.TemporaryDirectory() as td:
+            e = _make_engine(Path(td))
+            e.settings["globalSpeedLimitKbps"] = 1
+            start = e.begin_browser_transfer({"url": "https://web.telegram.org/a/progressive/v", "filename": "v.mp4", "totalSize": 1048576})
+            self.assertEqual(start["chunkSize"], 4096)
+            tok = start["transferId"]
+            chunk_b64 = base64.b64encode(b"a" * 524288).decode("ascii")
+            with patch.object(sq.time, "monotonic", side_effect=clk.monotonic), \
+                 patch.object(sq.time, "sleep", side_effect=clk.sleep):
+                r1 = e.receive_browser_transfer("chunk", {"transferId": tok, "offset": 0, "data": chunk_b64})
+                self.assertGreater(r1.get("throttleMs", 0), 400000)
+                eff_kbps = 512.0 / (clk.now + r1["throttleMs"] / 1000.0) if hasattr(clk, "now") else 512.0 / (now[0] + r1["throttleMs"] / 1000.0)
+                self.assertLessEqual(eff_kbps, 1.05)
+                # Sending next chunk early (after only 60s instead of full throttleMs) must retain unpaid debt!
+                clk.sleep(60.0)
+                r2 = e.receive_browser_transfer("chunk", {"transferId": tok, "offset": 524288, "data": chunk_b64})
+                self.assertGreater(r2.get("throttleMs", 0), 900000)
+            e.fail_browser_transfer(tok, "done")
+
+    def test_34_global_budget_split_stays_within_1_kbps_limit(self):
+        with tempfile.TemporaryDirectory() as td:
+            e = _make_engine(Path(td))
+            e.settings["globalSpeedLimitKbps"] = 1
+            e.downloads = {
+                "nat": {"id": "nat", "speedLimitKbps": 0, "status": "downloading"},
+                "tor": {"id": "tor", "speedLimitKbps": 0, "status": "downloading", "isTorrent": True},
+            }
+            e.controllers = {"nat": {}, "tor": {"isTorrent": True}}
+            tor_cap, nat_budget = e._global_budget_split()
+            self.assertGreater(tor_cap, 0.0)
+            self.assertGreater(nat_budget, 0.0)
+            self.assertLessEqual(tor_cap + nat_budget, 1.0 + 1e-9)
+
+    def test_35_update_install_separates_relaunch_failure_without_quitting(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            local = root / "local"
+            install_dir = local / "Programs" / "ScorpionIDM"
+            install_dir.mkdir(parents=True)
+            (install_dir / "ScorpionIDM.exe").write_bytes(b"old-exe")
+            pkg = root / "payload.zip"
+            with zipfile.ZipFile(pkg, "w") as zf:
+                zf.writestr("ScorpionIDM.exe", b"new-exe")
+            pkg_sha = hashlib.sha256(pkg.read_bytes()).hexdigest()
+            quits = []
+            e = _make_engine(root)
+            e.signals = types.SimpleNamespace(quit_requested=types.SimpleNamespace(emit=lambda: quits.append(True)))
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(local)}), \
+                 patch.object(sq.subprocess, "Popen", side_effect=OSError("launch blocked")):
+                ok, status = e.install_update_package(str(pkg), pkg_sha)
+            self.assertTrue(ok)
+            self.assertTrue(status.startswith("installed_restart_failed:"))
+            self.assertEqual(quits, [])
+            self.assertEqual((install_dir / "ScorpionIDM.exe").read_bytes(), b"new-exe")
+
+            dlg = sq.UpdateDialog(e, lang="en", update_info={"version": "2.1.27", "hasUpdate": False})
+            try:
+                with patch.object(dlg, "accept") as acc:
+                    dlg._on_finished(True, status)
+                    rt._QAPP.processEvents()
+                acc.assert_not_called()
+                self.assertIn("restart", dlg.lbl_prog.text().lower())
+            finally:
+                dlg.close()
+
+    def test_36_publisher_aborts_if_snapshot_mutates_in_final_window(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "release").mkdir()
+            (root / "native_app").mkdir()
+            pkg = root / "release" / "Scorpion-Update-Payload.zip"
+            pkg.write_bytes(b"pkg")
+            setup = root / "setup.exe"
+            setup.write_bytes(b"setup")
+            tools = root / "tools.zip"
+            tools.write_bytes(b"tools")
+            src_hash = hashlib.sha256()
+            for name in ("scorpion_qt.py", "sitecustomize.py", "media_transfer.py", "scorpion_brand.py", "scorpion_cards.py"):
+                rel = f"native_app/{name}"
+                content = (ROOT / rel).read_bytes()
+                (root / rel).write_bytes(content)
+                src_hash.update((rel + "\0").encode("utf-8"))
+                src_hash.update(content)
+            (root / "release" / "update.json").write_text(json.dumps({
+                "version": "2.1.27",
+                "sha256": hashlib.sha256(pkg.read_bytes()).hexdigest(),
+                "sourceSha256": src_hash.hexdigest(),
+                "tools": {"version": "v1"},
+            }))
+            pub_src = (ROOT / "auto_publish.py").read_text(encoding="utf-8")
+            tree = ast.parse(pub_src)
+            pub_cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "AutoPublisherWindow")
+            trig = next(n for n in pub_cls.body if isinstance(n, ast.FunctionDef) and n.name == "trigger_build_and_publish")
+            worker_fn = next(n for n in trig.body if isinstance(n, ast.FunctionDef) and n.name == "worker")
+            state = {"ext": "A"}
+            stops, git_cmds, finished = [], [], []
+            sig = types.SimpleNamespace(
+                progress=types.SimpleNamespace(emit=lambda *a: None),
+                log=types.SimpleNamespace(emit=lambda *a: None),
+                finished=types.SimpleNamespace(emit=lambda *a: finished.append(a)),
+            )
+
+            def _stop(**_kw):
+                stops.append(True)
+                if len(stops) == 2:
+                    state["ext"] = "B"
+
+            class _Build:
+                stdout = [f"SETUP_PATH={setup}", "TOOLS_VERSION=v1", f"TOOLS_PACK={tools}"]
+                returncode = 0
+                def wait(self):
+                    return 0
+
+            ns = {
+                "self": types.SimpleNamespace(signals=sig),
+                "do_bump": False,
+                "note_ar": "",
+                "PROJECT_ROOT": str(root),
+                "REPO_URL": "synthetic",
+                "ensure_on_up_to_date_main": lambda: None,
+                "validate_release_sources": lambda _l: None,
+                "compute_snapshot": lambda: dict(state),
+                "read_current_version": lambda: "2.1.27",
+                "stop_running_scorpion": _stop,
+                "copy_tree_safely": lambda *a: None,
+                "read_local_bridge_token": lambda: "",
+                "subprocess": types.SimpleNamespace(Popen=lambda *a, **k: _Build(), PIPE=-1, STDOUT=-2),
+                "publish_tools_pack": lambda *a: None,
+                "run_git": lambda *a: (git_cmds.append(a), types.SimpleNamespace(returncode=0, stdout="h", stderr=""))[1],
+            }
+            exec(compile(ast.Module(body=[worker_fn], type_ignores=[]), "auto_publish.py", "exec"), ns)
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(root / "local")}):
+                ns["worker"]()
+            self.assertFalse(any(a[0] == "commit" for a in git_cmds))
+            self.assertFalse(any(a[0] == "push" for a in git_cmds))
+            self.assertEqual(finished[-1][0], False)
+
+    def test_37_unpacked_extension_discovery_rejects_arbitrary_scorpion_substring(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            local = root / "local"
+            trusted_ext = local / "ScorpionIDM" / "browser-extension"
+            evil_ext = root / "evil-scorpion-helper"
+            trusted_ext.mkdir(parents=True)
+            evil_ext.mkdir(parents=True)
+            (trusted_ext / "manifest.json").write_text('{"name":"Scorpion"}', encoding="utf-8")
+            (evil_ext / "manifest.json").write_text('{"name":"Scorpion Coupon Helper"}', encoding="utf-8")
+
+            pref = local / "Microsoft" / "Edge" / "User Data" / "Default" / "Preferences"
+            pref.parent.mkdir(parents=True)
+            trusted_id = "a" * 32
+            evil_name_id = "b" * 32
+            evil_path_id = "c" * 32
+            pref.write_text(json.dumps({
+                "extensions": {
+                    "settings": {
+                        trusted_id: {"path": str(trusted_ext), "manifest": {"name": "Scorpion"}},
+                        evil_name_id: {"path": str(root / "benign-folder"), "manifest": {"name": "Scorpion Coupon Helper"}},
+                        evil_path_id: {"path": str(evil_ext), "manifest": {"name": "Helper"}},
+                    }
+                }
+            }), encoding="utf-8")
+            (root / "benign-folder").mkdir()
+
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(local)}):
+                origins = sq._discover_unpacked_extension_origins()
+                self.assertIn(f"chrome-extension://{trusted_id}/", origins)
+                self.assertNotIn(f"chrome-extension://{evil_name_id}/", origins)
+                self.assertNotIn(f"chrome-extension://{evil_path_id}/", origins)
+
+                e = _make_engine(root)
+                e.ext_source_dir = str(ROOT / "browser-extension")
+                e.legacy_prog_ext_dir = str(local / "Programs" / "ScorpionIDM" / "browser-extension")
+                e.appdata_ext_dir = str(trusted_ext)
+                e.bridge_token = "t" * 64
+                e.sync_and_repair_browser_extensions()
+                self.assertFalse((evil_ext / "bridge-auth.json").exists())
+                self.assertTrue((trusted_ext / "bridge-auth.json").is_file())
+
+
+class FinalReleaseReviewTests(unittest.TestCase):
+    def test_release_validation_requires_extension_test_runtime(self):
+        with patch.object(auto_publish.shutil, "which", return_value=None), \
+             patch.object(auto_publish.subprocess, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, "Node.js is required"):
+                auto_publish.validate_release_sources(lambda *_: None)
+        run.assert_not_called()
+
+    def test_extension_release_fingerprint_covers_packaged_assets(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "icons").mkdir()
+            (root / "manifest.json").write_bytes(b"{}")
+            (root / "icons" / "icon.png").write_bytes(b"\xff\x80")
+            original = auto_publish.extension_tree_digest(str(root))
+            (root / "bridge-auth.json").write_bytes(b"local data")
+            self.assertEqual(original, auto_publish.extension_tree_digest(str(root)))
+            (root / "icons" / "icon.png").write_bytes(b"\xfe\x80")
+            self.assertNotEqual(original, auto_publish.extension_tree_digest(str(root)))
+
+    def test_downloads_extension_requires_complete_tree_match_before_repair(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "source"
+            source.mkdir()
+            (source / "manifest.json").write_text('{}', encoding="utf-8")
+            (source / "popup.html").write_text('<p>original</p>', encoding="utf-8")
+            copy = root / "home" / "Downloads" / "Scorpion-Browser-Extension"
+            shutil.copytree(source, copy)
+            self.assertTrue(sq._ext_dir_matches_reference(str(copy), str(source)))
+            (copy / "popup.html").write_text('<p>different</p>', encoding="utf-8")
+            self.assertFalse(sq._ext_dir_matches_reference(str(copy), str(source)))
+            e = _make_engine(root)
+            e.ext_source_dir = str(source)
+            e.legacy_prog_ext_dir = str(root / "installed" / "primary")
+            e.appdata_ext_dir = str(root / "installed" / "secondary")
+            with patch.object(sq.os.path, "expanduser", return_value=str(root / "home")), \
+                 patch.dict(os.environ, {"TEMP": str(root / "other-temp")}), \
+                 patch.object(sq, "register_native_messaging_hosts"):
+                e.sync_and_repair_browser_extensions()
+            self.assertFalse((copy / "bridge-auth.json").exists())
+            self.assertEqual((copy / "popup.html").read_text(), '<p>different</p>')
+            shutil.copy2(source / "popup.html", copy / "popup.html")
+            (copy / "extra.js").write_text('additional fixture', encoding="utf-8")
+            self.assertFalse(sq._ext_dir_matches_reference(str(copy), str(source)))
+
+    def test_publisher_snapshot_covers_binary_assets_and_staged_bytes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            asset = root / "browser-extension" / "icons" / "icon.png"
+            asset.parent.mkdir(parents=True)
+            asset.write_bytes(b"\xff\x80")
+            with patch.object(auto_publish, "PROJECT_ROOT", str(root)), \
+                 patch.object(auto_publish, "WATCH_TARGETS", []):
+                first = auto_publish.compute_snapshot()
+                asset.write_bytes(b"\xfe\x80")
+                second = auto_publish.compute_snapshot()
+                self.assertNotEqual(first, second)
+                # Ordinary fixture: index differs even if worktree has returned to the tested state.
+                with patch.object(auto_publish.subprocess, "run", return_value=types.SimpleNamespace(returncode=0, stdout=b"\xff\x80")):
+                    self.assertFalse(auto_publish.staged_sources_match_snapshot(second))
+                with patch.object(auto_publish.subprocess, "run", return_value=types.SimpleNamespace(returncode=0, stdout=b"\xfe\x80")):
+                    self.assertTrue(auto_publish.staged_sources_match_snapshot(second))
+                (asset.parent / "extra.png").write_bytes(b"new")
+                self.assertNotEqual(second, auto_publish.compute_snapshot())
+        self.assertEqual(auto_publish._snapshot_digest("source.js", b"a\r\n"), auto_publish._snapshot_digest("source.js", b"a\n"))
+
 
 if __name__ == "__main__":
     unittest.main()

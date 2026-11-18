@@ -114,7 +114,7 @@ class BrowserTransferMixin:
             self.save_state()
         self.signals.browser_captured.emit({"browserTransferId": item["id"]})
         g_kbps = int((getattr(self, "settings", {}) or {}).get("globalSpeedLimitKbps") or 0)
-        rec_chunk = 512 * 1024 if g_kbps <= 0 else max(16384, min(512 * 1024, g_kbps * 1024 * 2))
+        rec_chunk = 512 * 1024 if g_kbps <= 0 else max(4096, min(512 * 1024, g_kbps * 1024 * 4))
         return {"ok": True, "transferId": token, "chunkSize": rec_chunk}
 
     def receive_browser_transfer(self, operation, payload):
@@ -123,6 +123,12 @@ class BrowserTransferMixin:
         if not record:
             raise ValueError("جلسة التنزيل انتهت. أعد المحاولة من المتصفح.")
         item, ctrl = record
+        if operation == "heartbeat":
+            with ctrl["file_lock"]:
+                if ctrl["aborted"] or item.get("status") != "downloading":
+                    raise ValueError("التنزيل اتوقف. أعد المحاولة من المتصفح.")
+                ctrl["last_activity"] = time.time()
+            return {"ok": True}
         if operation == "abort":
             # Always honoured, even after a pause/cancel, so the session and its temp file never linger
             self.fail_browser_transfer(token, "التنزيل من المتصفح انقطع. افتح الفيديو وأعد المحاولة.")
@@ -169,7 +175,7 @@ class BrowserTransferMixin:
                     raise ValueError("التنزيل اتوقف. أعد المحاولة من المتصفح.")
                 resp_obj = {"ok": True, "offset": new_offset}
                 if extra_wait > 0:
-                    resp_obj["throttleMs"] = int(min(60000.0, extra_wait * 1000.0))
+                    resp_obj["throttleMs"] = max(1, int(round(extra_wait * 1000.0)))
                 return resp_obj
         with ctrl["file_lock"]:
             ctrl["last_activity"] = time.time()

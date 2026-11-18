@@ -541,10 +541,9 @@ class DownloadCardRowDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         row = index.row()
         hover_key = getattr(self.table, "_hover_btn", None)
-        if not hover_key or hover_key[0] != row:
-            hovered_id = None
-        else:
-            hovered_id = hover_key[1]
+        hovered_id = hover_key[1] if (hover_key and hover_key[0] == row) else None
+        kbd_key = getattr(self.table, "_kbd_btn", None)
+        kbd_id = kbd_key[1] if (kbd_key and kbd_key[0] == row) else None
 
         expanded = bool(meta.get("expanded"))
         geo = _compute_card_layout(QRectF(option.rect), meta, rtl, expanded)
@@ -689,7 +688,8 @@ class DownloadCardRowDelegate(QStyledItemDelegate):
         painter.setFont(f_btn)
 
         for bid, (brect, bopts) in geo["buttons"].items():
-            is_hov = hovered_id == bid
+            is_kbd = kbd_id == bid
+            is_hov = hovered_id == bid or is_kbd
             if bid == "toggle_torrent":
                 ico = "chevron_up" if expanded else "chevron_down"
                 chevron_r = QRectF(brect.left(), brect.top(), 24.0, brect.height()) if rtl else QRectF(brect.right() - 24.0, brect.top(), 24.0, brect.height())
@@ -745,6 +745,13 @@ class DownloadCardRowDelegate(QStyledItemDelegate):
                 pm = outline_pixmap(ico_name, ico_col, 13, 2.0)
                 painter.drawPixmap(int(brect.center().x() - 6.5), int(brect.center().y() - 6.5), pm)
 
+            if is_kbd and self.table.hasFocus():
+                fp = QPainterPath()
+                fp.addRoundedRect(brect.adjusted(-2.0, -2.0, 2.0, 2.0), 9.0, 9.0)
+                painter.setPen(QPen(QColor(p["accent"]), 2.0))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPath(fp)
+
         painter.restore()
 
 
@@ -761,6 +768,82 @@ class DownloadCardTableWidget(QTableWidget):
         self._row_btn_map: dict[int, dict[str, QRectF]] = {}
         self._hover_btn: tuple[int, str] | None = None
         self._pressed_btn: tuple[int, str] | None = None
+        self._kbd_btn: tuple[int, str] | None = None
+
+    def _row_actions(self, row: int) -> list[str]:
+        # The paint cache may describe the previous state until the next frame.
+        # Keyboard commands must use the current model (e.g. pause -> resume).
+        if not (0 <= row < self.rowCount()):
+            return []
+        cell = self.item(row, 0)
+        meta = cell.data(ROLE_CARD_META) if cell else None
+        if not isinstance(meta, dict):
+            return []
+        rect = self.visualRect(self.model().index(row, 0))
+        if rect.isEmpty():
+            rect = self.viewport().rect()
+            if rect.width() <= 0:
+                rect = QRectF(0.0, 0.0, 720.0, float(_TOKENS["card_h"]))
+        rtl = self.layoutDirection() == Qt.LayoutDirection.RightToLeft
+        geo = _compute_card_layout(QRectF(rect), meta, rtl, bool(meta.get("expanded")))
+        return list(geo["buttons"].keys())
+
+    def currentChanged(self, current, previous):
+        super().currentChanged(current, previous)
+        if getattr(self, "_kbd_btn", None) is not None and self._kbd_btn[0] != current.row():
+            old_r = self._kbd_btn[0]
+            self._kbd_btn = None
+            if 0 <= old_r < self.rowCount():
+                self.viewport().update(self.visualRect(self.model().index(old_r, 0)))
+
+    def event(self, event):
+        # Main-window Return/Escape shortcuts must not steal an armed card action.
+        if (event.type() == QEvent.Type.ShortcutOverride
+                and event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape)
+                and getattr(self, "_kbd_btn", None)
+                and self._kbd_btn[0] == self.currentRow()):
+            event.accept()
+            return True
+        return super().event(event)
+
+    def keyPressEvent(self, event):
+        if event.modifiers() not in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier):
+            return super().keyPressEvent(event)
+        row = self.currentRow()
+        key = event.key()
+        if row >= 0:
+            actions = self._row_actions(row)
+            if actions and key in (Qt.Key.Key_Right, Qt.Key.Key_Left):
+                rtl = self.layoutDirection() == Qt.LayoutDirection.RightToLeft
+                step = -1 if ((key == Qt.Key.Key_Left) ^ rtl) else 1
+                cur = self._kbd_btn[1] if (self._kbd_btn and self._kbd_btn[0] == row) else None
+                if cur in actions:
+                    idx = (actions.index(cur) + step) % len(actions)
+                else:
+                    idx = 0 if step > 0 else len(actions) - 1
+                self._kbd_btn = (row, actions[idx])
+                self.viewport().update(self.visualRect(self.model().index(row, 0)))
+                event.accept()
+                return
+            if key == Qt.Key.Key_Space or (key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self._kbd_btn and self._kbd_btn[0] == row):
+                target = (
+                    self._kbd_btn[1]
+                    if (self._kbd_btn and self._kbd_btn[0] == row and self._kbd_btn[1] in actions)
+                    else (actions[0] if actions else None)
+                )
+                cell = self.item(row, 0)
+                dl_id = cell.data(Qt.ItemDataRole.UserRole) if cell else None
+                if target and dl_id:
+                    self.card_action.emit(dl_id, target)
+                    event.accept()
+                    return
+            if key == Qt.Key.Key_Escape and self._kbd_btn is not None:
+                self._kbd_btn = None
+                self.viewport().update(self.visualRect(self.model().index(row, 0)))
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def _hit_button(self, pos: QPointF) -> tuple[int, str] | None:
         idx = self.indexAt(pos.toPoint())

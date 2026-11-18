@@ -13,6 +13,11 @@
       if (readers.get(msg.readerId)?.url === msg.url) readers.delete(msg.readerId);
       return;
     }
+    if (msg.action === 'SCORPION_KEEP_MEDIA_READER') {
+      const reader = readers.get(msg.readerId);
+      if (reader && reader.url === msg.url) reader.lastActivity = Date.now();
+      return;
+    }
     if (msg.action !== 'SCORPION_READ_MEDIA_RANGE') return;
     if (location.hostname !== 'web.telegram.org' || typeof msg.requestId !== 'string' || msg.requestId.length > 64) return;
     const fail = () => window.postMessage({ action: 'SCORPION_MEDIA_RANGE_RESULT', requestId: msg.requestId,
@@ -38,7 +43,12 @@
     reader.busy = true;
     reader.lastActivity = Date.now();
     try {
-      const part = await readRange(url.href, msg.offset, msg.total, fetch);
+      const limit = Number.isFinite(msg.chunkSize) && msg.chunkSize > 0
+        ? Math.min(524288, Math.max(4096, Math.floor(msg.chunkSize)))
+        : undefined;
+      const part = limit !== undefined
+        ? await readRange(url.href, msg.offset, msg.total, fetch, limit)
+        : await readRange(url.href, msg.offset, msg.total, fetch);
       reader.total = part.total;
       reader.lastOffset = msg.offset;
       reader.nextOffset = msg.offset + part.bytes.length;

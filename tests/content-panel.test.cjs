@@ -940,3 +940,152 @@ test('floating control uses golden scorpion vector, obsidian labels, and marks t
     assert.equal(selected[0].querySelector('.scorpion-idm-opt-check').textContent, '✓');
   } finally { p.dom.window.close(); }
 });
+
+test('newly hovered frame overrides an earlier explicit frame while background play still does not', async () => {
+  const vm = require('node:vm');
+  const frames = new Map();
+  let runtimeHandler;
+  const chrome = {
+    storage: { local: { get: (_, cb) => cb({ scorpionConfig: { interceptAllDownloads: true, lang: 'en' } }), set() {} }, session: { set: async () => {}, get: async () => ({}), remove: async () => {} }, onChanged: { addListener() {} } },
+    runtime: { lastError: null, onInstalled: { addListener() {} }, onStartup: { addListener() {} }, onMessage: { addListener: (cb) => { runtimeHandler = cb; } } },
+    contextMenus: { removeAll: (cb) => cb(), create() {}, onClicked: { addListener() {} } },
+    tabs: {
+      onCreated: { addListener() {} }, onActivated: { addListener() {} }, onUpdated: { addListener() {} }, onRemoved: { addListener() {} }, onReplaced: { addListener() {} },
+      sendMessage: (_tabId, msg, opts, cb) => {
+        const fid = typeof opts === 'object' && opts ? opts.frameId : 0;
+        const fn = frames.get(fid);
+        if (fn) fn(msg, {}, cb);
+        else cb({ ok: false });
+      },
+    },
+    downloads: { onCreated: { addListener() {} }, cancel() {}, erase() {} },
+    cookies: { getAllCookieStores: async () => [], getAll: async () => [] },
+    webRequest: { onHeadersReceived: { addListener() {} }, onSendHeaders: { addListener() {} } },
+  };
+  const context = {
+    chrome,
+    ScorpionMedia: require(path.join(__dirname, '../browser-extension/media.js')),
+    importScripts() {},
+    navigator: { userAgent: 'UA', languages: ['en'] },
+    URL, AbortController, AbortSignal, setTimeout: () => 0, clearTimeout() {}, setInterval() {}, console,
+    fetch: async () => ({ ok: true, json: async () => ({ ok: true, authenticated: true }) }),
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/background.js'), 'utf8'), context);
+
+  frames.set(1, (_m, _s, cb) => cb({ ok: true }));
+  frames.set(2, (_m, _s, cb) => cb({ ok: true }));
+  runtimeHandler({ action: 'SCORPION_MARK_ACTIVE_FRAME', reason: 'explicit' }, { tab: { id: 12 }, frameId: 1 }, () => {});
+  runtimeHandler({ action: 'SCORPION_MARK_ACTIVE_FRAME', reason: 'play' }, { tab: { id: 12 }, frameId: 2 }, () => {});
+  let res = await context.dispatchMediaCommandToTab(12, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' });
+  assert.equal(res.frameId, 1);
+
+  runtimeHandler({ action: 'SCORPION_MARK_ACTIVE_FRAME', reason: 'hover' }, { tab: { id: 12 }, frameId: 2 }, () => {});
+  res = await context.dispatchMediaCommandToTab(12, { action: 'SCORPION_DOWNLOAD_CURRENT_MEDIA' });
+  assert.equal(res.frameId, 2);
+});
+
+test('reopening quality menu on the same tab queries desktop again so session changes take effect', async () => {
+  let session = 'A';
+  const calls = [];
+  const p = page(undefined, {
+    beforeContent: ({ window }) => {
+      const orig = window.chrome.runtime.sendMessage;
+      window.chrome.runtime.sendMessage = (msg, cb) => {
+        if (msg.action === 'SCORPION_LIST_QUALITIES') {
+          calls.push(session);
+          queueMicrotask(() => cb({ ok: true, qualities: [{ quality: '720p', label: `Session ${session}` }] }));
+        } else {
+          orig(msg, cb);
+        }
+      };
+    },
+  });
+  try {
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    await new Promise(setImmediate);
+    await new Promise(setImmediate);
+    assert.ok(p.panel.textContent.includes('Session A'));
+
+    session = 'B';
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    await new Promise(setImmediate);
+    await new Promise(setImmediate);
+    assert.deepEqual(calls, ['A', 'B']);
+    assert.ok(p.panel.textContent.includes('Session B'));
+  } finally { p.dom.window.close(); }
+});
+
+test('a new account menu never shares an earlier account lookup still in flight', async () => {
+  let session = 'A';
+  const pending = [];
+  const p = page(undefined, { beforeContent: ({ window }) => {
+    const orig = window.chrome.runtime.sendMessage;
+    window.chrome.runtime.sendMessage = (message, cb) => {
+      if (message.action !== 'SCORPION_LIST_QUALITIES') return orig(message, cb);
+      const account = session;
+      pending.push({ account, complete: () => cb({ ok: true, qualities: [{ quality: '720p', label: `Account ${account}` }] }) });
+    };
+  } });
+  try {
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    await new Promise(setImmediate);
+    session = 'B';
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    await new Promise(setImmediate);
+    assert.deepEqual(pending.map(x => x.account), ['A', 'B']);
+    pending[1].complete();
+    await new Promise(setImmediate);
+    assert.ok(p.panel.textContent.includes('Account B'));
+    pending[0].complete();
+    await new Promise(setImmediate);
+    assert.ok(p.panel.textContent.includes('Account B'));
+    assert.ok(!p.panel.textContent.includes('Account A'));
+  } finally { p.dom.window.close(); }
+});
+
+test('scroll selection publishes its frame while initial scan does not claim human selection', () => {
+  const p = page(undefined, { videos: [{ paused: true }] });
+  try {
+    assert.equal(p.messages.filter(m => m.action === 'SCORPION_MARK_ACTIVE_FRAME').length, 0);
+    p.window.dispatchEvent(new p.window.Event('scroll'));
+    const markers = p.messages.filter(m => m.action === 'SCORPION_MARK_ACTIVE_FRAME');
+    assert.equal(markers.at(-1).reason, 'viewport');
+  } finally { p.dom.window.close(); }
+});
+
+test('quality lookup recovers after synchronous messaging failure in authenticated and anonymous modes', async () => {
+  for (const authenticated of [true, false]) {
+    let calls = 0;
+    const p = page(undefined, { beforeContent: ({ window }) => {
+      const orig = window.chrome.runtime.sendMessage;
+      window.chrome.runtime.sendMessage = (message, cb) => {
+        if (message.action !== 'SCORPION_LIST_QUALITIES') return orig(message, cb);
+        assert.equal(message.allowCookies, authenticated);
+        calls++;
+        if (calls === 1) throw new Error('Extension context unavailable');
+        cb({ ok: true, qualities: [{ quality: '720p', label: 'Recovered' }] });
+      };
+    } });
+    try {
+      if (authenticated) {
+        p.panel.querySelector('.scorpion-idm-badge').click();
+      } else {
+        p.timers.filter(t => t.ms === 600).at(-1).fn();
+      }
+      await new Promise(setImmediate);
+      if (authenticated) {
+        p.panel.querySelector('.scorpion-idm-badge').click();
+        p.panel.querySelector('.scorpion-idm-badge').click();
+      } else {
+        delete p.video.__scorpionPrefetchedFor;
+        fire(p, p.video, 'pointerenter');
+        p.timers.filter(t => t.ms === 600).at(-1).fn();
+      }
+      await new Promise(setImmediate);
+      assert.equal(calls, 2, 'a synchronous failure must not leave a settled promise cached');
+      if (authenticated) assert.ok(p.panel.textContent.includes('Recovered'));
+    } finally { p.dom.window.close(); }
+  }
+});

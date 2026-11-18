@@ -321,3 +321,109 @@ test('transfer respects cooperative server throttleMs backpressure', async () =>
   await transfer('https://web.telegram.org/a/progressive/1', {}, request, fetcher);
   assert.ok(sentChunks > 2);
 });
+
+test('telegram-reader forwards chunkSize and transfer awaits full throttleMs above 60 seconds', async () => {
+  let listener;
+  const src = 'https://web.telegram.org/a/progressive/chunked';
+  const limits = [];
+  const window = { addEventListener: (_, cb) => { listener = cb; }, postMessage: () => {} };
+  const context = {
+    window,
+    location: { origin: 'https://web.telegram.org', hostname: 'web.telegram.org' },
+    document: { querySelectorAll: () => [{ currentSrc: src }] },
+    URL,
+    fetch: async () => {},
+    btoa,
+    ScorpionTransfer: {
+      readRange: async (_u, _off, _tot, _f, limit) => {
+        limits.push(limit);
+        return { bytes: new Uint8Array(4096), total: 4096, mime: 'video/mp4' };
+      },
+    },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/telegram-reader.js'), 'utf8'), context);
+  await listener({
+    source: window,
+    origin: context.location.origin,
+    data: { action: 'SCORPION_READ_MEDIA_RANGE', requestId: 'r1', readerId: 'rd1', url: src, offset: 0, total: 0, chunkSize: 4096 },
+  });
+  assert.deepEqual(limits, [4096]);
+
+  // Verify transfer sleeps full throttleMs (> 60000 ms) using sliced waits instead of truncating at 60s
+  const waited = [];
+  const fullSrc = fs.readFileSync(path.join(__dirname, '../browser-extension/browser-transfer.js'), 'utf8');
+  const tMod = { exports: {} };
+  const origSetTimeout = setTimeout;
+  const modCtx = {
+    module: tMod,
+    exports: tMod.exports,
+    setTimeout: (fn, ms) => { if (ms < 60000) { waited.push(ms); fn(); } return 1; },
+    AbortController,
+    clearTimeout() {},
+    Uint8Array,
+    btoa,
+    Error,
+    Math,
+    Number,
+  };
+  vm.runInNewContext(fullSrc, modCtx);
+  const fullWaitMs = 95000;
+  let heartbeats = 0;
+  const buf = Buffer.alloc(4096);
+  const fetcher = async () => new Response(buf, {
+    status: 206,
+    headers: { 'Content-Range': 'bytes 0-4095/4096', 'Content-Type': 'video/mp4' },
+  });
+  const request = async (op) => {
+    if (op === 'start') return { ok: true, transferId: 't-slow', chunkSize: 4096 };
+    if (op === 'chunk') return { ok: true, throttleMs: fullWaitMs };
+    if (op === 'heartbeat') heartbeats++;
+    return { ok: true };
+  };
+  await tMod.exports.transfer('https://web.telegram.org/a/progressive/1', {}, request, fetcher);
+  assert.ok(waited.length > 1);
+  assert.equal(waited.reduce((a, b) => a + b, 0), fullWaitMs);
+  assert.equal(heartbeats, 19);
+});
+
+test('initial transfer read is small and cancellation is observed during long backpressure', async () => {
+  const context = { module: { exports: {} }, Uint8Array, Number, Math, Error, btoa,
+    setTimeout: (fn) => { fn(); return 1; }, clearTimeout() {}, AbortController };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/browser-transfer.js'), 'utf8'), context);
+  const limits = [], calls = [];
+  const reader = async (_url, _offset, _total, _fetcher, limit) => {
+    limits.push(limit);
+    return { bytes: new Uint8Array(4096), total: 4096, mime: 'video/mp4' };
+  };
+  const request = async (op) => {
+    calls.push(op);
+    if (op === 'start') return { ok: true, transferId: 'cancelled', chunkSize: 4096 };
+    if (op === 'chunk') return { ok: true, throttleMs: 500000 };
+    if (op === 'heartbeat') return { ok: false, error: 'cancelled' };
+    return { ok: true };
+  };
+  await assert.rejects(context.module.exports.transfer('https://web.telegram.org/a/progressive/v', {},
+    request, () => {}, () => {}, reader), /cancelled/);
+  assert.deepEqual(limits, [4096]);
+  assert.deepEqual(calls, ['start', 'chunk', 'heartbeat', 'abort']);
+});
+
+test('bound Telegram reader survives long throttle only with matching reader heartbeats', async () => {
+  let listener, now = 0;
+  const source = 'https://web.telegram.org/a/progressive/heartbeat';
+  const replies = [];
+  const window = { addEventListener: (_, cb) => { listener = cb; }, postMessage: (v) => replies.push(v) };
+  const context = { window, Date: { now: () => now }, location: { origin: 'https://web.telegram.org', hostname: 'web.telegram.org' },
+    document: { querySelectorAll: () => [{ currentSrc: source }] }, URL, fetch: () => {}, btoa,
+    ScorpionTransfer: { readRange: async (_url, offset) => ({ bytes: new Uint8Array(4096), total: 16384, mime: 'video/mp4' }) } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/telegram-reader.js'), 'utf8'), context);
+  const send = async (action, extra = {}) => listener({ source: window, origin: context.location.origin,
+    data: { action, readerId: 'reader', url: source, ...extra } });
+  await send('SCORPION_READ_MEDIA_RANGE', { requestId: 'first', offset: 0, total: 0 });
+  for (now = 5000; now <= 500000; now += 5000) await send('SCORPION_KEEP_MEDIA_READER');
+  await send('SCORPION_READ_MEDIA_RANGE', { requestId: 'second', offset: 4096, total: 16384 });
+  assert.ok(replies.find(r => r.requestId === 'second').part);
+  now += 181000;
+  await send('SCORPION_READ_MEDIA_RANGE', { requestId: 'expired', offset: 8192, total: 16384 });
+  assert.ok(replies.find(r => r.requestId === 'expired').error);
+});

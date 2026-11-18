@@ -1348,11 +1348,30 @@
     }
   }
 
-  // Qualities per address, strictly partitioned by cookie/auth mode so anonymous prefetches never read auth results
+  // Anonymous prefetches share a short cache; authenticated lookups always consult the desktop
+  // engine so same-tab session switches pick up updated cookie-scoped qualities immediately.
   const qualityCache = new Map();
   function listQualities(url, referer, candidates, allowCookies = false) {
     const baseKey = `${url}|${(candidates || []).join(',')}`;
-    const modeKey = `${allowCookies ? 'auth' : 'anon'}|${baseKey}`;
+    const sendLookup = (onDone) => {
+      try {
+        chrome.runtime.sendMessage(
+          { action: 'SCORPION_LIST_QUALITIES', url, referer, candidates: candidates || [], strictTarget: true, allowCookies },
+          (res) => {
+            const valid = Boolean(!chrome.runtime.lastError && res && res.ok && Array.isArray(res.qualities) && res.qualities.length > 0);
+            onDone(valid, chrome.runtime.lastError ? null : res);
+          }
+        );
+      } catch (_) {
+        onDone(false, null);
+      }
+    };
+    if (allowCookies) {
+      // An earlier in-flight request may already carry another account's cookies.
+      // Each new menu must resolve its own current session, even on the same URL.
+      return new Promise((resolve) => sendLookup((_valid, res) => resolve(res)));
+    }
+    const modeKey = `anon|${baseKey}`;
     if (!qualityCache.has(modeKey)) {
       if (qualityCache.size >= 32) {
         qualityCache.delete(qualityCache.keys().next().value);
@@ -1360,21 +1379,10 @@
       qualityCache.set(
         modeKey,
         new Promise((resolve) => {
-          try {
-            chrome.runtime.sendMessage(
-              { action: 'SCORPION_LIST_QUALITIES', url, referer, candidates: candidates || [], strictTarget: true, allowCookies },
-              (res) => {
-                const list = res && Array.isArray(res.qualities) ? res.qualities : [];
-                if (chrome.runtime.lastError || !res || !res.ok || list.length === 0) {
-                  qualityCache.delete(modeKey);
-                }
-                resolve(chrome.runtime.lastError ? null : res);
-              }
-            );
-          } catch (_) {
-            qualityCache.delete(modeKey);
-            resolve(null);
-          }
+          queueMicrotask(() => sendLookup((valid, res) => {
+            if (!valid) qualityCache.delete(modeKey);
+            resolve(res);
+          }));
         })
       );
     }
@@ -1414,6 +1422,9 @@
       }
       if (activeTransfers.has(src)) return true; // Already accepted; do not create a duplicate.
       const request = (operation, data) => new Promise((resolve, reject) => {
+        if (operation === 'heartbeat') window.postMessage({
+          action: 'SCORPION_KEEP_MEDIA_READER', readerId, url: src,
+        }, location.origin);
         chrome.runtime.sendMessage({ action: 'SCORPION_BROWSER_TRANSFER', operation, payload: data }, (res) => {
           if (chrome.runtime.lastError || !res) reject(new Error('الاتصال بالبرنامج انقطع. أعد المحاولة.'));
           else resolve(res);
@@ -1424,7 +1435,7 @@
       ScorpionTransfer.transfer(src, {
         filename: payload.filename || `${payload.title || (isAudio ? 'Telegram_Audio' : 'Telegram_Video')}.${isAudio ? 'ogg' : 'mp4'}`,
         pageUrl: location.href, expectedDuration: payload.expectedDuration, isAudio,
-      }, request, fetch, () => {}, (url, offset, total) => readTelegramPageRange(url, offset, total, readerId))
+      }, request, fetch, () => {}, (url, offset, total, _fetcher, chunkSize) => readTelegramPageRange(url, offset, total, readerId, chunkSize))
         .catch(() => reportError('transfer'))
         .finally(() => {
           activeTransfers.delete(src);
@@ -1451,7 +1462,7 @@
     return true;
   }
 
-  function readTelegramPageRange(url, offset, total, readerId) {
+  function readTelegramPageRange(url, offset, total, readerId, chunkSize) {
     return new Promise((resolve, reject) => {
       const requestId = crypto.randomUUID();
       const finish = (error, result) => {
@@ -1477,7 +1488,7 @@
       };
       const timer = setTimeout(() => finish(new Error('تعذر الاتصال بمشغّل تليجرام. حدّث الإضافة وأعد تحميل الصفحة.')), 95000);
       window.addEventListener('message', listener);
-      window.postMessage({ action: 'SCORPION_READ_MEDIA_RANGE', requestId, readerId, url, offset, total }, location.origin);
+      window.postMessage({ action: 'SCORPION_READ_MEDIA_RANGE', requestId, readerId, url, offset, total, chunkSize }, location.origin);
     });
   }
 
@@ -1582,7 +1593,7 @@
     selectionReason = reason;
     activeMode = isAud ? 'audio' : 'video';
     positionPanelOverMedia(media);
-    if (reason === 'hover' || reason === 'play' || reason === 'explicit') {
+    if (reason === 'hover' || reason === 'play' || reason === 'explicit' || reason === 'viewport') {
       try {
         chrome.runtime.sendMessage({ action: 'SCORPION_MARK_ACTIVE_FRAME', reason }, () => void chrome.runtime.lastError);
       } catch (_) {}
@@ -1637,7 +1648,7 @@
     activeSource = '';
     hidePanel();
     const next = chooseVisibleMedia();
-    if (next) activateMediaElement(next, 'viewport');
+    if (next) activateMediaElement(next, reason === 'viewport' ? 'viewport' : 'scan');
   }
 
   document.addEventListener(

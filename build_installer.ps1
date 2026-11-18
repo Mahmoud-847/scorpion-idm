@@ -149,6 +149,19 @@ for rel in ("native_app/scorpion_qt.py", "native_app/sitecustomize.py", "native_
     with open(os.path.join(root, rel), "rb") as sf:
         src_hash.update(sf.read())
 
+ext_hash = hashlib.sha256()
+ext_stage = os.path.join(root, "native_app", "_build", "ext_pkg")
+for base, dirs, files in os.walk(ext_stage):
+    dirs.sort()
+    for name in sorted(files):
+        if name == "bridge-auth.json":
+            continue
+        fp = os.path.join(base, name)
+        rel = os.path.relpath(fp, ext_stage).replace(os.sep, "/")
+        ext_hash.update((rel + "\0").encode("utf-8"))
+        with open(fp, "rb") as ef:
+            ext_hash.update(ef.read())
+
 h = sq.CHANGELOG_HISTORY[0]
 pack = os.path.join(out, "Scorpion-Tools.zip")
 m = {
@@ -157,6 +170,7 @@ m = {
     "packageFile": "Scorpion-Update-Payload.zip",
     "sha256": sha256(os.path.join(out, "Scorpion-Update-Payload.zip")),
     "sourceSha256": src_hash.hexdigest(),
+    "extensionSha256": ext_hash.hexdigest(),
     "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
     "title_ar": h["title_ar"],
     "title_en": h["title_en"],

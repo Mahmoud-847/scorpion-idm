@@ -199,7 +199,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.27"
+APP_VERSION = "2.1.28"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -467,7 +467,71 @@ def load_or_create_bridge_token(app_data_dir: str = "") -> str:
     return val
 
 
-def _discover_unpacked_extension_origins() -> list:
+_EXTENSION_HASH_FILES = (
+    "manifest.json",
+    "background.js",
+    "content.js",
+    "popup.js",
+    "media.js",
+    "browser-transfer.js",
+    "telegram-reader.js",
+)
+
+
+def _canon_ext_dir(path: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def _ext_dir_matches_reference(candidate_dir: str, ref_dir: str) -> bool:
+    if not candidate_dir or not ref_dir or not os.path.isdir(candidate_dir) or os.path.islink(candidate_dir):
+        return False
+    def fingerprint(folder):
+        entries = {}
+        for base, dirs, files in os.walk(folder):
+            if any(os.path.islink(os.path.join(base, d)) for d in dirs):
+                raise OSError("Linked extension directory")
+            for name in files:
+                if name == "bridge-auth.json":
+                    continue
+                path = os.path.join(base, name)
+                if os.path.islink(path):
+                    raise OSError("Linked extension file")
+                with open(path, "rb") as stream:
+                    entries[os.path.relpath(path, folder)] = hashlib.sha256(stream.read()).hexdigest()
+        return entries
+    try:
+        reference = fingerprint(ref_dir)
+        return bool(reference and "manifest.json" in reference and fingerprint(candidate_dir) == reference)
+    except OSError:
+        return False
+
+
+def _trusted_local_extension_dirs(ext_source_dir: str = "") -> set:
+    trusted = set()
+    ref_dir = ""
+    candidates = []
+    if ext_source_dir:
+        candidates.append(ext_source_dir)
+    if RESOURCE_ROOT:
+        candidates.append(os.path.join(RESOURCE_ROOT, "browser-extension"))
+    proj_ext = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "browser-extension")
+    candidates.append(proj_ext)
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local:
+        candidates.append(os.path.join(local, "ScorpionIDM", "browser-extension"))
+        candidates.append(os.path.join(local, "Programs", "ScorpionIDM", "browser-extension"))
+    for p in candidates:
+        if p and os.path.isdir(p) and not os.path.islink(p):
+            trusted.add(_canon_ext_dir(p))
+            if not ref_dir and os.path.isfile(os.path.join(p, "manifest.json")):
+                ref_dir = p
+    dl_ext = os.path.join(os.path.expanduser("~"), "Downloads", "Scorpion-Browser-Extension")
+    if ref_dir and _ext_dir_matches_reference(dl_ext, ref_dir):
+        trusted.add(_canon_ext_dir(dl_ext))
+    return trusted
+
+
+def _discover_unpacked_extension_origins(ext_source_dir: str = "") -> list:
     import glob
 
     origins = [f"chrome-extension://{OFFICIAL_EXTENSION_ID}/"]
@@ -475,6 +539,9 @@ def _discover_unpacked_extension_origins() -> list:
         return origins
     local = os.environ.get("LOCALAPPDATA", "")
     if not local:
+        return origins
+    trusted_dirs = _trusted_local_extension_dirs(ext_source_dir)
+    if not trusted_dirs:
         return origins
     for rel in ("Microsoft/Edge/User Data", "Google/Chrome/User Data", "BraveSoftware/Brave-Browser/User Data"):
         base = os.path.join(local, rel)
@@ -486,9 +553,10 @@ def _discover_unpacked_extension_origins() -> list:
                     for ext_id, info in settings.items():
                         if not isinstance(info, dict) or not re.fullmatch(r"[a-p]{32}", str(ext_id or "")):
                             continue
-                        ext_p = str(info.get("path") or "").lower()
-                        ext_n = str(((info.get("manifest") or {}).get("name")) or "").lower()
-                        if "scorpion" in ext_p or "scorpion" in ext_n:
+                        raw_path = str(info.get("path") or "").strip()
+                        if not raw_path or not os.path.isdir(raw_path) or os.path.islink(raw_path):
+                            continue
+                        if _canon_ext_dir(raw_path) in trusted_dirs:
                             orig = f"chrome-extension://{ext_id}/"
                             if orig not in origins:
                                 origins.append(orig)
@@ -539,6 +607,26 @@ def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool
 
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.28",
+        "date": "2026-11-18",
+        "title_ar": "الإصدار 2.1.28 — تأمين استكمال الفيديو متعدد المنافذ ودعم الوصول الشامل وضبط السرعات المنخفضة",
+        "title_en": "Version 2.1.28 — Multi-Port Video Resume Validation, Card Accessibility & Low-Rate Precision",
+        "ar": [
+            "إلزام مطابقة محددات الهوية القوية (ETag / Last-Modified) في محرك استكمال الفيديو متعدد المنافذ لمنع خلط النسخ عند تغير الملف على الخادم.",
+            "تحديث فوري لاختيار إطار الفيديو عند تمرير المؤشر بعد الأوامر الصريحة، وعزل فوري لكاش جودات الفيديو عند تبديل الحساب في نفس التبويب.",
+            "دعم كامل لقارئات الشاشة وأسماء الوصول والتنقل بأسهم لوحة المفاتيح بين أزرار بطاقات التحميل المكدسة.",
+            "ضبط دقيق لمحدد السرعة عند الحدود المنخفضة لنقل المتصفح والتورنت، وفصل نجاح تثبيت ملفات التحديث عن فشل إعادة التشغيل التلقائي.",
+            "تشديد التحقق من المسارات الموثوقة وبصمة SHA-256 للإضافات المحلية، وتجميد لقطة المصدر المختبرة حتى إتمام النشر.",
+        ],
+        "en": [
+            "Enforce strong ETag / Last-Modified entity validation across 16-port video range resumes and mid-stream responses to prevent cross-version splicing.",
+            "Allow subsequent pointer hovers to override earlier explicit frame selections immediately, and refresh authenticated quality lookups across same-tab session switches.",
+            "Expose full screen-reader accessible text/descriptions and Left/Right/Space/Enter keyboard action navigation on stacked download cards.",
+            "Preserve exact bandwidth debt and small chunk negotiation at low speed limits across browser transfers and torrents, and separate update file commit from relaunch failure.",
+            "Restrict local unpacked extension origin allowlisting and token provisioning strictly to canonical/SHA-256-verified Scorpion directories, and lock the tested source snapshot through git commit.",
+        ],
+    },
     {
         "version": "2.1.27",
         "date": "2026-11-17",
@@ -2931,13 +3019,20 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     ensure_app_shortcuts(self.settings)
             except Exception:
                 pass
+            launched = False
+            launch_err = ""
             try:
                 if os.path.exists(exe_path):
                     subprocess.Popen([exe_path], cwd=install_dir)
+                    launched = True
                     if hasattr(self, "signals"):
                         self.signals.quit_requested.emit()
-            except Exception:
-                pass
+                else:
+                    launch_err = "executable missing"
+            except Exception as exc:
+                launch_err = str(exc)
+            if not launched:
+                return True, f"installed_restart_failed:{launch_err}"
             return True, "restarting"
 
     def _apply_install_prefs(self):
@@ -3018,27 +3113,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         )
         if not is_isolated_temp:
             dl_ext = os.path.join(os.path.expanduser("~"), "Downloads", "Scorpion-Browser-Extension")
-            if os.path.isdir(dl_ext):
+            if _canon_ext_dir(dl_ext) in _trusted_local_extension_dirs(self.ext_source_dir):
                 candidate_dirs.append(dl_ext)
-            if os.name == "nt":
-                import glob
-
-                local = os.environ.get("LOCALAPPDATA", "")
-                if local:
-                    for rel in ("Microsoft/Edge/User Data", "Google/Chrome/User Data", "BraveSoftware/Brave-Browser/User Data"):
-                        for pat in (os.path.join(local, rel, "*", "Preferences"), os.path.join(local, rel, "*", "Secure Preferences")):
-                            for pref_p in glob.glob(pat):
-                                try:
-                                    with open(pref_p, "r", encoding="utf-8", errors="ignore") as pf:
-                                        st = (json.load(pf).get("extensions") or {}).get("settings") or {}
-                                    for _eid, info in st.items():
-                                        if not isinstance(info, dict):
-                                            continue
-                                        ep = str(info.get("path") or "")
-                                        if ep and os.path.isdir(ep) and "scorpion" in ep.lower():
-                                            candidate_dirs.append(ep)
-                                except Exception:
-                                    pass
 
         seen_dirs = set()
         tok = getattr(self, "bridge_token", "")
@@ -3989,9 +4065,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
     def _global_budget_split(self) -> tuple:
         """Divide globalSpeedLimitKbps cleanly between active torrents (aria2c) and native/video/browser tasks."""
-        global_limit = int(self.settings.get("globalSpeedLimitKbps") or 0)
+        global_limit = float(self.settings.get("globalSpeedLimitKbps") or 0)
         if global_limit <= 0:
-            return 0, 0
+            return 0.0, 0.0
         ctrls = dict(self.controllers or {})
         downloads = self.downloads or {}
         torrent_ids = []
@@ -4003,14 +4079,20 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             else:
                 other_ids.append(did)
         if not torrent_ids:
-            return 0, global_limit
+            return 0.0, global_limit
         total_active = max(1, len(torrent_ids) + len(other_ids))
-        share = max(1, global_limit // total_active)
-        reserved = 0
+        share = global_limit / float(total_active)
+        reserved = 0.0
         for tid in torrent_ids:
-            it_lim = int((downloads.get(tid) or {}).get("speedLimitKbps") or 0)
+            it_lim = float((downloads.get(tid) or {}).get("speedLimitKbps") or 0)
             reserved += min(share, it_lim) if it_lim > 0 else share
-        non_torrent_budget = max(1, global_limit - reserved) if other_ids else global_limit
+        if other_ids:
+            non_torrent_budget = max(0.0, global_limit - reserved)
+            if non_torrent_budget <= 0.0:
+                non_torrent_budget = global_limit / float(total_active)
+                share = max(0.0, (global_limit - non_torrent_budget) / max(1, len(torrent_ids)))
+        else:
+            non_torrent_budget = global_limit
         return share, non_torrent_budget
 
     def _consume_token_bucket(
@@ -4043,8 +4125,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 deficit = step - b["tokens"]
                 wait_s = min(0.05, max(0.005, deficit / rate_bps))
                 if max_wait_s is not None and (now - started_at) + wait_s > max_wait_s:
-                    needed_s = max(0.0, (remaining - max(0.0, b["tokens"])) / rate_bps)
-                    b["tokens"] = 0.0
+                    unpaid = max(0.0, remaining - b["tokens"])
+                    needed_s = unpaid / rate_bps
+                    b["tokens"] = -unpaid
                     b["ts"] = now
                     return needed_s
             time.sleep(wait_s)
@@ -5113,8 +5196,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             except Exception:
                 pass
 
-    def _probe_video_stream_range(self, url: str, headers: dict, fallback_size: int = 0, cookies=None) -> tuple:
-        """Verify HTTP 206 Range support and return (exact_size, supports_range) for a video stream."""
+    def _probe_video_stream_meta(self, url: str, headers: dict, fallback_size: int = 0, cookies=None) -> tuple:
+        """Verify HTTP 206 Range support and return (exact_size, supports_range, strong_etag, last_modified, raw_etag)."""
         try:
             h = dict(headers or {})
             h["Range"] = "bytes=0-0"
@@ -5124,15 +5207,23 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 status = r.status_code
                 cr = r.headers.get("Content-Range", "")
                 cl = r.headers.get("Content-Length", "")
+                raw_etag = (r.headers.get("ETag") or "").strip()
+                last_mod = (r.headers.get("Last-Modified") or "").strip()
                 r.close()
+            strong_etag = "" if (not raw_etag or raw_etag[:2].upper() == "W/") else raw_etag
             match = re.fullmatch(r"bytes 0-0/(\d+)", cr.strip())
             if status == 206 and match and int(match[1]) > 0:
-                return int(match[1]), True
+                return int(match[1]), True, strong_etag, last_mod, raw_etag
             if status == 200 and cl.isdigit() and int(cl) > 0:
-                return int(cl), False
+                return int(cl), False, strong_etag, last_mod, raw_etag
         except Exception:
             pass
-        return fallback_size, False
+        return fallback_size, False, "", "", ""
+
+    def _probe_video_stream_range(self, url: str, headers: dict, fallback_size: int = 0, cookies=None) -> tuple:
+        """Verify HTTP 206 Range support and return (exact_size, supports_range) for a video stream."""
+        sz, ok, _et, _lm, _raw = self._probe_video_stream_meta(url, headers, fallback_size, cookies)
+        return sz, ok
 
     def _alloc_video_segments(self, stream_specs: list, port_alloc: list):
         """Create empty part files and split each stream into byte-range segments. Returns None on failure."""
@@ -5217,8 +5308,12 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 hdrs.update(f["http_headers"])
 
             approx = int(f.get("filesize") or f.get("filesize_approx") or 0)
-            exact_sz, ok_range = self._probe_video_stream_range(s_url, hdrs, approx, cookiejar)
+            exact_sz, ok_range, strong_etag, last_mod, raw_etag = self._probe_video_stream_meta(s_url, hdrs, approx, cookiejar)
             if not ok_range or exact_sz <= 0:
+                return False
+            # Independent range requests cannot establish a single entity without a
+            # comparable validator. Let the single-stream extractor handle this source.
+            if not strong_etag and (raw_etag or not last_mod):
                 return False
 
             vcodec, acodec = f.get("vcodec"), f.get("acodec")
@@ -5240,6 +5335,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 "url": s_url,
                 "headers": hdrs,
                 "size": exact_sz,
+                "etag": strong_etag,
+                "rawEtag": raw_etag,
+                "lastModified": last_mod,
                 "kind": kind,
                 "ext": ext,
                 "partPath": part_path,
@@ -5254,11 +5352,44 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             audio_ports = max(2, total_ports // 8)
             port_alloc = [max(4, total_ports - audio_ports), audio_ports]
 
-        # Resume support: reuse the previous layout if the same streams (same sizes) and part files are still there
+        def _pair_validator_matches(sp: dict, sv_etag: str, sv_lm: str) -> bool:
+            if (sp.get("rawEtag") or "")[:2].upper() == "W/":
+                return False
+            if not sv_etag and not sv_lm:
+                return False
+            if sv_etag:
+                return bool(sp.get("etag") and sp["etag"] == sv_etag)
+            if sp.get("rawEtag"):
+                return False
+            return bool(sp.get("lastModified") and sp["lastModified"] == sv_lm)
+
+        def _validators_match() -> bool:
+            saved_vals = item.get("videoValidators")
+            if isinstance(saved_vals, list) and len(saved_vals) == len(stream_specs):
+                for sp, sv in zip(stream_specs, saved_vals):
+                    if not isinstance(sv, dict):
+                        return False
+                    if not _pair_validator_matches(
+                        sp,
+                        (sv.get("etag") or "").strip(),
+                        (sv.get("lastModified") or "").strip(),
+                    ):
+                        return False
+                return True
+            if len(stream_specs) == 1 and ((item.get("etag") or "").strip() or (item.get("lastModified") or "").strip()):
+                return _pair_validator_matches(
+                    stream_specs[0],
+                    (item.get("etag") or "").strip(),
+                    (item.get("lastModified") or "").strip(),
+                )
+            return False
+
+        # Resume support: reuse the previous layout only when validators, sizes, and part files match
         layout_sig = [[sp["idx"], sp["size"], n] for sp, n in zip(stream_specs, port_alloc)]
         prev_segs = item.get("segments") or []
         can_resume = (
             item.get("videoLayout") == layout_sig
+            and _validators_match()
             and prev_segs
             and all("streamIdx" in s and "localCur" in s for s in prev_segs)
             and all(
@@ -5296,6 +5427,10 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 return False
             item["segments"] = new_segs
             item["videoLayout"] = layout_sig
+            item["videoValidators"] = [{"etag": sp["etag"], "lastModified": sp["lastModified"]} for sp in stream_specs]
+            if len(stream_specs) == 1:
+                item["etag"] = stream_specs[0]["etag"]
+                item["lastModified"] = stream_specs[0]["lastModified"]
             item["totalSize"] = sum(sp["size"] for sp in stream_specs)
             item["downloadedBytes"] = 0
             item["supportsRange"] = True
@@ -5306,11 +5441,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             ctrl["video_stream_files"] = [sp["fh"] for sp in stream_specs]
             self.save_state()
 
+        entity_mismatch = threading.Event()
+
         def port_worker(seg: dict, sp: dict):
             is_yt_cdn = "googlevideo.com" in sp["url"].lower()
             block_size = 4 * 1024 * 1024  # 4 MB range blocks bypass YouTube single-stream throttling
             retries = 0
-            while seg["localCur"] <= seg["localEnd"] and not ctrl["aborted"]:
+            while seg["localCur"] <= seg["localEnd"] and not ctrl["aborted"] and not entity_mismatch.is_set():
                 req_start = seg["localCur"]
                 req_end = min(seg["localEnd"], req_start + block_size - 1) if is_yt_cdn else seg["localEnd"]
                 hdrs = dict(sp["headers"])
@@ -5322,6 +5459,15 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                             content_range = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", resp.headers.get("Content-Range", "").strip())
                             if resp.status_code != 206 or not content_range or tuple(map(int, content_range.groups())) != (req_start, req_end, sp["size"]):
                                 raise RuntimeError("The server returned the wrong byte range")
+                            resp_etag = (resp.headers.get("ETag") or "").strip()
+                            resp_lm = (resp.headers.get("Last-Modified") or "").strip()
+                            if (sp.get("etag") and resp_etag != sp["etag"]) or (
+                                not sp.get("etag") and sp.get("lastModified") and resp_lm != sp["lastModified"]
+                            ):
+                                entity_mismatch.set()
+                                seg["status"] = "error"
+                                seg["info"] = "Entity changed"
+                                return
                             before = seg["localCur"]
                             for chunk in resp.iter_content(chunk_size=65536):
                                 if ctrl["aborted"]:
@@ -5381,7 +5527,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         if ctrl["aborted"]:
             return True
 
-        if any(s["status"] != "completed" for s in new_segs):
+        if entity_mismatch.is_set() or any(s["status"] != "completed" for s in new_segs):
             # Clean up partial files and fall back to yt-dlp if any range worker failed permanently
             for sp in stream_specs:
                 try:
@@ -5389,6 +5535,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         os.remove(sp["partPath"])
                 except Exception:
                     pass
+            item["downloadedBytes"] = 0
+            item.pop("videoValidators", None)
+            item.pop("videoLayout", None)
             item["useRangeVideoEngine"] = False
             return False
 
@@ -5869,11 +6018,11 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 raise RuntimeError("Could not register torrent download")
 
             files_resolved = False
-            def effective_limit() -> int:
-                per_item = int(item.get("speedLimitKbps") or 0)
+            def effective_limit_bps() -> int:
+                per_item = float(item.get("speedLimitKbps") or 0)
                 shared_glob, _ = self._global_budget_split()
                 lims = [x for x in (per_item, shared_glob) if x > 0]
-                return min(lims) if lims else 0
+                return max(1, int(round(min(lims) * 1024.0))) if lims else 0
 
             last_limit = -1
             while not ctrl["aborted"]:
@@ -5881,13 +6030,13 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 if ctrl["aborted"]:
                     break
 
-                cur_limit = effective_limit()
+                cur_limit = effective_limit_bps()
                 if cur_limit != last_limit:
                     last_limit = cur_limit
                     try:
                         rpc_call(
                             "aria2.changeGlobalOption",
-                            [{"max-overall-download-limit": f"{cur_limit}K" if cur_limit > 0 else "0"}],
+                            [{"max-overall-download-limit": str(cur_limit) if cur_limit > 0 else "0"}],
                         )
                     except Exception:
                         pass
@@ -7886,10 +8035,18 @@ class UpdateDialog(QDialog):
         self.btn_check.setEnabled(True)
         if ok:
             self.prog_bar.setValue(100)
-            self.lbl_prog.setText(
-                self.T("✅ اكتمل التحديث! جاري إعادة تشغيل البرنامج الآن...", "✅ Update complete! Restarting now...")
-            )
-            QTimer.singleShot(400, self.accept)
+            if str(msg or "").startswith("installed_restart_failed"):
+                self.lbl_prog.setText(
+                    self.T(
+                        "⚠️ اكتمل تثبيت التحديث بنجاح، لكن تعذّر إعادة التشغيل تلقائياً. أعد تشغيل البرنامج يدوياً.",
+                        "⚠️ Update installed successfully, but automatic restart failed. Please restart Scorpion IDM manually.",
+                    )
+                )
+            else:
+                self.lbl_prog.setText(
+                    self.T("✅ اكتمل التحديث! جاري إعادة تشغيل البرنامج الآن...", "✅ Update complete! Restarting now...")
+                )
+                QTimer.singleShot(400, self.accept)
         else:
             self.lbl_prog.setText(self.T(f"❌ تعذر التحديث: {msg}", f"❌ Update failed: {msg}"))
 
@@ -10125,7 +10282,7 @@ class ScorpionMainWindow(QMainWindow):
             err_msg = (it.get("errorMsg") or "").strip() if st_val == "error" else ""
             is_tor = bool(it.get("isTorrent"))
             expanded = is_tor and (dl_id in self._expanded_torrents) and mode != "done"
-            t_peers = int(it.get("torrentPeers") or 0) if is_tor else 0
+            t_peers = int(it.get("torrentPeers") or it.get("peers") or 0) if is_tor else 0
             segs = it.get("segments") or []
             conn_n = int(it.get("connections") or len(segs) or 0)
             t_files_cnt = len(it.get("torrentFiles") or []) if expanded else 0
@@ -10213,6 +10370,14 @@ class ScorpionMainWindow(QMainWindow):
             cell0.setData(ROLE_PCT, float(pct))
             cell0.setData(ROLE_MODE, mode)
             cell0.setData(ROLE_CARD_META, meta)
+            disp_txt = f"{raw_name} — {stats_line}" if stats_line else raw_name
+            acc_desc = " | ".join(x for x in (size_line, stats_line, err_short) if x and x != "—")
+            if cell0.text() != disp_txt:
+                cell0.setText(disp_txt)
+            if cell0.data(Qt.ItemDataRole.AccessibleTextRole) != disp_txt:
+                cell0.setData(Qt.ItemDataRole.AccessibleTextRole, disp_txt)
+            if cell0.data(Qt.ItemDataRole.AccessibleDescriptionRole) != acc_desc:
+                cell0.setData(Qt.ItemDataRole.AccessibleDescriptionRole, acc_desc)
             tip_val = f"{file_path}\n{err_short}" if err_short else file_path
             if cell0.toolTip() != tip_val:
                 cell0.setToolTip(tip_val)

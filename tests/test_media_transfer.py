@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import struct
 import sys
 import tempfile
 import threading
@@ -51,6 +52,7 @@ def media_server(video, wrong_range=False, missing_fragment=False):
                     body = video
                     self.send_response(200)
                 self.send_header("Content-Type", "video/mp4")
+                self.send_header("ETag", '"stable-fixture"')
             elif self.path == "/index.m3u8":
                 body = b"#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:3,\nmissing.ts\n#EXT-X-ENDLIST\n"
                 self.send_response(200)
@@ -109,6 +111,78 @@ class MediaRegressionTests(unittest.TestCase):
         return self.engine.receive_browser_transfer("chunk", {
             "transferId": token, "offset": offset, "data": base64.b64encode(self.data if data is None else data).decode(),
         })
+
+    def test_browser_backpressure_heartbeat_preserves_live_session_but_not_abandoned_one(self):
+        token, item = self.start_transfer()
+        ctrl = self.engine._browser_transfers[token][1]
+        ctrl['last_activity'] = 0
+        for now in range(5, 505, 5):
+            with patch('media_transfer.time.time', return_value=now):
+                self.assertTrue(self.engine.receive_browser_transfer('heartbeat', {'transferId': token})['ok'])
+                self.engine.expire_browser_transfers()
+                self.assertIn(token, self.engine._browser_transfers)
+        with patch('media_transfer.time.time', return_value=700):
+            self.engine.expire_browser_transfers()
+        self.assertNotIn(token, self.engine._browser_transfers)
+        with self.assertRaises(ValueError):
+            self.engine.receive_browser_transfer('heartbeat', {'transferId': token})
+
+    def test_real_playable_video_entity_changes_restart_or_reject_mixed_output(self):
+        # Both entities remain valid MP4s: ffprobe alone cannot detect their mixed free-box data.
+        box = struct.pack('>I', 65544) + b'free'
+        old = self.data + box + b'A' * 65536
+        new = self.data + box + b'B' * 65536
+        cut = len(self.data) + 8 + 32768
+        mode = ['changed']
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_GET(self):
+                start, end = map(int, self.headers['Range'][6:].split('-'))
+                self.send_response(206)
+                self.send_header('Content-Range', f'bytes {start}-{end}/{len(new)}')
+                self.send_header('Content-Length', str(end-start+1))
+                if mode[0] != 'missing':
+                    self.send_header('ETag', '"v1"' if mode[0] == 'during-read' and start == end == 0 else '"v2"')
+                self.end_headers()
+                self.wfile.write(new[start:end+1])
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            for case in ('changed', 'missing', 'during-read'):
+                with self.subTest(case=case):
+                    mode[0] = case
+                    folder = Path(self.temp.name) / case
+                    engine = engine_at(folder)
+                    url = f'http://127.0.0.1:{server.server_port}/video.mp4'
+                    item = engine.add_download(dict(url=url, filename='sample.mp4', isVideo=True,
+                        totalSize=len(new), connections=8, startImmediately=False, etag='"v1"'))
+                    part = Path(engine.get_item_temp_dir(item['id'])) / 'stream0.mp4.part'
+                    part.write_bytes(old[:cut] + b'\0' * (len(old)-cut))
+                    item.update(videoLayout=[[0,len(new),8]], downloadedBytes=cut,
+                        segments=[dict(id=1, streamIdx=0, localStart=0, localCur=cut, localEnd=len(new)-1,
+                            downloaded=cut,currentByte=cut,startByte=0,endByte=len(new)-1,status='paused')])
+                    ctrl = {'aborted':False}
+                    engine.controllers[item['id']] = ctrl
+                    handled = engine._download_video_streams_16ports(item,ctrl,
+                        [dict(url=url,protocol='http',ext='mp4',vcodec='h264',acodec='none',filesize=len(new))],
+                        str(folder/'result'),'',False,'best')
+                    if case in ('during-read', 'missing'):
+                        self.assertFalse(handled)
+                        self.assertNotIn('_videoOutput',item)
+                        if case == 'during-read':
+                            self.assertFalse(part.exists())
+                        else:
+                            self.assertEqual(part.read_bytes(),old[:cut]+b'\0'*(len(old)-cut))
+                    else:
+                        self.assertTrue(handled)
+                        output=Path(item['_videoOutput'])
+                        self.assertEqual(output.read_bytes(),new)
+                        self.assertGreater(validate_media(str(output),sq.find_tool('ffprobe'),3),0)
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_telegram_page_never_extracts_site_animation(self):
         extractor = Mock()

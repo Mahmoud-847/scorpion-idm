@@ -47,6 +47,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO_URL = "https://github.com/Mahmoud-847/scorpion-idm.git"
 
 WATCH_TARGETS = [
+    os.path.join(PROJECT_ROOT, "auto_publish.py"),
     os.path.join(PROJECT_ROOT, "native_app", "scorpion_qt.py"),
     os.path.join(PROJECT_ROOT, "native_app", "scorpion_brand.py"),
     os.path.join(PROJECT_ROOT, "native_app", "scorpion_cards.py"),
@@ -56,6 +57,9 @@ WATCH_TARGETS = [
     os.path.join(PROJECT_ROOT, "build", "scorpion_logo.svg"),
     os.path.join(PROJECT_ROOT, "build", "scorpion_tray.svg"),
     os.path.join(PROJECT_ROOT, "build", "icon.ico"),
+    os.path.join(PROJECT_ROOT, "build", "icon.png"),
+    os.path.join(PROJECT_ROOT, "build", "tray.png"),
+    os.path.join(PROJECT_ROOT, "build", "generate_brand_assets.py"),
     os.path.join(PROJECT_ROOT, "browser-extension", "manifest.json"),
     os.path.join(PROJECT_ROOT, "browser-extension", "background.js"),
     os.path.join(PROJECT_ROOT, "browser-extension", "content.js"),
@@ -91,8 +95,7 @@ def validate_release_sources(log):
     ]
     node = shutil.which("node")
     if not node:
-        # The Python checks still guard the app; only the extension's checks need Node.js
-        log("⚠ Node.js غير مثبت على هذا الجهاز: تم تخطي اختبارات إضافة المتصفح (اختبارات البرنامج تعمل).")
+        raise RuntimeError("Node.js is required to validate the browser extension; install it before building or publishing")
     elif not os.path.isdir(os.path.join(PROJECT_ROOT, "tests", "node_modules", "jsdom")):
         npm = shutil.which("npm.cmd") or shutil.which("npm")
         if not npm:
@@ -120,21 +123,56 @@ def validate_release_sources(log):
             raise RuntimeError("Release validation failed; build and publication were stopped")
 
 
+def _snapshot_digest(path: str, content: bytes) -> str:
+    if os.path.splitext(path)[1].lower() in (".py", ".js", ".cjs", ".json", ".css", ".html", ".svg", ".ps1", ".iss", ".md", ".txt"):
+        content = content.replace(b"\r\n", b"\n")
+    if path.endswith("scorpion_qt.py"):
+        txt = content.decode("utf-8")
+        txt = re.sub(r'APP_VERSION\s*=\s*"[^"]+"', 'APP_VERSION = ""', txt, count=1)
+        txt = re.sub(r'CHANGELOG_HISTORY\s*=\s*\[.*?\n\]', 'CHANGELOG_HISTORY = []', txt, count=1, flags=re.S)
+        content = txt.replace("\r\n", "\n").encode("utf-8")
+    return hashlib.sha256(content).hexdigest()
+
+
 def compute_snapshot() -> dict:
     """Computes SHA-256 of watched source files, ignoring APP_VERSION & CHANGELOG_HISTORY so version bumps never loop."""
     snap = {}
-    for p in WATCH_TARGETS:
+    paths = set(WATCH_TARGETS)
+    for rel in ("browser-extension", "build/icons"):
+        for base, dirs, files in os.walk(os.path.join(PROJECT_ROOT, rel)):
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", "node_modules")]
+            paths.update(os.path.join(base, f) for f in files if f != "bridge-auth.json")
+    for p in sorted(paths):
         if os.path.isfile(p):
-            try:
-                with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                    txt = f.read()
-                if p.endswith("scorpion_qt.py"):
-                    txt = re.sub(r'APP_VERSION\s*=\s*"[^"]+"', 'APP_VERSION = ""', txt, count=1)
-                    txt = re.sub(r'CHANGELOG_HISTORY\s*=\s*\[.*?\n\]', 'CHANGELOG_HISTORY = []', txt, count=1, flags=re.S)
-                snap[p] = hashlib.sha256(txt.encode("utf-8")).hexdigest()
-            except Exception:
-                pass
+            with open(p, "rb") as f:
+                snap[p] = _snapshot_digest(p, f.read())
     return snap
+
+
+def staged_sources_match_snapshot(snapshot: dict) -> bool:
+    """Check the bytes that commit will consume, rather than only the live worktree."""
+    for path, expected in snapshot.items():
+        rel = os.path.relpath(path, PROJECT_ROOT).replace(os.sep, "/")
+        result = subprocess.run(["git", "show", ":" + rel], cwd=PROJECT_ROOT,
+                                capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if result.returncode or _snapshot_digest(path, result.stdout) != expected:
+            return False
+    return True
+
+
+def extension_tree_digest(folder: str) -> str:
+    digest = hashlib.sha256()
+    for base, dirs, files in os.walk(folder):
+        dirs.sort()
+        for name in sorted(files):
+            if name == "bridge-auth.json":
+                continue
+            path = os.path.join(base, name)
+            rel = os.path.relpath(path, folder).replace(os.sep, "/")
+            digest.update((rel + "\0").encode("utf-8"))
+            with open(path, "rb") as stream:
+                digest.update(stream.read())
+    return digest.hexdigest()
 
 
 def read_current_version() -> str:
@@ -655,19 +693,28 @@ class AutoPublisherWindow(QMainWindow):
 
                 self.signals.progress.emit(65, "جاري تحديث النسخة المثبتة على هذا الجهاز بأمان...")
                 stop_running_scorpion(force=force_stop)
+                if compute_snapshot() != tested_snapshot:
+                    raise RuntimeError("تعدّلت ملفات المصدر قبل التثبيت والنشر — تم إيقاف النشر حتى يعاد اختبارها بالكامل")
                 src_dist = os.path.join(PROJECT_ROOT, "native_app", "_build", "dist", "ScorpionIDM")
                 dst_app = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ScorpionIDM")
                 shutil.rmtree(os.path.join(dst_app, "_internal"), ignore_errors=True)
                 copy_tree_safely(src_dist, dst_app)
 
-                ext_src = os.path.join(PROJECT_ROOT, "browser-extension")
+                staged_ext = os.path.join(PROJECT_ROOT, "native_app", "_build", "ext_pkg")
+                if not os.path.isfile(os.path.join(staged_ext, "manifest.json")):
+                    raise RuntimeError("Staged extension is missing; rebuild before installing or publishing")
+                ext_src = staged_ext
+                if extension_tree_digest(ext_src) != extension_tree_digest(os.path.join(PROJECT_ROOT, "browser-extension")):
+                    raise RuntimeError("Staged extension does not match the validated source; publication stopped")
                 bridge_tok = read_local_bridge_token()
                 user_dl_ext = os.path.join(os.path.expanduser("~"), "Downloads", "Scorpion-Browser-Extension")
                 ext_targets = [
                     os.path.join(dst_app, "browser-extension"),
                     os.path.join(os.environ.get("LOCALAPPDATA", ""), "ScorpionIDM", "browser-extension"),
                 ]
-                if os.path.isdir(user_dl_ext):
+                if os.path.isdir(user_dl_ext) and not os.path.islink(user_dl_ext) and (
+                    extension_tree_digest(user_dl_ext) == extension_tree_digest(ext_src)
+                ):
                     ext_targets.append(user_dl_ext)
                 for ext_dst in ext_targets:
                     copy_tree_safely(ext_src, ext_dst)
@@ -698,10 +745,15 @@ class AutoPublisherWindow(QMainWindow):
                         expected_src_hash.update(sf.read())
                 if manifest.get("sourceSha256") != expected_src_hash.hexdigest():
                     raise RuntimeError("بصمة المصادر في update.json لا تطابق الملفات المصدريّة — تم إيقاف الرفع")
+                if manifest.get("extensionSha256") != extension_tree_digest(ext_src):
+                    raise RuntimeError("بصمة ملفات إضافة المتصفح في update.json لا تطابق الحزمة — تم إيقاف الرفع")
                 if not tools_version or not os.path.isfile(tools_pack) or (manifest.get("tools") or {}).get("version") != tools_version:
                     raise RuntimeError("حزمة الأدوات (ffmpeg / QuickJS) غير جاهزة أو لا تطابق update.json — تم إيقاف الرفع")
                 self.signals.progress.emit(75, "جاري رفع حزمة الأدوات إن كانت جديدة...")
                 publish_tools_pack(tools_version, tools_pack, self.signals.log.emit)
+
+                if compute_snapshot() != tested_snapshot:
+                    raise RuntimeError("تعدّلت ملفات المصدر قبل الرفع — تم إيقاف النشر قبل git commit")
 
                 self.signals.progress.emit(80, "جاري رفع التحديث إلى GitHub (Mahmoud-847/scorpion-idm)...")
                 self.signals.log.emit(f"==> Pushing v{new_ver} to {REPO_URL} ...")
@@ -728,6 +780,11 @@ class AutoPublisherWindow(QMainWindow):
                     ("commit", "-m", f"Release Scorpion IDM v{new_ver}", "--allow-empty"),
                     ("push", "-u", "origin", "main"),
                 ):
+                    if args[0] == "commit" and (
+                        compute_snapshot() != tested_snapshot or not staged_sources_match_snapshot(tested_snapshot)
+                    ):
+                        run_git("reset")
+                        raise RuntimeError("تعدّلت ملفات المصدر أثناء التجهيز للرفع — تم إلغاء النشر قبل git commit")
                     self.signals.log.emit("$ git " + " ".join(args))
                     p_git = run_git(*args)
                     if p_git.stdout.strip():
