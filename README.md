@@ -2,7 +2,7 @@
 
 A native Windows desktop download manager (`PyQt6` + officially signed `Python 3.14` runtime) designed for high-speed multi-connection file downloads, video and audio capture, and BitTorrent/Magnet management.
 
-- ⬇️ **Latest Windows Installer (`v2.1.28`):** [GitHub Releases](https://github.com/Mahmoud-847/scorpion-idm/releases/latest)
+- ⬇️ **Latest Windows Installer (`v2.1.29`):** [GitHub Releases](https://github.com/Mahmoud-847/scorpion-idm/releases/latest)
 - 🌐 **Official Microsoft Edge Extension:** [Scorpion IDM Integration Module — Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/hgcdbjpjlfgnejhceobphikeebmhmgcj)
 - 🔒 **Privacy Policy:** [PRIVACY.md](https://github.com/Mahmoud-847/scorpion-idm/blob/main/PRIVACY.md)
 - 🎬 **Video Downloads & Support Scope:** [VIDEO_DOWNLOADS.md](VIDEO_DOWNLOADS.md)
@@ -28,6 +28,8 @@ A native Windows desktop download manager (`PyQt6` + officially signed `Python 3
 ---
 
 ## Development, Testing & Building
+
+The public landing page is a static site in `docs/`. To serve it on GitHub Pages, select **Deploy from a branch**, then `main` and `/docs` in the repository’s Pages settings. The download buttons point to the Windows installer asset on GitHub Releases. Update the link in the landing page, extension popup and welcome page when changing the advertised installer version.
 
 ### 1. Run Directly from Source
 ```powershell

@@ -157,25 +157,26 @@ test('an authorized Telegram transfer survives DOM removal but cannot change sou
   assert.ok(posts.at(-1).error);
 });
 
-function loadBackgroundHarness(fetchHandler) {
-  const captured = [], cookieQueries = [], cancelled = [], erased = [], sentToTabs = [];
+function loadBackgroundHarness(fetchHandler, options = {}) {
+  const captured = [], cookieQueries = [], cancelled = [], erased = [], sentToTabs = [], createdTabs = [];
   const listeners = { onCreated: null, onMessage: null, onRemoved: null, onReplaced: null, onUpdated: null };
   const event = (slot) => ({ addListener: (cb) => { if (slot) listeners[slot] = cb; } });
   const chrome = {
     storage: {
-      local: { get: (_, cb) => cb({ scorpionConfig: { interceptAllDownloads: true, lang: 'ar' } }), set() {} },
+      local: { get: (_, cb) => cb(options.fresh ? {} : { scorpionConfig: { interceptAllDownloads: true, lang: 'ar' } }), set() {} },
       session: { set: async () => {}, get: async () => ({}), remove: async () => {} },
       onChanged: event(),
     },
     runtime: {
       lastError: null,
       getURL: (rel) => `chrome-extension://test-ext/${rel}`,
-      onInstalled: event(),
+      onInstalled: event('onInstalled'),
       onStartup: event(),
       onMessage: event('onMessage'),
     },
     contextMenus: { removeAll: (cb) => cb(), create() {}, onClicked: event() },
     tabs: {
+      create: async ({ url }) => createdTabs.push(url),
       onCreated: event(),
       onActivated: event(),
       onUpdated: event('onUpdated'),
@@ -206,7 +207,7 @@ function loadBackgroundHarness(fetchHandler) {
     chrome,
     ScorpionMedia: require(path.join(__dirname, '../browser-extension/media.js')),
     importScripts() {},
-    navigator: { userAgent: 'Unit test UA', languages: ['en-US'] },
+    navigator: { userAgent: 'Unit test UA', language: options.language || 'en-US', languages: ['en-US'] },
     URL, AbortController, AbortSignal, setTimeout: () => 0, clearTimeout() {}, setInterval() {}, console,
     fetch: async (url, opts) => {
       if (url.endsWith('bridge-auth.json')) {
@@ -217,8 +218,28 @@ function loadBackgroundHarness(fetchHandler) {
     },
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/background.js'), 'utf8'), context);
-  return { context, listeners, captured, cookieQueries, cancelled, erased, sentToTabs };
+  return { context, listeners, captured, cookieQueries, cancelled, erased, sentToTabs, createdTabs };
 }
+
+test('only a fresh installation opens welcome and the default follows browser language', async () => {
+  const h = loadBackgroundHarness(async () => { throw new Error('unexpected external request'); }, { fresh: true });
+  await h.listeners.onInstalled({ reason: 'update' });
+  assert.deepEqual(h.createdTabs, []);
+  await h.listeners.onInstalled({ reason: 'install' });
+  assert.deepEqual(h.createdTabs, ['chrome-extension://test-ext/welcome.html']);
+  const status = await new Promise((resolve) => h.listeners.onMessage({ action: 'SCORPION_CHECK_STATUS' }, {}, resolve));
+  assert.equal(status.config.lang, 'en', 'the running desktop app does not replace the browser default');
+});
+
+test('a Scorpion installer download stays in the browser even after a CDN redirect', async () => {
+  const h = loadBackgroundHarness(async () => { throw new Error('the installer must not be intercepted'); });
+  await h.listeners.onCreated({ id: 99, state: 'in_progress',
+    url: 'https://github.com/Mahmoud-847/scorpion-idm/releases/download/v2.1.28/Scorpion-Setup-2.1.28.exe',
+    finalUrl: 'https://release-assets.githubusercontent.com/file.exe', filename: 'Scorpion-Setup-2.1.28.exe',
+  });
+  assert.deepEqual(h.cookieQueries, []);
+  assert.deepEqual(h.cancelled, []);
+});
 
 test('duplicate captures wait for server acceptance and do not cancel downloads on rejection', async () => {
   let resolveCapture;

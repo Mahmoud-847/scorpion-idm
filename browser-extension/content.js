@@ -17,7 +17,9 @@
   let hideTimeout = null;
   let isHoveringPanel = false;
   let floatingBtnEnabled = true;
-  let currentLang = 'ar';
+  let currentLang = /^ar(?:-|$)/i.test(navigator.language || '') ? 'ar' : 'en';
+  let connectionNotice = null;
+  let connectionNoticeTimer = null;
   let dismissedForUrl = '';
   let panelDragging = false;
   const activeTransfers = new Set(); // Each source keeps its own transfer while selection changes.
@@ -383,17 +385,6 @@
     }
   }
 
-  function syncLangFromApp() {
-    try {
-      chrome.runtime.sendMessage({ action: 'SCORPION_GET_APP_LANG' }, (data) => {
-        if (chrome.runtime.lastError) return;
-        if (data && (data.lang === 'ar' || data.lang === 'en') && data.lang !== currentLang) {
-          setLanguage(data.lang, false);
-        }
-      });
-    } catch (_) {}
-  }
-
   try {
     chrome.storage.local.get(['scorpionConfig'], (res) => {
       if (res && res.scorpionConfig) {
@@ -405,7 +396,6 @@
           applyLangToPanel();
         }
       }
-      syncLangFromApp();
     });
     chrome.storage.onChanged.addListener((changes) => {
       if (changes.scorpionConfig && changes.scorpionConfig.newValue) {
@@ -420,9 +410,7 @@
         }
       }
     });
-  } catch (_) {
-    syncLangFromApp();
-  }
+  } catch (_) {}
 
   // ---------------------------------------------------------------------------
   // Stream sniffer for real Video AND Audio streams (ignoring DRM license / API endpoints)
@@ -1395,8 +1383,7 @@
     payload.expectedDuration = session.duration;
     setDropdownOpen(false);
 
-    // Keep every state, including errors, off the video button. Only a fixed error code is
-    // retained for the extension popup; never persist a source URL or a raw server error.
+    // Keep transfer progress off the video button and retain only fixed error codes.
     const reportError = (code) => {
       try {
         chrome.runtime.sendMessage({ action: 'SCORPION_REPORT_ERROR', code }, () => void chrome.runtime.lastError);
@@ -1406,7 +1393,28 @@
       } catch (_) {}
     };
 
-    const directFallback = () => reportError('connection');
+    const showConnectionHelp = () => {
+      reportError('connection');
+      if (!panelEl || !sessionIsCurrent(session)) return;
+      if (!connectionNotice) {
+        connectionNotice = document.createElement('div');
+        connectionNotice.className = 'scorpion-idm-connection-notice';
+        connectionNotice.setAttribute('role', 'status');
+        panelEl.appendChild(connectionNotice);
+      }
+      connectionNotice.textContent = currentLang === 'ar'
+        ? 'البرنامج غير متصل. افتح أيقونة الإضافة للتحميل أو المساعدة في الربط.'
+        : 'Desktop app disconnected. Open the extension for the installer or connection help.';
+      connectionNotice.hidden = false;
+      clearTimeout(connectionNoticeTimer);
+      connectionNoticeTimer = setTimeout(() => { connectionNotice.hidden = true; }, 6500);
+    };
+    const reportDownloadFailure = (code) => {
+      chrome.runtime.sendMessage({ action: 'SCORPION_CHECK_STATUS' }, (status) => {
+        if (chrome.runtime.lastError || status?.alive === false) showConnectionHelp();
+        else reportError(code);
+      });
+    };
 
     if (ScorpionMedia.isTelegram(location.href)) {
       // Use only THIS player's source, never another document found in the page's request history.
@@ -1432,15 +1440,26 @@
       });
       activeTransfers.add(src);
       const readerId = crypto.randomUUID();
-      ScorpionTransfer.transfer(src, {
+      const startTransfer = () => ScorpionTransfer.transfer(src, {
         filename: payload.filename || `${payload.title || (isAudio ? 'Telegram_Audio' : 'Telegram_Video')}.${isAudio ? 'ogg' : 'mp4'}`,
         pageUrl: location.href, expectedDuration: payload.expectedDuration, isAudio,
       }, request, fetch, () => {}, (url, offset, total, _fetcher, chunkSize) => readTelegramPageRange(url, offset, total, readerId, chunkSize))
-        .catch(() => reportError('transfer'))
+      .catch(() => reportDownloadFailure('transfer'))
         .finally(() => {
           activeTransfers.delete(src);
           window.postMessage({ action: 'SCORPION_RELEASE_MEDIA_READER', readerId, url: src }, location.origin);
         });
+      try {
+        chrome.runtime.sendMessage({ action: 'SCORPION_CHECK_STATUS' }, (status) => {
+          if (chrome.runtime.lastError || status?.alive === false) {
+            activeTransfers.delete(src);
+            showConnectionHelp();
+          } else startTransfer();
+        });
+      } catch (_) {
+        activeTransfers.delete(src);
+        showConnectionHelp();
+      }
       return true;
     }
 
@@ -1452,12 +1471,14 @@
         },
         (res) => {
           if (chrome.runtime.lastError || !res || !res.ok) {
-            directFallback();
+            if (res?.error === 'drmProtected') reportError('drmProtected');
+            else if (res?.error === 'connection' || chrome.runtime.lastError) showConnectionHelp();
+            else reportError('captureFailed');
           }
         }
       );
     } catch (_) {
-      directFallback();
+      showConnectionHelp();
     }
     return true;
   }
@@ -1574,6 +1595,7 @@
     if (isDismissed(media)) return false;
     const changed = media !== activeMedia || sourceOf(media) !== activeSource || activePage !== location.href;
     if (changed) {
+      if (connectionNotice) connectionNotice.hidden = true;
       mediaGeneration++;
       menuGeneration++;
       if (dropdownEl) { setDropdownOpen(false); dropdownEl.innerHTML = ''; }

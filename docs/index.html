@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta id="metaDesc" name="description" content="Fast Windows download manager with pause/resume, video quality capture, torrents, and seamless browser integration.">
+  <meta name="theme-color" content="#101014">
+  <title>Scorpion IDM — Windows Download Manager</title>
+  <link rel="icon" href="assets/scorpion.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="landing.css">
+</head>
+<body>
+  <header class="wrap header">
+    <a class="brand" href="./"><img src="assets/scorpion.svg" width="44" height="44" alt=""><bdi>Scorpion IDM</bdi></a>
+    <div class="header-actions">
+      <button id="langBtn" class="lang-btn" type="button">العربية</button>
+      <a id="storeLink" class="store" href="https://microsoftedge.microsoft.com/addons/detail/hgcdbjpjlfgnejhceobphikeebmhmgcj">Edge Extension</a>
+    </div>
+  </header>
+  <main>
+    <section class="hero wrap" aria-labelledby="title">
+      <div class="hero-copy">
+        <h1 id="title">Your downloads in <span>one fast workspace</span></h1>
+        <p id="heroSub">Split files over parallel connections, pause and resume safely, and capture video from the browser straight to your Windows desktop app.</p>
+        <a id="dlBtn" class="download" href="https://github.com/Mahmoud-847/scorpion-idm/releases/download/v2.1.29/Scorpion-Setup-2.1.29.exe">Download for Windows</a>
+        <span class="release"><bdi>Windows · v2.1.29</bdi></span>
+      </div>
+      <figure>
+        <img id="heroShot" class="screenshot" src="assets/desktop-en.png" width="1708" height="960" alt="Scorpion IDM desktop interface showing dark Obsidian cards and torrent file tree" fetchpriority="high">
+      </figure>
+    </section>
+    <section class="wrap lower" aria-labelledby="integration">
+      <div>
+        <h2 id="integration">From your browser to the queue</h2>
+        <p id="intP1">Install the Windows app, then enable the Edge extension. Pick video quality right from the player button and follow progress in real time.</p>
+        <p id="intP2">Bilingual English and Arabic interface, queue scheduling, inline torrent file selection, and strict local-only loopback communication.</p>
+      </div>
+      <figure>
+        <img id="altShot" class="screenshot" src="assets/desktop-ar.png" width="1708" height="960" alt="Scorpion IDM Arabic RTL desktop view" loading="lazy">
+        <figcaption id="altCap">Desktop screenshots with sample downloads.</figcaption>
+      </figure>
+    </section>
+  </main>
+  <footer class="wrap footer">
+    <span dir="ltr">Scorpion Labs</span>
+    <a id="privacyFooter" href="https://github.com/Mahmoud-847/scorpion-idm/blob/main/PRIVACY.md">Privacy policy</a>
+    <a id="supportFooter" href="https://github.com/Mahmoud-847/scorpion-idm/issues">Support</a>
+  </footer>
+  <script>
+    (() => {
+      const COPY = {
+        en: {
+          dir: 'ltr', btn: 'العربية', titlePage: 'Scorpion IDM — Windows Download Manager',
+          store: 'Edge Extension',
+          hero: 'Your downloads in <span>one fast workspace</span>',
+          heroSub: 'Split files over parallel connections, pause and resume safely, and capture video from the browser straight to your Windows desktop app.',
+          dl: 'Download for Windows',
+          heroShot: 'assets/desktop-en.png', altShot: 'assets/desktop-ar.png',
+          integration: 'From your browser to the queue',
+          intP1: 'Install the Windows app, then enable the Edge extension. Pick video quality right from the player button and follow progress in real time.',
+          intP2: 'Bilingual English and Arabic interface, queue scheduling, inline torrent file selection, and strict local-only loopback communication.',
+          altCap: 'Desktop screenshots with sample downloads.',
+          privacy: 'Privacy policy', support: 'Support',
+        },
+        ar: {
+          dir: 'rtl', btn: 'English', titlePage: 'Scorpion IDM — مدير تحميلات ويندوز',
+          store: 'إضافة المتصفح',
+          hero: 'تحميلاتك في <span>مكان واحد</span>',
+          heroSub: 'نظّم ملفاتك، أوقف التحميل واستأنفه، وأرسل الفيديو المتاح للتنزيل من المتصفح مباشرة إلى برنامج ويندوز.',
+          dl: 'تحميل برنامج ويندوز',
+          heroShot: 'assets/desktop-ar.png', altShot: 'assets/desktop-en.png',
+          integration: 'من المتصفح إلى قائمة التحميل',
+          intP1: 'ثبّت البرنامج ثم أضف إضافة المتصفح. بعد تأكيد الاتصال، اختَر الفيديو والجودة من الزر فوق المشغّل، وتابع تقدّم التحميل في نافذة البرنامج.',
+          intP2: 'واجهة عربية وإنجليزية، وطوابير تحميل، وجدولة، واختيار ملفات التورنت من داخل القائمة.',
+          altCap: 'لقطات من البرنامج بملفات تجريبية.',
+          privacy: 'سياسة الخصوصية', support: 'الدعم',
+        },
+      };
+      let lang = /^ar(?:-|$)/i.test(navigator.language || '') ? 'ar' : 'en';
+      const apply = () => {
+        const c = COPY[lang];
+        document.documentElement.lang = lang;
+        document.documentElement.dir = c.dir;
+        document.title = c.titlePage;
+        document.getElementById('langBtn').textContent = c.btn;
+        document.getElementById('storeLink').textContent = c.store;
+        document.getElementById('title').innerHTML = c.hero;
+        document.getElementById('heroSub').textContent = c.heroSub;
+        document.getElementById('dlBtn').textContent = c.dl;
+        document.getElementById('heroShot').src = c.heroShot;
+        document.getElementById('altShot').src = c.altShot;
+        document.getElementById('integration').textContent = c.integration;
+        document.getElementById('intP1').textContent = c.intP1;
+        document.getElementById('intP2').textContent = c.intP2;
+        document.getElementById('altCap').textContent = c.altCap;
+        document.getElementById('privacyFooter').textContent = c.privacy;
+        document.getElementById('supportFooter').textContent = c.support;
+      };
+      document.getElementById('langBtn').addEventListener('click', () => { lang = lang === 'ar' ? 'en' : 'ar'; apply(); });
+      apply();
+    })();
+  </script>
+</body>
+</html>

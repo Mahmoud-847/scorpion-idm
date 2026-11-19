@@ -322,6 +322,14 @@
       [hidden] {
         display: none !important;
       }
+      .setup-card, .review-card { margin: 10px 14px; padding: 12px; border: 1px solid #62451e; background: #231b13; border-radius: 10px; }
+      .setup-card p, .review-card p { margin: 0 0 9px; color: #f0e4d4; line-height: 1.45; }
+      .setup-download { display: block; padding: 9px 10px; border-radius: 7px; background: #ffab47; color: #1b1005; font-weight: 700; text-align: center; text-decoration: none; }
+      .setup-download:hover { background: #ffbf70; }
+      .setup-help, .rating-link { display: inline-block; margin-top: 8px; color: #ffc477; }
+      .footer-links { display: flex; justify-content: center; gap: 14px; padding-inline: 12px; }
+      .footer-links .privacy-link { display: inline-block; }
+      .setup-card a:focus-visible, .review-card a:focus-visible { outline: 2px solid #ffc477; outline-offset: 3px; }
     </style>
   </head>
   <body>
@@ -432,12 +440,18 @@
     <div class="divider"></div>
 
     <div class="status-row">
-      <svg id="statusMonitorIcon" class="status-ico online" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <svg id="statusMonitorIcon" class="status-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="2" y="3" width="20" height="14" rx="2"/>
         <line x1="8" y1="21" x2="16" y2="21"/>
         <line x1="12" y1="17" x2="12" y2="21"/>
       </svg>
-      <span id="statusBadge" class="status online">Desktop App Connected</span>
+      <span id="statusBadge" class="status" role="status">Checking connection…</span>
+    </div>
+
+    <div id="installCard" class="setup-card" hidden>
+      <p id="installDescription"></p>
+      <a id="installerLink" class="setup-download" href="https://github.com/Mahmoud-847/scorpion-idm/releases/download/v2.1.29/Scorpion-Setup-2.1.29.exe" target="_blank" rel="noopener noreferrer">Download Scorpion IDM (Windows)</a>
+      <a id="setupHelpLink" class="setup-help" href="welcome.html" target="_blank" rel="noopener">Connection help</a>
     </div>
 
     <div id="statsRow" class="stats-row" hidden>
@@ -464,6 +478,12 @@
       <button id="dismissErrorBtn" class="btn-secondary" type="button">Dismiss message</button>
     </div>
 
+    <div id="reviewCard" class="review-card" hidden>
+      <p id="reviewDescription"></p>
+      <a id="reviewInviteLink" class="rating-link" href="https://microsoftedge.microsoft.com/addons/detail/hgcdbjpjlfgnejhceobphikeebmhmgcj" target="_blank" rel="noopener noreferrer">Share your feedback</a>
+      <button id="dismissReviewBtn" class="btn-secondary" type="button">Dismiss</button>
+    </div>
+
     <div class="divider"></div>
 
     <div class="lang-row">
@@ -482,7 +502,10 @@
       </span>
     </div>
 
-    <a id="privacyLink" class="privacy-link" href="https://github.com/Mahmoud-847/scorpion-idm/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Privacy policy</a>
+    <div class="footer-links">
+      <a id="privacyLink" class="privacy-link" href="https://github.com/Mahmoud-847/scorpion-idm/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Privacy policy</a>
+      <a id="reviewLink" class="privacy-link" href="https://microsoftedge.microsoft.com/addons/detail/hgcdbjpjlfgnejhceobphikeebmhmgcj" target="_blank" rel="noopener noreferrer">Rate extension</a>
+    </div>
 
     <script src="popup.js"></script>
   </body>

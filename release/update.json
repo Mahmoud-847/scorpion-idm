@@ -1,26 +1,22 @@
 {
-  "version": "2.1.28",
-  "publishedAt": "2026-11-18",
+  "version": "2.1.29",
+  "publishedAt": "2026-11-19",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "2a42ebdf77cfc2a54388fb3e3e87b3d25ad6a7b30b9220c4753654dc442a4f0f",
-  "sourceSha256": "d21419c8da9ca1193e32b73b35e54f6dee869b0a72c03768dd3c3e275937ff00",
-  "extensionSha256": "808592e954e6367048fd3fba04f728ba5132538478f6ce4dd8d5efe4b9fce2ca",
+  "sha256": "9a8d0b41231178e752c63813119fa779828ae4ce312c9026c4a9fd3111a0a0d3",
+  "sourceSha256": "927eaa5435b3e7aeb8adb5e26c3c02d1758e9b4073203cd74d0e8b8281b65ace",
+  "extensionSha256": "fb981a5522709e9bf222e9b2a3e0b2a20fd321e57fa4ade82885788841509a78",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.28 — تأمين استكمال الفيديو متعدد المنافذ ودعم الوصول الشامل وضبط السرعات المنخفضة",
-  "title_en": "Version 2.1.28 — Multi-Port Video Resume Validation, Card Accessibility & Low-Rate Precision",
+  "title_ar": "الإصدار 2.1.29 — ربط سريع لمستخدمي الإضافة ودليل التثبيت المباشر",
+  "title_en": "Version 2.1.29 — Seamless Extension Onboarding & Direct Windows Installer Flow",
   "changelog_ar": [
-    "إلزام مطابقة محددات الهوية القوية (ETag / Last-Modified) في محرك استكمال الفيديو متعدد المنافذ لمنع خلط النسخ عند تغير الملف على الخادم.",
-    "تحديث فوري لاختيار إطار الفيديو عند تمرير المؤشر بعد الأوامر الصريحة، وعزل فوري لكاش جودات الفيديو عند تبديل الحساب في نفس التبويب.",
-    "دعم كامل لقارئات الشاشة وأسماء الوصول والتنقل بأسهم لوحة المفاتيح بين أزرار بطاقات التحميل المكدسة.",
-    "ضبط دقيق لمحدد السرعة عند الحدود المنخفضة لنقل المتصفح والتورنت، وفصل نجاح تثبيت ملفات التحديث عن فشل إعادة التشغيل التلقائي.",
-    "تشديد التحقق من المسارات الموثوقة وبصمة SHA-256 للإضافات المحلية، وتجميد لقطة المصدر المختبرة حتى إتمام النشر."
+    "إضافة كارت تحميل برنامج ويندوز مباشرةً داخل نافذة إضافة المتصفح عند عدم الاتصال مع صفحة ترحيب وتجربة تحميل فورية عند التثبيت الجديد.",
+    "اكتشاف لغة المتصفح تلقائياً وتجاوز التقاط رابط مثبّت البرنامج نفسه، ودعوة اختيارية لتقييم الإضافة بعد إتمام 3 تحميلات من المتصفح.",
+    "إطلاق صفحة التعريف والتحميل المباشر ثنائية اللغة في GitHub Pages وتحديث تعبئة ملفات الترحيب لإضافات المتصفح كافة."
   ],
   "changelog_en": [
-    "Enforce strong ETag / Last-Modified entity validation across 16-port video range resumes and mid-stream responses to prevent cross-version splicing.",
-    "Allow subsequent pointer hovers to override earlier explicit frame selections immediately, and refresh authenticated quality lookups across same-tab session switches.",
-    "Expose full screen-reader accessible text/descriptions and Left/Right/Space/Enter keyboard action navigation on stacked download cards.",
-    "Preserve exact bandwidth debt and small chunk negotiation at low speed limits across browser transfers and torrents, and separate update file commit from relaunch failure.",
-    "Restrict local unpacked extension origin allowlisting and token provisioning strictly to canonical/SHA-256-verified Scorpion directories, and lock the tested source snapshot through git commit."
+    "Add a direct Windows installer card inside the extension popup when disconnected, alongside a first-install welcome page with live connection check and Quick Start download test.",
+    "Auto-detect browser locale, keep official Scorpion-Setup installer downloads in the browser, and show an optional store review prompt after 3 completed non-incognito extension downloads.",
+    "Ship the bilingual GitHub Pages landing site under docs/ and bundle welcome page assets across all local browser extension installations."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",

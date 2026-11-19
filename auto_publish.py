@@ -69,7 +69,12 @@ WATCH_TARGETS = [
     os.path.join(PROJECT_ROOT, "browser-extension", "content.css"),
     os.path.join(PROJECT_ROOT, "browser-extension", "popup.html"),
     os.path.join(PROJECT_ROOT, "browser-extension", "popup.js"),
+    os.path.join(PROJECT_ROOT, "browser-extension", "welcome.html"),
+    os.path.join(PROJECT_ROOT, "browser-extension", "welcome.css"),
+    os.path.join(PROJECT_ROOT, "browser-extension", "welcome.js"),
     os.path.join(PROJECT_ROOT, "browser-extension", "scorpion-logo.svg"),
+    os.path.join(PROJECT_ROOT, "docs", "index.html"),
+    os.path.join(PROJECT_ROOT, "docs", "landing.css"),
     os.path.join(PROJECT_ROOT, "build_installer.ps1"),
     os.path.join(PROJECT_ROOT, "requirements.txt"),
     os.path.join(PROJECT_ROOT, "tests", "test_media_transfer.py"),
@@ -107,7 +112,7 @@ def validate_release_sources(log):
             raise RuntimeError("Could not install the extension UI test dependencies")
     if node:
         commands.extend([[node, "--check", f"browser-extension/{name}"] for name in
-                         ("background.js", "content.js", "popup.js", "media.js", "browser-transfer.js", "telegram-reader.js")])
+                         ("background.js", "content.js", "popup.js", "welcome.js", "media.js", "browser-transfer.js", "telegram-reader.js")])
         commands.append([node, "--test", "tests/browser-transfer.test.cjs"])
         commands.append([node, "--test", "tests/content-panel.test.cjs"])
         commands.append([node, "--test", "tests/popup.test.cjs"])
@@ -138,7 +143,7 @@ def compute_snapshot() -> dict:
     """Computes SHA-256 of watched source files, ignoring APP_VERSION & CHANGELOG_HISTORY so version bumps never loop."""
     snap = {}
     paths = set(WATCH_TARGETS)
-    for rel in ("browser-extension", "build/icons"):
+    for rel in ("browser-extension", "build/icons", "docs"):
         for base, dirs, files in os.walk(os.path.join(PROJECT_ROOT, rel)):
             dirs[:] = [d for d in dirs if d not in ("__pycache__", "node_modules")]
             paths.update(os.path.join(base, f) for f in files if f != "bridge-auth.json")
@@ -772,6 +777,9 @@ class AutoPublisherWindow(QMainWindow):
                         "browser-extension/icons",
                         "browser-extension/media.js", "browser-extension/browser-transfer.js",
                         "browser-extension/telegram-reader.js",
+                        "browser-extension/welcome.html", "browser-extension/welcome.css",
+                        "browser-extension/welcome.js",
+                        "docs",
                         "README.md", "VIDEO_DOWNLOADS.md", "PRIVACY.md",
                         "tests/test_media_transfer.py", "tests/browser-transfer.test.cjs", "tests/test_publisher_startup.py",
                         "tests/test_ui_runtime.py", "tests/test_audit_findings.py", "tests/content-panel.test.cjs", "tests/popup.test.cjs",

@@ -93,6 +93,7 @@ class BrowserTransferMixin:
                 "filename": raw_name or ("Telegram_Audio.ogg" if is_audio else "Telegram_Video.mp4"),
                 "referer": payload.get("pageUrl") or "https://web.telegram.org/",
                 "totalSize": total, "isVideo": True, "browserTransfer": True,
+                "incognito": bool(payload.get("incognito")),
                 "expectedDuration": payload.get("expectedDuration"), "startImmediately": False,
                 "connections": 1,
             }

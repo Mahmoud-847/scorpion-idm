@@ -90,6 +90,28 @@ def _build_test_window(tmp_dir: Path):
 
 
 class DesktopUIRuntimeTests(unittest.TestCase):
+    def test_review_milestone_counts_only_unique_completed_public_browser_downloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            win, _ = _build_test_window(Path(tmp))
+            try:
+                with patch.object(win.cards, 'show_for'), patch.object(win.engine, 'save_state') as save:
+                    for dl_id, status, browser, private in (
+                        ('manual', 'completed', False, False), ('queued', 'queued', True, False),
+                        ('private', 'completed', True, True), ('first', 'completed', True, False),
+                        ('first', 'completed', True, False), ('second', 'completed', True, False),
+                        ('third', 'completed', True, False), ('fourth', 'completed', True, False),
+                    ):
+                        win.engine.downloads[dl_id] = {'status': status, 'fromBrowser': browser, 'incognito': private}
+                        win.on_download_completed(dl_id)
+                self.assertEqual(win.engine.settings['extensionCompletedIds'], ['first', 'second', 'third'])
+                self.assertEqual(save.call_count, 3)
+            finally:
+                win.engine.downloads.clear()
+                win.cards.clear()
+                win._really_quit = True
+                win.close()
+                _QAPP.processEvents()
+
     def test_browser_capture_immediately_reveals_download_despite_active_filters(self):
         with tempfile.TemporaryDirectory(prefix="scorpion_ui_rt_") as tmp:
             win, _ = _build_test_window(Path(tmp))

@@ -4,13 +4,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
-async function popup(error, tabReply = { ok: false }, statusOverride = null) {
+async function popup(error, tabReply = { ok: false }, statusOverride = null, local = {}, browserLang = 'en-US') {
   const html = fs.readFileSync(path.join(__dirname, '../browser-extension/popup.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'https://extension.test/popup.html', runScripts: 'outside-only' });
   const { window } = dom;
+  Object.defineProperty(window.navigator, 'language', { value: browserLang });
   const removed = [];
+  let poll;
+  window.setInterval = (fn) => { poll = fn; return 1; };
   window.fetch = async () => ({ ok: true });
-  const statusPayload = statusOverride || { alive: true, config: { lang: 'ar' }, stats: null };
+  let statusPayload = statusOverride || { alive: true, config: { lang: 'ar' }, stats: null };
   window.chrome = {
     storage: {
       session: {
@@ -18,7 +21,7 @@ async function popup(error, tabReply = { ok: false }, statusOverride = null) {
         set: async () => {},
         remove: async (key) => removed.push(key),
       },
-      local: { set() {} },
+      local: { get: (_, callback) => callback({ ...local }), set: (values) => Object.assign(local, values) },
     },
     tabs: {
       query: (_, callback) => callback([{ id: 7, url: 'https://example.com/watch' }]),
@@ -29,7 +32,7 @@ async function popup(error, tabReply = { ok: false }, statusOverride = null) {
   window.eval(fs.readFileSync(path.join(__dirname, '../browser-extension/popup.js'), 'utf8'));
   await new Promise((resolve) => window.document.addEventListener('DOMContentLoaded', resolve, { once: true }));
   await new Promise(setImmediate);
-  return { dom, window, removed, document: window.document };
+  return { dom, window, removed, document: window.document, setStatus(next) { statusPayload = next; poll(); } };
 }
 
 test('popup shows and dismisses localized errors separately from connection status and exposes the public privacy policy', async () => {
@@ -49,6 +52,72 @@ test('popup shows and dismisses localized errors separately from connection stat
     assert.equal(card.hidden, true);
     assert.deepEqual(p.removed, ['scorpionDownloadError']);
   } finally { p.dom.window.close(); }
+});
+
+test('installer card follows live connection state, with browser locale when no choice is saved', async () => {
+  const p = await popup({ code: 'connection', at: Date.now() }, null, { alive: false }, {}, 'ar-EG');
+  try {
+    const card = p.document.getElementById('installCard');
+    const link = p.document.getElementById('installerLink');
+    assert.equal(p.document.documentElement.dir, 'rtl');
+    assert.equal(card.hidden, false);
+    const qtSrc = fs.readFileSync(path.join(__dirname, '../native_app/scorpion_qt.py'), 'utf8');
+    const appVer = qtSrc.match(/APP_VERSION\s*=\s*"([^"]+)"/)?.[1];
+    assert.ok(appVer);
+    assert.ok(link.href.endsWith(`/releases/download/v${appVer}/Scorpion-Setup-${appVer}.exe`));
+    assert.equal(p.document.getElementById('downloadErrorCard').hidden, false);
+    p.setStatus({ alive: true });
+    assert.equal(card.hidden, true);
+    assert.equal(p.document.getElementById('downloadErrorCard').hidden, true);
+    assert.equal(p.document.getElementById('grabCurrentPageBtn').disabled, false);
+  } finally { p.dom.window.close(); }
+});
+
+test('review invitation requires three completed downloads and appears once per profile', async () => {
+  const local = {};
+  const status = (count) => ({ alive: true, stats: { totalCount: 7, activeCount: 2, extensionCompletedCount: count } });
+  const p = await popup(null, null, status(2), local);
+  try {
+    const card = p.document.getElementById('reviewCard');
+    assert.equal(card.hidden, true);
+    assert.equal(p.document.getElementById('reviewLink').hidden, false);
+    p.setStatus(status(3));
+    assert.equal(card.hidden, false);
+    p.document.getElementById('dismissReviewBtn').click();
+    p.setStatus(status(3));
+    assert.equal(card.hidden, true);
+  } finally { p.dom.window.close(); }
+  const reopened = await popup(null, null, status(3), local);
+  try { assert.equal(reopened.document.getElementById('reviewCard').hidden, true); }
+  finally { reopened.dom.window.close(); }
+});
+
+test('welcome switches to connected and enables the sample only after a successful status check', () => {
+  const dir = path.join(__dirname, '../browser-extension');
+  const dom = new JSDOM(fs.readFileSync(path.join(dir, 'welcome.html'), 'utf8'), { runScripts: 'outside-only' });
+  const { window } = dom;
+  let alive = false;
+  let poll;
+  const messages = [];
+  window.setInterval = (fn) => { poll = fn; };
+  window.chrome = { runtime: { sendMessage(message, callback) {
+    messages.push(message.action);
+    callback(message.action === 'SCORPION_CHECK_STATUS' ? { alive } : { ok: true });
+  } } };
+  try {
+    window.eval(fs.readFileSync(path.join(dir, 'welcome.js'), 'utf8'));
+    const indicator = window.document.getElementById('connectionStatus');
+    const button = window.document.getElementById('tryDownload');
+    assert.equal(indicator.classList.contains('online'), false);
+    assert.equal(button.hidden, true);
+    alive = true;
+    poll();
+    assert.equal(indicator.classList.contains('online'), true);
+    assert.equal(button.hidden, false);
+    button.click();
+    assert.equal(messages.at(-1), 'SCORPION_TRY_SAMPLE');
+    assert.match(window.document.getElementById('sampleStatus').textContent, /Check the desktop app/);
+  } finally { window.close(); }
 });
 
 test('popup renders drmProtected localized warning in Arabic and English', async () => {

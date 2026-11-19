@@ -15,17 +15,32 @@ document.addEventListener('DOMContentLoaded', () => {
   const errorMessage = document.getElementById('downloadErrorMessage');
   const dismissErrorBtn = document.getElementById('dismissErrorBtn');
   const privacyLink = document.getElementById('privacyLink');
+  const installCard = document.getElementById('installCard');
+  const reviewCard = document.getElementById('reviewCard');
+  const reviewInviteLink = document.getElementById('reviewInviteLink');
+  const dismissReviewBtn = document.getElementById('dismissReviewBtn');
 
-  let currentLang = 'ar';
-  let isAlive = false;
+  let currentLang = /^ar(?:-|$)/i.test(navigator.language || '') ? 'ar' : 'en';
+  let isAlive = null;
   let lastStats = null;
   let lastError = null;
+  let statusPending = false;
+  let configEdited = false;
+  let reviewSeen = null;
+  let reviewOpen = false;
 
   const I18N = {
     ar: {
       dir: 'rtl',
       online: 'متصل ببرنامج سطح المكتب',
       offline: 'برنامج سطح المكتب غير متصل',
+      checking: 'جاري التحقق من الاتصال…',
+      installDescription: 'لو البرنامج مثبّت، شغّله لربط الإضافة. لو دي أول مرة، حمّل برنامج ويندوز.',
+      installer: 'تحميل برنامج Scorpion IDM للويندوز',
+      setupHelp: 'مساعدة في الربط',
+      reviewDescription: 'اكتملت ثلاث تحميلات عبر الإضافة. رأيك يساعدنا نحسّنها.',
+      reviewInvite: 'شارك رأيك في الإضافة',
+      reviewLink: 'تقييم الإضافة',
       intercept: 'الالتقاط التلقائي للتحميلات',
       videoBtn: 'إظهار الزر العائم',
       grabBtn: 'تحميل فيديو الصفحة الحالية',
@@ -36,6 +51,7 @@ document.addEventListener('DOMContentLoaded', () => {
       dismissError: 'إخفاء الرسالة',
       errors: {
         connection: 'تعذر إرسال التنزيل. تأكد من تشغيل البرنامج، ثم حاول مرة أخرى.',
+        captureFailed: 'تعذر إرسال هذا التنزيل. راجع البرنامج ثم حاول مرة أخرى.',
         drmProtected: 'هذا الفيديو محمي بتشفير DRM (مثل Netflix) ولا يدعم التنزيل الخارجي. استخدم ميزة التنزيل داخل تطبيق المنصة الرسمي.',
         noVideo: 'قف على الفيديو المطلوب أو مرّر الصفحة إليه، ثم استخدم الزر فوقه.',
         telegramSource: 'افتح الفيديو المطلوب داخل تليجرام ثم أعد المحاولة. إذا لم يتوفر مصدر قابل للقراءة، استخدم تنزيل تليجرام الأصلي.',
@@ -47,6 +63,13 @@ document.addEventListener('DOMContentLoaded', () => {
       dir: 'ltr',
       online: 'Desktop App Connected',
       offline: 'Desktop App Disconnected',
+      checking: 'Checking connection…',
+      installDescription: 'Open the desktop app to connect. If you are new to Scorpion, download the Windows app.',
+      installer: 'Download Scorpion IDM (Windows)',
+      setupHelp: 'Connection help',
+      reviewDescription: 'You’ve completed three downloads through the extension. Your feedback helps us improve it.',
+      reviewInvite: 'Share your feedback',
+      reviewLink: 'Rate extension',
       intercept: 'Automatic Interception',
       videoBtn: 'Show Floating Button',
       grabBtn: 'Download Page Video',
@@ -57,6 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
       dismissError: 'Dismiss message',
       errors: {
         connection: 'Could not send the download. Open the desktop application and try again.',
+        captureFailed: 'Could not send this download. Check the desktop app and try again.',
         drmProtected: 'This video is DRM-protected (e.g. Netflix) and cannot be downloaded externally. Use the platform’s official offline download feature.',
         noVideo: 'Point to the video or scroll to it, then use the button above it.',
         telegramSource: 'Open the selected video in Telegram and retry. If no readable source is available, use Telegram’s own download button.',
@@ -70,11 +94,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const tr = I18N[currentLang] || I18N.ar;
     document.documentElement.setAttribute('lang', currentLang);
     document.documentElement.setAttribute('dir', tr.dir);
-    statusBadge.textContent = isAlive ? tr.online : tr.offline;
-    statusBadge.className = isAlive ? 'status online' : 'status offline';
+    const state = isAlive === null ? '' : isAlive ? ' online' : ' offline';
+    const statusText = isAlive === null ? tr.checking : isAlive ? tr.online : tr.offline;
+    if (statusBadge.textContent !== statusText) statusBadge.textContent = statusText;
+    statusBadge.className = `status${state}`;
     if (statusMonitorIcon) {
-      statusMonitorIcon.setAttribute('class', isAlive ? 'status-ico online' : 'status-ico offline');
+      statusMonitorIcon.setAttribute('class', `status-ico${state}`);
     }
+    installCard.hidden = isAlive !== false;
+    grabCurrentPageBtn.disabled = isAlive !== true;
+    grabCurrentPageBtn.hidden = isAlive !== true;
+    document.getElementById('installDescription').textContent = tr.installDescription;
+    document.getElementById('installerLink').textContent = tr.installer;
+    document.getElementById('setupHelpLink').textContent = tr.setupHelp;
+    document.getElementById('reviewDescription').textContent = tr.reviewDescription;
+    document.getElementById('reviewLink').textContent = tr.reviewLink;
+    reviewInviteLink.textContent = tr.reviewInvite;
+    dismissReviewBtn.textContent = tr.dismissError;
+    reviewCard.hidden = !reviewOpen || !isAlive;
     lblIntercept.textContent = tr.intercept;
     lblVideoBtn.textContent = tr.videoBtn;
     if (lblGrabBtn) {
@@ -100,16 +137,25 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    const message = lastError && tr.errors[lastError.code];
+    const message = lastError && (lastError.code !== 'connection' || isAlive === false) && tr.errors[lastError.code];
     errorCard.hidden = !message;
     errorMessage.textContent = message || '';
   }
 
-  chrome.storage.session.get(['scorpionDownloadError']).then((data) => {
-    const error = data.scorpionDownloadError;
-    if (error && Number.isFinite(error.at) && Date.now() - error.at >= 0 && Date.now() - error.at < 3600000) lastError = error;
+  function setStoredError(error) {
+    const age = Date.now() - error?.at;
+    lastError = age >= 0 && age < 3600000 ? error : null;
     applyLang();
+  }
+  chrome.storage.session.get(['scorpionDownloadError']).then((data) => {
+    setStoredError(data.scorpionDownloadError);
   }).catch(() => {});
+  chrome.storage.onChanged?.addListener((changes, area) => {
+    if (area === 'session' && changes.scorpionDownloadError) {
+      setStoredError(changes.scorpionDownloadError.newValue);
+      if (lastError?.code === 'connection') refreshStatus();
+    }
+  });
 
   dismissErrorBtn.addEventListener('click', () => {
     lastError = null;
@@ -117,20 +163,49 @@ document.addEventListener('DOMContentLoaded', () => {
     applyLang();
   });
 
-  chrome.runtime.sendMessage({ action: 'SCORPION_CHECK_STATUS' }, (res) => {
-    isAlive = Boolean(res && res.alive);
-    lastStats = isAlive && res && res.stats && typeof res.stats === 'object' ? res.stats : null;
-    if (res && res.config) {
-      interceptToggle.checked = Boolean(res.config.interceptAllDownloads);
-      videoBtnToggle.checked = Boolean(res.config.showVideoFloatingBtn);
-      if (res.config.lang === 'en' || res.config.lang === 'ar') {
-        currentLang = res.config.lang;
-      }
-    }
+  function maybeShowReview() {
+    if (reviewSeen !== false || !isAlive || !(lastStats?.extensionCompletedCount >= 3)) return;
+    reviewSeen = true;
+    reviewOpen = true;
+    chrome.storage.local.set({ scorpionReviewPromptSeen: true });
+  }
+
+  chrome.storage.local.get?.(['scorpionReviewPromptSeen'], (data) => {
+    reviewSeen = Boolean(data?.scorpionReviewPromptSeen);
+    maybeShowReview();
     applyLang();
   });
+  function closeReview() { reviewOpen = false; applyLang(); }
+  dismissReviewBtn.addEventListener('click', closeReview);
+  reviewInviteLink.addEventListener('click', closeReview);
+
+  function refreshStatus() {
+    if (statusPending) return;
+    statusPending = true;
+    chrome.runtime.sendMessage({ action: 'SCORPION_CHECK_STATUS' }, (res) => {
+      const failed = Boolean(chrome.runtime.lastError);
+      statusPending = false;
+      isAlive = !failed && res?.alive === true;
+      lastStats = isAlive && res.stats && typeof res.stats === 'object' ? res.stats : null;
+      if (!configEdited && res?.config) {
+        interceptToggle.checked = Boolean(res.config.interceptAllDownloads);
+        videoBtnToggle.checked = Boolean(res.config.showVideoFloatingBtn);
+        if (res.config.lang === 'en' || res.config.lang === 'ar') currentLang = res.config.lang;
+      }
+      if (isAlive && lastError?.code === 'connection') {
+        lastError = null;
+        chrome.storage.session.remove('scorpionDownloadError').catch(() => {});
+      }
+      maybeShowReview();
+      applyLang();
+    });
+  }
+  applyLang();
+  refreshStatus();
+  window.setInterval(refreshStatus, 2500);
 
   function saveConfig(syncRemoteLang = false) {
+    configEdited = true;
     chrome.storage.local.set({
       scorpionConfig: {
         interceptAllDownloads: interceptToggle.checked,
@@ -161,7 +236,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!tab || !tab.url) return;
       const handleGrabReply = (res) => {
         if (!res || !res.ok) {
-          const code = res && res.error === 'drmProtected' ? 'drmProtected' : 'noVideo';
+          const code = ['drmProtected', 'connection'].includes(res?.error) ? res.error : 'noVideo';
+          if (code === 'connection') refreshStatus();
           lastError = { code, at: Date.now() };
           chrome.storage.session.set({ scorpionDownloadError: lastError }).catch(() => {});
           applyLang();

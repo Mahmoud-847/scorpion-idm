@@ -199,7 +199,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.28"
+APP_VERSION = "2.1.29"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -472,6 +472,9 @@ _EXTENSION_HASH_FILES = (
     "background.js",
     "content.js",
     "popup.js",
+    "welcome.html",
+    "welcome.css",
+    "welcome.js",
     "media.js",
     "browser-transfer.js",
     "telegram-reader.js",
@@ -607,6 +610,22 @@ def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool
 
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.29",
+        "date": "2026-11-19",
+        "title_ar": "الإصدار 2.1.29 — ربط سريع لمستخدمي الإضافة ودليل التثبيت المباشر",
+        "title_en": "Version 2.1.29 — Seamless Extension Onboarding & Direct Windows Installer Flow",
+        "ar": [
+            "إضافة كارت تحميل برنامج ويندوز مباشرةً داخل نافذة إضافة المتصفح عند عدم الاتصال مع صفحة ترحيب وتجربة تحميل فورية عند التثبيت الجديد.",
+            "اكتشاف لغة المتصفح تلقائياً وتجاوز التقاط رابط مثبّت البرنامج نفسه، ودعوة اختيارية لتقييم الإضافة بعد إتمام 3 تحميلات من المتصفح.",
+            "إطلاق صفحة التعريف والتحميل المباشر ثنائية اللغة في GitHub Pages وتحديث تعبئة ملفات الترحيب لإضافات المتصفح كافة.",
+        ],
+        "en": [
+            "Add a direct Windows installer card inside the extension popup when disconnected, alongside a first-install welcome page with live connection check and Quick Start download test.",
+            "Auto-detect browser locale, keep official Scorpion-Setup installer downloads in the browser, and show an optional store review prompt after 3 completed non-incognito extension downloads.",
+            "Ship the bilingual GitHub Pages landing site under docs/ and bundle welcome page assets across all local browser extension installations.",
+        ],
+    },
     {
         "version": "2.1.28",
         "date": "2026-11-18",
@@ -2535,6 +2554,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         "content.css",
         "popup.html",
         "popup.js",
+        "welcome.html",
+        "welcome.css",
+        "welcome.js",
         "icon.png",
         "scorpion-logo.svg",
         "icons/icon-16.png",
@@ -3295,7 +3317,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         "activeCount": engine_ref.active_count(),
                     }
                     if is_auth:
-                        ping_payload["totalCount"] = len(engine_ref.downloads)
+                        with engine_ref.lock:
+                            ping_payload["totalCount"] = len(engine_ref.downloads)
+                            ping_payload["extensionCompletedCount"] = len(engine_ref.settings.get("extensionCompletedIds") or [])
                     self.wfile.write(json.dumps(ping_payload).encode("utf-8"))
                     return
                 if parsed.path == "/focus":
@@ -3837,6 +3861,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "speedLimitKbps": 0,
             "createdAt": int(time.time() * 1000),
             "isVideo": is_video,
+            "fromBrowser": bool(opts.get("fromBrowser") or opts.get("browserTransfer")),
             "browserTransfer": bool(opts.get("browserTransfer")),
             "expectedDuration": finite_duration(opts.get("expectedDuration")),
             "isTorrent": is_torrent,
@@ -9791,6 +9816,7 @@ class ScorpionMainWindow(QMainWindow):
                 "connections": 32,
                 "startImmediately": True,
                 "fromBrowser": True,
+                "incognito": bool(payload.get("incognito")),
                 "_captureQuality": cap_quality,
                 "_captureType": cap_type,
                 "isVideo": is_video and quality != "direct",
@@ -9811,6 +9837,7 @@ class ScorpionMainWindow(QMainWindow):
                     "acceptLanguage": (payload.get("acceptLanguage") or "").strip(),
                     "expectedDuration": payload.get("expectedDuration") or 0,
                     "fromBrowser": True,
+                    "incognito": bool(payload.get("incognito")),
                     "_captureQuality": cap_quality,
                     "_captureType": cap_type,
                 })
@@ -9955,8 +9982,17 @@ class ScorpionMainWindow(QMainWindow):
             self.open_add_dialog(text, False, is_tor)
 
     def on_download_completed(self, dl_id: str):
-        if not self.engine.downloads.get(dl_id):
+        item = self.engine.downloads.get(dl_id)
+        if not item:
             return
+        if item.get("fromBrowser") and not item.get("incognito") and item.get("status") == "completed":
+            with self.engine.lock:
+                completed_ids = self.engine.settings.get("extensionCompletedIds") or []
+                changed = len(completed_ids) < 3 and dl_id not in completed_ids
+                if changed:
+                    self.engine.settings["extensionCompletedIds"] = [*completed_ids, dl_id]
+            if changed:
+                self.engine.save_state()
         dlg = self.open_progress_dialogs.get(dl_id)
         if dlg is not None and dlg.isVisible():
             return

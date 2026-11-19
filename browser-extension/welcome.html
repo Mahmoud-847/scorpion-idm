@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set up Scorpion IDM</title>
+  <link rel="icon" href="icons/icon-32.png">
+  <link rel="stylesheet" href="welcome.css">
+  <script src="welcome.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <img src="scorpion-logo.svg" width="56" height="56" alt="">
+      <div><span class="brand">Scorpion IDM</span><h1 id="heading">Connect your extension</h1></div>
+    </header>
+    <ol>
+      <li>
+        <h2 id="stepDownload">Download the Windows app</h2>
+        <p id="downloadHint">Run the installer and open Scorpion IDM.</p>
+        <a id="downloadInstaller" class="primary" href="https://github.com/Mahmoud-847/scorpion-idm/releases/download/v2.1.29/Scorpion-Setup-2.1.29.exe">Download Scorpion IDM (Windows)</a>
+      </li>
+      <li>
+        <h2 id="stepConnect">Confirm the connection</h2>
+        <p id="connectionHint">This page checks for the desktop app while it is open. If the app is running and still cannot connect, open Connect Browser in the app.</p>
+        <p class="connection" id="connectionStatus" role="status">Checking connection…</p>
+        <button id="tryDownload" type="button" hidden>Try your first download</button>
+        <p id="sampleStatus" role="status" hidden></p>
+      </li>
+    </ol>
+  </main>
+</body>
+</html>

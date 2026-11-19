@@ -110,11 +110,11 @@ test('downloads keep their own sources while the bar remains a download action t
   } finally { p.dom.window.close(); }
 });
 
-test('a desktop connection failure leaves the video button unchanged and reports only a popup error code', () => {
+test('a desktop connection failure keeps the action unchanged and points to setup in the popup', () => {
   const p = page(undefined, { beforeContent: ({ window }) => {
     const send = window.chrome.runtime.sendMessage;
     window.chrome.runtime.sendMessage = (message, callback) => {
-      if (message.action === 'SCORPION_DOWNLOAD_VIDEO') callback({ ok: false });
+      if (message.action === 'SCORPION_DOWNLOAD_VIDEO') callback({ ok: false, error: 'connection' });
       else send(message, callback);
     };
   } });
@@ -125,6 +125,7 @@ test('a desktop connection failure leaves the video button unchanged and reports
     assert.equal(label.textContent, mainText);
     assert.equal(label.title, '');
     assert.equal(p.sessionData.scorpionDownloadError.code, 'connection');
+    assert.match(p.panel.querySelector('.scorpion-idm-connection-notice').textContent, /غير متصل/);
   } finally { p.dom.window.close(); }
 });
 

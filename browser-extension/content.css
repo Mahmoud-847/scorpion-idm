@@ -278,3 +278,18 @@
   line-height: 1.6 !important;
   max-width: 300px !important;
 }
+.scorpion-idm-connection-notice {
+  position: absolute;
+  inset-block-start: calc(100% + 6px);
+  inset-inline-end: 0;
+  width: min(250px, calc(100vw - 20px));
+  box-sizing: border-box;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid #bd8035;
+  background: #241a12;
+  color: #fff0dc;
+  font: 13px/1.5 system-ui, sans-serif;
+  white-space: normal;
+}
+.scorpion-idm-connection-notice[hidden] { display: none !important; }

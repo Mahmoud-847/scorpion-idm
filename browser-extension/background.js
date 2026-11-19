@@ -1,5 +1,6 @@
 importScripts('media.js');
 const SCORPION_SERVER = 'http://127.0.0.1:19615';
+const RELEASE_INSTALLER = /^https:\/\/github\.com\/Mahmoud-847\/scorpion-idm\/releases\/download\/[^/]+\/Scorpion-Setup-[\d.]+\.exe(?:[?#]|$)/i;
 // Required by the desktop app for any state-changing call (web pages cannot send it cross-site).
 const SCORPION_HEADERS = { 'X-Scorpion-Client': '1' };
 let cachedBridgeToken = '';
@@ -97,10 +98,10 @@ let config = {
   interceptAllDownloads: true,
   showVideoFloatingBtn: true,
   minFileSizeKb: 100,
-  lang: 'ar',
+  lang: /^ar(?:-|$)/i.test(navigator.language || '') ? 'ar' : 'en',
 };
 
-const VALID_ERROR_CODES = new Set(['connection', 'drmProtected', 'noVideo', 'telegramSource', 'telegramAudio', 'transfer']);
+const VALID_ERROR_CODES = new Set(['connection', 'captureFailed', 'drmProtected', 'noVideo', 'telegramSource', 'telegramAudio', 'transfer']);
 const DRM_VIDEO_HOST_RE = /(^|\.)(netflix\.com|disneyplus\.com|primevideo\.com|shahid\.mbc\.net|watchit\.com|osnplus\.com|tv\.apple\.com|hulu\.com|max\.com|peacocktv\.com|paramountplus\.com|tod\.tv|starzplay\.com)$/i;
 const NO_COOKIE_MUSIC_HOST_RE = /(^|\.)(open\.spotify\.com|spotify\.com|music\.apple\.com|deezer\.com|anghami\.com)$/i;
 
@@ -166,10 +167,13 @@ chrome.storage.onChanged.addListener((changes) => {
   }
 });
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async ({ reason } = {}) => {
   await configReady;
   updateContextMenus(config.lang);
   checkScorpionAlive();
+  if (reason === 'install') {
+    await chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
+  }
 });
 
 if (chrome.runtime && chrome.runtime.onStartup) {
@@ -267,6 +271,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   if (downloadItem.state && downloadItem.state !== 'in_progress') return;
 
   const targetUrl = downloadItem.finalUrl || downloadItem.url || '';
+  if (RELEASE_INSTALLER.test(downloadItem.url || '') || RELEASE_INSTALLER.test(targetUrl)) return;
   if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) return;
   if (targetUrl.startsWith(SCORPION_SERVER)) return;
   // Telegram's virtual addresses only exist inside the page's service worker. (No fragment check here:
@@ -324,8 +329,16 @@ async function detectBrowserKey() {
 }
 
 let lastAppStats = null;
+let pendingAliveCheck = null;
 
-async function checkScorpionAlive() {
+function checkScorpionAlive() {
+  if (!pendingAliveCheck) {
+    pendingAliveCheck = queryScorpionStatus().finally(() => { pendingAliveCheck = null; });
+  }
+  return pendingAliveCheck;
+}
+
+async function queryScorpionStatus() {
   lastAppStats = null;
   try {
     await configReady;
@@ -341,11 +354,8 @@ async function checkScorpionAlive() {
           return false;
         }
         if (data && Number.isInteger(data.totalCount) && Number.isInteger(data.activeCount)) {
-          lastAppStats = { totalCount: data.totalCount, activeCount: data.activeCount };
-        }
-        if (data && (data.lang === 'en' || data.lang === 'ar') && data.lang !== config.lang) {
-          config = { ...config, lang: data.lang };
-          chrome.storage.local.set({ scorpionConfig: config });
+          lastAppStats = { totalCount: data.totalCount, activeCount: data.activeCount,
+            extensionCompletedCount: data.extensionCompletedCount };
         }
       } catch (_) {}
       return true;
@@ -595,6 +605,14 @@ function clientHeadersFor(urls) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === 'SCORPION_TRY_SAMPLE') {
+    if (sender.url !== chrome.runtime.getURL('welcome.html')) return false;
+    sendToScorpion({
+      url: 'https://raw.githubusercontent.com/Mahmoud-847/scorpion-idm/main/README.md',
+      filename: 'Scorpion-Quick-Start.md', type: 'file',
+    }).then((ok) => sendResponse({ ok }));
+    return true;
+  }
   if (msg.action === 'SCORPION_REPORT_ERROR') {
     recordPopupError(msg.code);
     sendResponse({ ok: true });
@@ -649,7 +667,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return sendResponse({ ok: false, error: 'جلسة التنزيل انتهت. أعد المحاولة من الفيديو.' });
       const res = await bridgeFetch(`${SCORPION_SERVER}/browser-transfer/${operation}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload), signal: AbortSignal.timeout(operation === 'finish' ? 120000 : 30000),
+        body: JSON.stringify(operation === 'start' ? { ...payload, incognito: Boolean(sender.tab.incognito) } : payload),
+        signal: AbortSignal.timeout(operation === 'finish' ? 120000 : 30000),
       });
       const data = await res.json();
       if (operation === 'start' && data.ok) await chrome.storage.session.set({ [`scorpionTransfer:${data.transferId}`]: owner });
@@ -677,7 +696,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const tabUrl = sender && sender.tab && sender.tab.url;
         payload.cookies = await siteCookies([payload.url, payload.pageUrl, tabUrl, ...(payload.candidates || [])], sender && sender.tab);
       }
-      sendResponse({ ok: await sendToScorpion(payload) });
+      const ok = await sendToScorpion(payload);
+      if (ok) sendResponse({ ok: true });
+      else {
+        const alive = await checkScorpionAlive();
+        const error = alive ? 'captureFailed' : 'connection';
+        recordPopupError(error);
+        sendResponse({ ok: false, error });
+      }
     };
     if (generic && sender && sender.tab && sender.frameId) {
       chrome.tabs.sendMessage(sender.tab.id, { action: 'SCORPION_GET_TITLE' }, { frameId: 0 }, (res) => {

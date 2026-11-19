@@ -20,6 +20,7 @@ vite.config.*
 postcss.config.*
 tailwind.config.*
 index.html
+!docs/index.html
 Start-Scorpion.bat
 build_release.ps1
 pack_extension.py
