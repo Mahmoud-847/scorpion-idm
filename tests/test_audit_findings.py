@@ -645,7 +645,7 @@ class AuditFindingsRegressionTests(unittest.TestCase):
 
     def test_23_24_docs_and_publisher_active_download_guard(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("بدون توقيع رقمي", readme)
+        self.assertIn("without independent code signing", readme.lower())
         self.assertIn("SHA-256", readme)
         build_ps1 = (ROOT / "build_installer.ps1").read_text(encoding="utf-8")
         self.assertIn("bridge-auth.json", build_ps1)
