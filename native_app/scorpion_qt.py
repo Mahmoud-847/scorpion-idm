@@ -651,6 +651,18 @@ def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool
 
 CHANGELOG_HISTORY = [
     {
+        "version": "2.1.32",
+        "date": "2026-11-26",
+        "title_ar": "إصلاح تنزيل يوتيوب",
+        "title_en": "YouTube downloads fixed",
+        "ar": [
+            "إصلاح فشل تنزيل فيديوهات يوتيوب وظهور «تعذر قراءة الجودات» عند تسجيل الدخول في المتصفح، بعد تغيير في يوتيوب.",
+        ],
+        "en": [
+            "Fix YouTube downloads failing, and “Could not read qualities”, when signed in to YouTube in the browser, after a change on YouTube's side.",
+        ],
+    },
+    {
         "version": "2.1.31",
         "date": "2026-11-26",
         "title_ar": "تنزيل أدق وأمان أكثر وبرنامج أخف",
@@ -5058,6 +5070,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             for frame_page, info in self._extract_from_player_frame(ydl, item, _unwrap_info):
                 item["url"] = frame_page
                 return info
+            # The user only sees the generic message: keep the extractor's real reason for diagnosis
+            if first_err is not None and hasattr(self, "record_diagnostic"):
+                self.record_diagnostic("extract_failed", f"{item.get('url') or ''} :: {first_err}")
             raise RuntimeError("تعذر تنزيل الفيديو المحدد. أعد فتح الفيديو واضغط زر التنزيل فوقه.") from first_err
 
         drm_music_domains = ("spotify.com", "anghami.com", "deezer.com", "music.apple.com", "widevine-license")
