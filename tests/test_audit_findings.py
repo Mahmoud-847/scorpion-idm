@@ -662,6 +662,7 @@ class AuditFindingsRegressionTests(unittest.TestCase):
         ns = {
             "BRIDGE_ALLOWED_ORIGIN_PREFIXES": sq.BRIDGE_ALLOWED_ORIGIN_PREFIXES,
             "BRIDGE_CLIENT_HEADER": sq.BRIDGE_CLIENT_HEADER,
+            "hmac": sq.hmac,
             "engine_ref": types.SimpleNamespace(bridge_token="secret-xyz"),
         }
         exec(compile(ast.Module(body=methods, type_ignores=[]), "scorpion_qt.py", "exec"), ns)
@@ -1307,6 +1308,52 @@ class FinalReleaseReviewTests(unittest.TestCase):
                 (asset.parent / "extra.png").write_bytes(b"new")
                 self.assertNotEqual(second, auto_publish.compute_snapshot())
         self.assertEqual(auto_publish._snapshot_digest("source.js", b"a\r\n"), auto_publish._snapshot_digest("source.js", b"a\n"))
+
+    def test_38_msix_disables_self_update_and_native_host_registration(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            local = root / "local"
+            msix_root = root / "msix_pkg"
+            msix_ext = msix_root / "browser-extension"
+            msix_ext.mkdir(parents=True)
+            (msix_ext / "manifest.json").write_text("{}", encoding="utf-8")
+            (msix_root / "AppxManifest.xml").write_text("<Package/>", encoding="utf-8")
+            app_ext = local / "ScorpionIDM" / "browser-extension"
+
+            e = _make_engine(root)
+            e.ext_source_dir = str(msix_ext)
+            e.legacy_prog_ext_dir = str(local / "Programs" / "ScorpionIDM" / "browser-extension")
+            e.appdata_ext_dir = str(app_ext)
+            e.app_data = str(local / "ScorpionIDM")
+            e.bridge_token = "m" * 64
+            e.settings["updateUrl"] = "https://github.com/Mahmoud-847/scorpion-idm"
+
+            with patch.object(sq, "RESOURCE_ROOT", str(msix_root)), \
+                 patch.dict(os.environ, {"LOCALAPPDATA": str(local)}), \
+                 patch.object(sq.requests, "get", side_effect=AssertionError("MSIX must not poll GitHub")):
+                self.assertTrue(sq.is_msix_packaged())
+                upd = e.check_for_updates()
+                self.assertFalse(upd.get("hasUpdate"))
+                self.assertTrue(upd.get("storeManaged"))
+                ok_inst, msg_inst = e.install_update_package("missing.zip", "a" * 64)
+                self.assertFalse(ok_inst)
+                self.assertIn("Microsoft Store", msg_inst)
+
+                perm_dir = e.get_permanent_ext_dir()
+                self.assertEqual(perm_dir, str(msix_ext))
+                self.assertEqual(e.sync_and_repair_browser_extensions()["repairedPaths"], [])
+                self.assertFalse((msix_ext / "bridge-auth.json").exists())
+                self.assertFalse((app_ext / "bridge-auth.json").exists())
+
+                host_dir = local / "ScorpionIDM"
+                sq.register_native_messaging_hosts(str(host_dir), write_registry=True)
+                self.assertFalse(host_dir.exists())
+
+            with patch.object(sq, "is_msix_packaged", return_value=False):
+                sq.register_native_messaging_hosts(str(host_dir), write_registry=False)
+                self.assertTrue((host_dir / "native_host.bat").is_file())
+                self.assertTrue((host_dir / f"{sq.NATIVE_HOST_NAME}.json").is_file())
+                self.assertEqual(e.create_store_pairing_code(), "")
 
 
 if __name__ == "__main__":

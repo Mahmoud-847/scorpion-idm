@@ -125,5 +125,9 @@ begin
     { Windows integration written by the app itself }
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunName}');
     RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\{#TorrentProgId}');
+    { Browser bridge hosts registered by the app would otherwise point at the removed program }
+    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Edge\NativeMessagingHosts\com.scorpionidm.bridge');
+    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Google\Chrome\NativeMessagingHosts\com.scorpionidm.bridge');
+    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.scorpionidm.bridge');
   end;
 end;

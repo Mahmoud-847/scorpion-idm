@@ -26,6 +26,30 @@ else:
 # in <install>/app (see build_installer.ps1). Older builds were frozen by PyInstaller.
 EMBEDDED_RUNTIME = not getattr(sys, "frozen", False) and os.path.basename(sys.executable).lower() == "scorpionidm.exe"
 INSTALLED = getattr(sys, "frozen", False) or EMBEDDED_RUNTIME
+MS_STORE_APP_ID = "9N3ZB1H6C77W"
+MS_STORE_APP_URL = f"ms-windows-store://pdp/?productid={MS_STORE_APP_ID}"
+
+
+def is_msix_packaged() -> bool:
+    """Returns True when running from an MSIX / Microsoft Store package."""
+    try:
+        if os.path.isfile(os.path.join(RESOURCE_ROOT, "AppxManifest.xml")):
+            return True
+    except Exception:
+        pass
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            buf_len = ctypes.c_uint32(0)
+            rc = ctypes.windll.kernel32.GetCurrentPackageFullName(ctypes.byref(buf_len), None)
+            if rc == 122:  # ERROR_INSUFFICIENT_BUFFER -> process has an app package identity
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def windows_display_language() -> str:
     if os.name == "nt":
         try:
@@ -40,6 +64,7 @@ def windows_display_language() -> str:
 
 
 import hashlib
+import hmac
 import http.cookiejar
 import secrets
 import socket
@@ -459,7 +484,7 @@ OFFICIAL_EXTENSION_ID = "hgcdbjpjlfgnejhceobphikeebmhmgcj"
 def load_or_create_bridge_token(app_data_dir: str = "") -> str:
     """Return the per-installation secret token shared between the desktop app and local extension."""
     base = app_data_dir or os.path.join(os.path.expanduser("~"), "AppData", "Local", "ScorpionIDM")
-    tok_path = os.path.join(base, "bridge_token")
+    tok_path = os.path.join(base, "store_bridge_token" if is_msix_packaged() else "bridge_token")
     try:
         if os.path.isfile(tok_path):
             with open(tok_path, "r", encoding="utf-8") as f:
@@ -583,6 +608,8 @@ def _discover_unpacked_extension_origins(ext_source_dir: str = "") -> list:
 
 def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool = True):
     """Register HKCU native messaging host manifest so extensions obtain bridge_token securely."""
+    if is_msix_packaged():
+        return
     base = app_data_dir or os.path.join(os.path.expanduser("~"), "AppData", "Local", "ScorpionIDM")
     try:
         os.makedirs(base, exist_ok=True)
@@ -595,7 +622,7 @@ def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool
         else:
             dev_site = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sitecustomize.py")
             bat_cmd = f'@echo off\r\n"{sys.executable}" "{dev_site}" --native-messaging %*\r\n'
-        with open(bat_path, "w", encoding="utf-8") as bf:
+        with open(bat_path, "w", encoding="utf-8", newline="") as bf:
             bf.write(bat_cmd)
         manifest = {
             "name": NATIVE_HOST_NAME,
@@ -624,245 +651,259 @@ def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool
 
 CHANGELOG_HISTORY = [
     {
-        "version": "2.1.30",
+        "version": "2.1.31",
         "date": "2026-11-26",
-        "title_ar": "قائمة جودات مقروءة وإصلاحات التثبيت والتنزيل",
-        "title_en": "Readable quality menu, setup language, and reliable downloads",
+        "title_ar": "تنزيل أدق وأمان أكثر وبرنامج أخف",
+        "title_en": "More precise downloads, safer, lighter",
         "ar": [
-            "قائمة الجودات تظل ظاهرة عند التبديل بين العربية والإنجليزية.",
-            "الإضافة تميّز بين عدم توفر جودات وأخطاء الاتصال وتفضل الفيديو المحدد.",
-            "أول تشغيل يتبع لغة التثبيت مع حفظ لغة المستخدم عند التحديث.",
-            "إصلاح تعلّق التنزيل المؤجل عند بدء التحميل أثناء فحص الرابط.",
+            "كليك يمين «تنزيل الفيديو» لم يعد ينزّل فيديو آخر في الصفحات التي فيها أكثر من فيديو.",
+            "المواقع لم تعد تستطيع بدء تنزيل من غير ما تضغط أنت على الزر.",
+            "البرنامج يفتح أسرع، ولا يتجمد عند إلغاء تنزيل تيليجرام وهو على وشك الانتهاء.",
+            "لو حدث خطأ غير متوقع في الواجهة يكمل البرنامج عمله بدل أن يُغلق.",
+            "عدد الاتصالات الذي تختاره في الإعدادات يبقى كما هو بعد إعادة التشغيل.",
+            "الإضافة أخف على صفحات فيسبوك والصفحات الطويلة أثناء التمرير.",
+            "المشغلات المضمّنة في المقالات تحتفظ بالفيديو حتى لو تغيّر رابط الصفحة.",
+            "حفظ الملفات التي أسماؤها محجوزة في ويندوز (مثل CON) بدل فشل التنزيل.",
+            "إلغاء تثبيت البرنامج ينظّف ربطه بالمتصفحات بالكامل.",
         ],
         "en": [
-            "Keep the quality menu readable while switching between Arabic and English.",
-            "Distinguish missing qualities from connection errors and respect the selected video.",
-            "Follow the setup language on first launch and preserve saved language when updating.",
-            "Prevent a delayed link probe from leaving an active download stuck.",
+            "Right-click “Download video” no longer downloads a different video on pages with several videos.",
+            "Websites can no longer start a download without you clicking the button.",
+            "The app opens faster and no longer freezes when you cancel a Telegram download that is about to finish.",
+            "An unexpected error in the window no longer closes the app.",
+            "The number of connections you choose in Settings is kept after a restart.",
+            "The extension is lighter on Facebook and other long pages while scrolling.",
+            "Players embedded in articles keep their video even when the page address changes.",
+            "Files whose names Windows reserves (such as CON) are saved instead of failing.",
+            "Uninstalling now fully removes the app's link to your browsers.",
+        ],
+    },
+    {
+        "version": "2.1.30",
+        "date": "2026-11-26",
+        "title_ar": "قائمة الجودات وإصلاحات التشغيل",
+        "title_en": "Quality list and startup fixes",
+        "ar": [
+            "قائمة الجودات تظل ظاهرة عند التبديل بين العربية والإنجليزية.",
+            "رسالة أوضح عندما لا توجد جودات للفيديو أو عندما لا يكون البرنامج متصلًا.",
+            "أول تشغيل يتبع لغة التثبيت، وتبقى لغتك كما هي بعد التحديث.",
+            "إصلاح تعليق التنزيل المؤجل عند بدئه أثناء فحص الرابط.",
+        ],
+        "en": [
+            "The quality list stays visible when switching between Arabic and English.",
+            "Clearer message when a video has no qualities or the app is not connected.",
+            "The first run follows the installer's language, and your language is kept after updates.",
+            "Fix a scheduled download getting stuck when started while its link was being checked.",
         ],
     },
     {
         "version": "2.1.29",
         "date": "2026-11-19",
-        "title_ar": "الإصدار 2.1.29 — ربط سريع لمستخدمي الإضافة ودليل التثبيت المباشر",
-        "title_en": "Version 2.1.29 — Seamless Extension Onboarding & Direct Windows Installer Flow",
+        "title_ar": "ربط أسهل بين الإضافة والبرنامج",
+        "title_en": "Easier setup between extension and app",
         "ar": [
-            "إضافة كارت تحميل برنامج ويندوز مباشرةً داخل نافذة إضافة المتصفح عند عدم الاتصال مع صفحة ترحيب وتجربة تحميل فورية عند التثبيت الجديد.",
-            "اكتشاف لغة المتصفح تلقائياً وتجاوز التقاط رابط مثبّت البرنامج نفسه، ودعوة اختيارية لتقييم الإضافة بعد إتمام 3 تحميلات من المتصفح.",
-            "إطلاق صفحة التعريف والتحميل المباشر ثنائية اللغة في GitHub Pages وتحديث تعبئة ملفات الترحيب لإضافات المتصفح كافة.",
+            "إذا لم يكن البرنامج مثبتًا تعرض نافذة الإضافة زرًا لتحميله، مع صفحة ترحيب بخطوات البدء وتجربة تنزيل.",
+            "الإضافة تتبع لغة المتصفح تلقائيًا، وملف تثبيت البرنامج يُنزَّل من المتصفح كالمعتاد.",
+            "دعوة اختيارية لتقييم الإضافة بعد ثلاثة تنزيلات.",
         ],
         "en": [
-            "Add a direct Windows installer card inside the extension popup when disconnected, alongside a first-install welcome page with live connection check and Quick Start download test.",
-            "Auto-detect browser locale, keep official Scorpion-Setup installer downloads in the browser, and show an optional store review prompt after 3 completed non-incognito extension downloads.",
-            "Ship the bilingual GitHub Pages landing site under docs/ and bundle welcome page assets across all local browser extension installations.",
+            "When the app is not installed, the extension window shows a button to download it, with a welcome page and a test download.",
+            "The extension follows your browser's language, and the app's installer downloads normally in the browser.",
+            "An optional invitation to rate the extension after three downloads.",
         ],
     },
     {
         "version": "2.1.28",
         "date": "2026-11-18",
-        "title_ar": "الإصدار 2.1.28 — تأمين استكمال الفيديو متعدد المنافذ ودعم الوصول الشامل وضبط السرعات المنخفضة",
-        "title_en": "Version 2.1.28 — Multi-Port Video Resume Validation, Card Accessibility & Low-Rate Precision",
+        "title_ar": "استكمال أوثق وسهولة استخدام",
+        "title_en": "More reliable resume and accessibility",
         "ar": [
-            "إلزام مطابقة محددات الهوية القوية (ETag / Last-Modified) في محرك استكمال الفيديو متعدد المنافذ لمنع خلط النسخ عند تغير الملف على الخادم.",
-            "تحديث فوري لاختيار إطار الفيديو عند تمرير المؤشر بعد الأوامر الصريحة، وعزل فوري لكاش جودات الفيديو عند تبديل الحساب في نفس التبويب.",
-            "دعم كامل لقارئات الشاشة وأسماء الوصول والتنقل بأسهم لوحة المفاتيح بين أزرار بطاقات التحميل المكدسة.",
-            "ضبط دقيق لمحدد السرعة عند الحدود المنخفضة لنقل المتصفح والتورنت، وفصل نجاح تثبيت ملفات التحديث عن فشل إعادة التشغيل التلقائي.",
-            "تشديد التحقق من المسارات الموثوقة وبصمة SHA-256 للإضافات المحلية، وتجميد لقطة المصدر المختبرة حتى إتمام النشر.",
+            "إذا تغيّر الملف على الخادم أثناء الإيقاف يبدأ التنزيل من جديد بدل خلط النسختين.",
+            "اختيار الفيديو الذي تشير إليه أسرع، وقائمة الجودات تتحدّث عند تغيير الحساب.",
+            "دعم قارئات الشاشة والتنقل بلوحة المفاتيح بين أزرار بطاقات التحميل.",
+            "تحديد السرعة أدق في السرعات المنخفضة.",
         ],
         "en": [
-            "Enforce strong ETag / Last-Modified entity validation across 16-port video range resumes and mid-stream responses to prevent cross-version splicing.",
-            "Allow subsequent pointer hovers to override earlier explicit frame selections immediately, and refresh authenticated quality lookups across same-tab session switches.",
-            "Expose full screen-reader accessible text/descriptions and Left/Right/Space/Enter keyboard action navigation on stacked download cards.",
-            "Preserve exact bandwidth debt and small chunk negotiation at low speed limits across browser transfers and torrents, and separate update file commit from relaunch failure.",
-            "Restrict local unpacked extension origin allowlisting and token provisioning strictly to canonical/SHA-256-verified Scorpion directories, and lock the tested source snapshot through git commit.",
+            "If a file changes on the server while paused, the download restarts instead of mixing the two versions.",
+            "Picking the video under the pointer is quicker, and the quality list refreshes when you switch accounts.",
+            "Screen-reader support and keyboard navigation between download card buttons.",
+            "More accurate speed limiting at low speeds.",
         ],
     },
     {
         "version": "2.1.27",
         "date": "2026-11-17",
-        "title_ar": "الإصدار 2.1.27 — الهوية الذهبية الجديدة وواجهة Obsidian وتطوير الإضافة وتعزيز الأمان",
-        "title_en": "Version 2.1.27 — Golden-Scorpion Brand Identity, Obsidian Desktop & Extension UI, and Integrity Hardening",
+        "title_ar": "شكل جديد بالكامل",
+        "title_en": "A completely new look",
         "ar": [
-            "تصميم جديد بالكامل بالهوية البصرية للعقرب الذهبي وأيقونات متجهة موحدة وواجهة Obsidian داكنة ببطاقات تحميل مكدسة وقائمة اختيار ملفات التورنت المباشرة، مع تحديث نافذة إضافة المتصفح وزر تحميل الفيديو العائم.",
-            "معالجة استجابات HTTP 200 المضغوطة (gzip/deflate) عند الرجوع لاتصال واحد دون اقتطاع المحتوى المفكوك، ومنع خلط النسخ عند غياب أو تغيّر نوع محدد الهوية عند الاستكمال.",
-            "الحفاظ على قيود الكوكيز hostOnly عبر جلسة HTTP وإعادة التوجيه، وفصل ذاكرة الجودات ببصمة الجلسة لكل حساب.",
-            "فصل نقطة الالتزام النهائية في التحديثات حتى لا يتسبب خطأ لاحق في حذف التطبيق، وتوفير انتظار حد السرعة التعاوني لنقل المتصفح وتوحيد ميزانية التورنت.",
-            "إصلاح تزويد bridge-auth.json التلقائي لكل مسارات الإضافة اليدوية مع دعم Native Messaging وإلزام التحقق بالمفتاح السري الحقيقي.",
+            "هوية العقرب الذهبي الجديدة، وواجهة داكنة، وبطاقات تحميل مكدّسة، واختيار ملفات التورنت قبل التنزيل.",
+            "إصلاح ملفات تصل ناقصة من بعض الخوادم.",
+            "الحفاظ على تسجيل الدخول عند التنزيل من مواقع تحوّل الروابط.",
+            "التحديث أكثر أمانًا: لا يتأثر البرنامج إذا حدث خطأ في آخر خطوة.",
+            "ربط الإضافة بالبرنامج تلقائي وآمن.",
         ],
         "en": [
-            "Complete Golden-Scorpion brand identity & unified vector icons with the new dark Obsidian & Amber desktop interface, stacked download cards, inline torrent file selection, redesigned extension popup, and updated “Download with Scorpion” floating video control.",
-            "Prevent false completion on compressed HTTP 200 fallbacks, and require comparable saved validators on partial resume to avoid mixing resource versions.",
-            "Enforce hostOnly cookie policy across requests sessions and redirects, and isolate quality caches by irreversible cookie fingerprint per account.",
-            "Enforce an explicit post-swap commit boundary in update installation, make browser-transfer rate limiting lock-free and abortable, and share a unified global budget with torrents.",
-            "Fix bridge-auth.json provisioning across all local unpacked extension paths, add Native Messaging token handoff, and require valid bridge tokens on all requests.",
+            "The new golden scorpion identity, a dark interface, stacked download cards, and choosing torrent files before downloading.",
+            "Fix files arriving incomplete from some servers.",
+            "Stay signed in when downloading from sites that redirect links.",
+            "Safer updates: an error in the last step no longer harms the installed app.",
+            "The extension connects to the app automatically and securely.",
         ],
     },
     {
         "version": "2.1.26",
         "date": "2026-11-17",
-        "title_ar": "الإصدار 2.1.26 — تثبيت سلامة الملفات والأمان وجودة تكامل المتصفح",
-        "title_en": "Version 2.1.26 — Data Integrity, Security Hardening & Browser Reliability",
+        "title_ar": "سلامة الملفات والأمان",
+        "title_en": "File safety and security",
         "ar": [
-            "حصر التنظيف التلقائي في مجلد التطبيق المؤقت فقط وعدم المساس بمجلد التنزيلات العام، وضمان حفظ مخرجات التورنت قبل حذف الملفات المؤقتة.",
-            "تحقق صارم من تطابق Content-Range و ETag / Last-Modified عند الاستكمال، وحفظ السجل بأقفال متسلسلة مع نسخة احتياطية .bak، وتحديث آمن مع استرجاع تلقائي عند الفشل.",
-            "تفعيل التحقق الكامل من شهادات SSL/TLS، وحفظ قيود الكوكيز (Secure / hostOnly / Expiration)، وعزل تنزيلات التصفح الخفي، وتوثيق الجسر المحلي بمفتاح اقتران.",
-            "انتظار تأكيد القبول الحقيقي في الإضافة قبل إلغاء تنزيل المتصفح، ودعم أوامر الإطارات iframe ولوحة المفاتيح وأسماء الوصول، وفحص الروابط خارج خيط الواجهة، وتوحيد محدد السرعة.",
+            "التنظيف التلقائي يحذف ملفات البرنامج المؤقتة فقط ولا يلمس مجلد التنزيلات.",
+            "الاستكمال يتأكد أن الملف ما زال هو نفسه على الخادم.",
+            "قائمة التنزيلات محفوظة بنسخة احتياطية حتى لا تضيع إذا أُغلق الجهاز فجأة.",
+            "تنزيلات التصفح الخفي منفصلة ولا تُحفظ في السجل.",
+            "الإضافة لا تلغي تنزيل المتصفح إلا بعد أن يقبله البرنامج.",
         ],
         "en": [
-            "Confined startup/item cleanup strictly to app temp directories, and prevented torrent temp deletion or false completion if output move fails.",
-            "Added strict Content-Range byte-bounds + ETag/Last-Modified resume verification, monotonic thread-safe state saves with .bak recovery, and staged rollback-capable updates.",
-            "Enabled TLS certificate verification across all requests, preserved Secure/hostOnly/expiry cookie constraints, isolated Incognito downloads, and paired the local bridge via a per-install secret token.",
-            "Fixed premature duplicate cancellation, iframe command routing, session-aware quality caching, scoped DRM checks, non-blocking Add URL probing, custom folder retention, full keyboard accessibility, accurate handshake status, scrollable settings, and unified bandwidth throttling.",
+            "Automatic cleanup only removes the app's own temporary files and never touches your downloads folder.",
+            "Resuming checks that the file on the server is still the same one.",
+            "The download list is backed up so it is not lost if the computer shuts down suddenly.",
+            "Private-browsing downloads are kept separate and are not saved to the history.",
+            "The extension only cancels the browser's download after the app accepts it.",
         ],
     },
     {
         "version": "2.1.25",
         "date": "2026-11-17",
-        "title_ar": "الإصدار 2.1.25 — إصلاح تحميل مشغلات البث المدمجة وأسماء الملفات المباشرة وترجمة الأخطاء",
-        "title_en": "Version 2.1.25 — Embedded HLS Stream Extraction, Direct Media Filenames & Error Localization",
+        "title_ar": "إصلاح المشغلات المضمّنة وأسماء الملفات",
+        "title_en": "Embedded players and file names",
         "ar": [
-            "تمرير ترويسات المتصفح الحقيقية (User-Agent و Accept-Language) مع إعادة استخراج الروابط من الإطار المدمج تلقائياً لمنع أخطاء 403 في مشغلات HLS مثل wecima و lplaygo.",
-            "الاحتفاظ بالاسم الحقيقي للملف عند التقاط روابط فيديو أو صوت مباشرة (.mp4 / .mp3) بدلاً من الاسم المؤقت Scorpion_Video.mp4.",
-            "ترجمة جميع رسائل الخطأ العربية إلى الإنجليزية عند تفعيل الواجهة الإنجليزية وتنقية عرض تفاصيل المنافذ عند فشل التحضير.",
+            "إصلاح فشل التنزيل (خطأ 403) من بعض مشغلات البث المضمّنة.",
+            "الاحتفاظ بالاسم الحقيقي للملف عند تنزيل فيديو أو صوت مباشر.",
+            "رسائل الخطأ بالإنجليزية عندما تكون الواجهة بالإنجليزية.",
         ],
         "en": [
-            "Forward real browser User-Agent & Accept-Language headers and automatically re-scrape embedded player iframes on expired/token-bound HLS links (fixing 403 errors on sites like wecima / lplaygo).",
-            "Preserve real filenames from direct media URLs (.mp4 / .mp3) instead of defaulting to Scorpion_Video.mp4.",
-            "Translate all download & validation error messages cleanly in English UI mode and refine pre-transfer error metadata.",
+            "Fix downloads failing (error 403) from some embedded streaming players.",
+            "Keep the real file name when downloading a direct video or audio link.",
+            "Error messages appear in English when the interface is in English.",
         ],
     },
     {
         "version": "2.1.24",
         "date": "2026-11-17",
-        "title_ar": "الإصدار 2.1.24 — إظهار التحميلات الفوري وتأكيد الإلغاء فوق جميع النوافذ",
-        "title_en": "Version 2.1.24 — Instant Main-Window Download Reveal & Topmost Confirmations",
+        "title_ar": "ظهور التنزيلات فورًا",
+        "title_en": "Downloads appear right away",
         "ar": [
-            "ضمان ظهور كل تحميل جديد أو ملتقط من المتصفح فوراً في جدول النافذة الرئيسية مع ضبط الفلاتر والتمرير التلقائي إليه.",
-            "إصلاح ظهور نافذة تأكيد الإلغاء خلف بطاقة التحميل المنبثقة: تُخفى البطاقة مؤقتاً وتفتح رسالة التأكيد دائماً في المقدمة بمنتصف الشاشة.",
-            "تحصين تحديث الجدول ضد الحقول الناقصة وتزامن الخيوط ومنع فقدان مقبض النافذة عند إظهار البرنامج من شريط المهام.",
+            "كل تنزيل جديد يظهر فورًا في القائمة الرئيسية.",
+            "رسالة تأكيد الإلغاء تظهر أمام كل النوافذ.",
+            "إصلاح إظهار البرنامج من شريط المهام.",
         ],
         "en": [
-            "Ensure every new or browser-captured download appears immediately in the main table, clearing hiding filters and scrolling to it.",
-            "Fixed cancel confirmation appearing behind the always-on-top DownloadCard; the card temporarily hides and the prompt opens centered on top.",
-            "Hardened refresh_all thread snapshotting and null handling, and preserved native window handle in bring_to_front().",
+            "Every new download appears in the main list right away.",
+            "The cancel confirmation always appears in front of other windows.",
+            "Fix showing the app from the taskbar.",
         ],
     },
     {
         "version": "2.1.23",
         "date": "2026-11-17",
-        "title_ar": "الإصدار 2.1.23 — ترقية الواجهة في جميع المراحل وتجربة RTL المتكاملة",
-        "title_en": "Version 2.1.23 — Full-Lifecycle UI Polish & Enhanced RTL/LTR Experience",
+        "title_ar": "واجهة أوضح في كل المراحل",
+        "title_en": "A clearer interface at every step",
         "ar": [
-            "إعادة تصميم بطاقة التحميل المنبثقة بمسافات مريحة، ترتيب أزرار طبيعي (الإجراء الرئيسي أولاً)، وحركة سلسة أثناء الاتصال والتحميل، مع زر إغلاق عند الاكتمال.",
-            "إعادة تصميم نافذة إضافة رابط ببطاقات حديثة وفحص غير متزامن للروابط مع تحذير فوري لمحتوى DRM وتعريب التصنيفات.",
-            "تحسين نافذة التقدم الـ 32 بورت بإلغاء الفراغ الزائد في الوضع المدمج وعرض رسائل الأخطاء وDRM كاملة متعددة الأسطر مع استجابة فورية لتبديل الثيم.",
-            "تحسين نافذة الإضافة والشريط العائم وتوضيح رسائل التنبيه داخل بطاقة التنبيه دون التأثير على شارة الاتصال.",
+            "بطاقة التحميل أوضح، بأزرار مرتبة وحركة أنعم.",
+            "نافذة إضافة رابط جديدة تفحص الرابط دون أن تتوقف الواجهة، وتنبهك إذا كان الفيديو محميًا.",
+            "نافذة التقدم تعرض رسائل الخطأ كاملة.",
+            "تحسين نافذة الإضافة وشريط التنزيل.",
         ],
         "en": [
-            "Refined floating DownloadCard proportions, natural primary-first button hierarchy, smooth 25fps progress shimmer, and a Close action on completion.",
-            "Redesigned AddDownloadDialog with layered cards, non-blocking async URL probe, instant DRM warnings, and localized category labels.",
-            "Eliminated excess blank space in compact IDMProgressDialog, enabled wrapped readable error/DRM explanations, and synced live theme switching.",
-            "Polished UpdateDialog (non-blocking update check) and browser extension popup/floating panel alignment.",
+            "A clearer download card with better-ordered buttons and smoother motion.",
+            "A new Add Link window checks the link without freezing and warns you about protected videos.",
+            "The progress window shows error messages in full.",
+            "Improved extension window and download bar.",
         ],
     },
     {
         "version": "2.1.22",
         "date": "2026-11-17",
-        "title_ar": "الإصدار 2.1.22 — حماية DRM ذكية، إصلاح SoundCloud/Spotify، وأسماء الملفات العربية",
-        "title_en": "Version 2.1.22 — Smart DRM Handling, SoundCloud/Spotify Audio Fixes & UTF-8 Filenames",
+        "title_ar": "المنصات المحمية والأسماء العربية",
+        "title_en": "Protected platforms and Arabic names",
         "ar": [
-            "إخفاء زر التحميل العائم في منصات الفيديو المحمية بـ DRM (مثل Netflix وShahid) وعرض تنبيه عربي واضح عند الطلب اليدوي.",
-            "إصلاح تنزيل SoundCloud (التقاط التراك الفعلي من /discover والبديل الصوتي للتراكات المحمية من المصدر).",
-            "تحسين استقرار البديل الصوتي لـ Spotify ومنع إرسال Referer خارجي أو رفض الملف لفرق ثوانٍ بسيطة.",
-            "استعادة أسماء الملفات العربية المشوّهة (UTF-8 Mojibake) من ترويسات السيرفرات وتوسيع استخراج روابط الصوت في التضمينات.",
+            "زر التنزيل لا يظهر في المنصات المحمية مثل Netflix وShahid، مع رسالة توضح السبب.",
+            "إصلاح تنزيل SoundCloud.",
+            "تحسين تنزيل الأغاني من Spotify.",
+            "إصلاح أسماء الملفات العربية التي كانت تظهر رموزًا غريبة.",
         ],
         "en": [
-            "Auto-hide the floating video panel on DRM-protected platforms (Netflix, Shahid, etc.) and show a clear DRM notice on manual actions.",
-            "Fixed SoundCloud track URL extraction on /discover feeds and enabled public audio fallback for DRM-locked SoundCloud tracks.",
-            "Fixed Spotify track switching reactivity, Referer/cookie isolation, and audio fallback duration tolerance.",
-            "Recovered UTF-8 mojibake Arabic filenames from Content-Disposition headers and expanded embedded media scraper extensions.",
+            "The download button is hidden on protected platforms such as Netflix and Shahid, with a message explaining why.",
+            "Fix SoundCloud downloads.",
+            "Improved song downloads from Spotify.",
+            "Fix Arabic file names that showed garbled characters.",
         ],
     },
     {
         "version": "2.1.21",
         "date": "2026-11-13",
-        "title_ar": "الإصدار 2.1.21 — منع التكرار، زر الإلغاء، وإصلاح تحميل الصوت والتقارير",
-        "title_en": "Version 2.1.21 — Deduplication, Card Cancel Button, Audio & Report Fixes",
+        "title_ar": "منع التكرار وزر الإلغاء",
+        "title_en": "No duplicates and a Cancel button",
         "ar": [
-            "منع تكرار تنزيل نفس الرابط مرتين عند وصول إشارة الالتقاط أكثر من مرة.",
-            "إضافة زر «إلغاء» واضح في أسفل بطاقة التحميل المنبثقة لإيقاف وحذف التحميل فورًا.",
-            "إصلاح توقف تحميل مقاطع SoundCloud / HLS عند 20% عبر ضبط عدد الاتصالات المتزامنة.",
-            "تسريع بدء تحميل ملفات المواقع البطيئة وعدم تجميد الواجهة، مع اكتشاف امتداد الملفات مثل (.xlsx, .csv, .pdf) تلقائيًا.",
+            "منع تنزيل الرابط نفسه مرتين.",
+            "زر «إلغاء» في بطاقة التحميل.",
+            "إصلاح توقف تنزيل SoundCloud عند 20%.",
+            "بدء أسرع مع المواقع البطيئة، والتعرف على امتدادات الملفات (مثل xlsx وcsv وpdf) تلقائيًا.",
         ],
         "en": [
-            "Prevented duplicate downloads when identical captures arrive within seconds.",
-            "Added a visible Cancel button at the bottom of the floating DownloadCard popup.",
-            "Fixed SoundCloud / HLS audio downloads stalling at 20% by tuning concurrent fragment downloads.",
-            "Skipped synchronous UI-thread probes for browser-captured files, raised read timeout for slow report servers, and inferred missing extensions (.xlsx, .csv, .pdf) from headers/query.",
+            "The same link is no longer downloaded twice.",
+            "A Cancel button on the download card.",
+            "Fix SoundCloud downloads stopping at 20%.",
+            "Faster start on slow sites, and file extensions (such as xlsx, csv, pdf) are detected automatically.",
         ],
     },
     {
         "version": "2.1.20",
         "date": "2026-11-13",
-        "title_ar": "الإصدار 2.1.20 — إصلاح وتحسين التعرف على ملفات الصوت",
-        "title_en": "Version 2.1.20 — Audio Detection & Download Fixes",
+        "title_ar": "تنزيل الصوتيات",
+        "title_en": "Audio downloads",
         "ar": [
-            "إصلاح ظهور الشريط العائم فوق مشغلات الصوت القياسية (<audio>) والمشغلات المخفية وصفحات التشغيل المباشر للصوتيات.",
-            "دعم جميع صيغ الصوت (MP3, M4A, OGG, OPUS, AAC, WAV, FLAC, WMA, AMR, M4B, WEBA, AIFF) ونوع MIME audio/* في الإضافة والبرنامج.",
-            "إصلاح تحميل المقاطع والرسائل الصوتية من تليجرام والتحقق الصحيح من المسارات الصوتية عبر ffprobe.",
-            "تحسين استخراج الصوتيات المحمية بالكوكيز والمرجع (Referer) واكتشاف روابط الصوت في الحافظة.",
+            "شريط التنزيل يظهر فوق مشغلات الصوت.",
+            "دعم كل صيغ الصوت المشهورة.",
+            "إصلاح تنزيل المقاطع والرسائل الصوتية من تيليجرام.",
+            "تنزيل الصوتيات التي تحتاج تسجيل دخول.",
         ],
         "en": [
-            "Fixed floating download bar detection for standard <audio> controls, hidden audio players, and standalone browser audio tabs.",
-            "Added full audio format (MP3, M4A, OGG, OPUS, AAC, WAV, FLAC, WMA, AMR, M4B, WEBA, AIFF) and audio/* MIME support across extension and desktop.",
-            "Fixed Telegram audio/voice transfers and ffprobe validation for direct and audio-only streams.",
-            "Forwarded cookies and Referer for authenticated audio downloads and expanded clipboard audio extension detection.",
-        ],
-    },
-    {
-        "version": "2.1.19",
-        "date": "2026-11-13",
-        "title_ar": "الإصدار 2.1.19",
-        "title_en": "Version 2.1.19",
-        "ar": [
-            "تحسينات وإصلاحات عامة.",
-        ],
-        "en": [
-            "General improvements and fixes.",
+            "The download bar appears over audio players.",
+            "Support for all common audio formats.",
+            "Fix downloading audio clips and voice messages from Telegram.",
+            "Download audio that requires signing in.",
         ],
     },
     {
         "version": "2.1.18",
         "date": "2026-11-12",
-        "title_ar": "الإضافة الرسمية على متجر Microsoft Edge",
-        "title_en": "Official Microsoft Edge Add-ons Store Integration",
+        "title_ar": "الإضافة على متجر Microsoft Edge",
+        "title_en": "The extension on the Microsoft Edge store",
         "ar": [
-            "ربط متصفح Microsoft Edge مباشرةً بالإضافة الرسمية على متجر مايكروسوفت للتثبيت بضغطة واحدة.",
-            "تمييز حالة الإضافة في Edge بين نسخة المتجر الرسمية والنسخة اليدوية السابقة، مع زر سريع لإدارتها ومنع التكرار.",
-            "تحديث دليل المشروع وروابط التثبيت الرسمية وسياسة الخصوصية.",
+            "الإضافة الرسمية متاحة على متجر Microsoft Edge وتُثبَّت بضغطة واحدة.",
+            "البرنامج يفرّق بين إضافة المتجر والنسخة اليدوية القديمة ويمنع تكرارهما.",
         ],
         "en": [
-            "Link Microsoft Edge directly to the official Microsoft Edge Add-ons Store listing for 1-click installation.",
-            "Distinguish official Edge Store vs. manual unpacked setup, with a quick Manage Extensions shortcut to prevent duplicates.",
-            "Update project documentation, official store links, and build/test reference.",
+            "The official extension is on the Microsoft Edge store and installs in one click.",
+            "The app tells the store extension apart from an older manual copy and avoids running both.",
         ],
     },
     {
         "version": "2.1.17",
         "date": "2026-11-08",
-        "title_ar": "شريط تنزيل ثابت وسياسة خصوصية واضحة",
-        "title_en": "A stable download button and a clear privacy policy",
+        "title_ar": "شريط تنزيل ثابت وسياسة خصوصية",
+        "title_en": "Steady download bar and privacy policy",
         "ar": [
-            "شريط الفيديو يعرض زر التنزيل والجودة فقط، دون حالات أو نسب أو رسائل خطأ.",
-            "تنزيل فيديو من تليجرام لا يمنع تنزيل فيديو آخر تختاره، مع منع تكرار تنزيل المصدر نفسه أثناء عمله.",
-            "قراءة تنزيل تليجرام تظل مرتبطة بالفيديو الأصلي أثناء التمرير، حتى إذا أزالت الصفحة مشغله من العرض.",
-            "إضافة سياسة خصوصية عامة ورابط لها داخل نافذة الإضافة، مع عرض أخطاء الإرسال هناك بدل شريط الفيديو.",
+            "شريط الفيديو يعرض زر التنزيل والجودة فقط، دون حالات أو نسب.",
+            "تنزيل فيديو من تيليجرام لا يمنع تنزيل فيديو آخر، ولا يتكرر تنزيل المصدر نفسه.",
+            "تنزيل تيليجرام يبقى مرتبطًا بالفيديو الأصلي أثناء التمرير.",
+            "سياسة خصوصية واضحة يمكن فتحها من نافذة الإضافة.",
         ],
         "en": [
-            "The video bar keeps its download action and quality picker without statuses, progress or error messages.",
-            "A Telegram transfer no longer blocks another selected video; repeated clicks do not duplicate an active source.",
-            "Telegram reads stay bound to the original source while scrolling, even when the page removes its player.",
-            "Add a public privacy policy and a popup link, and show send errors in the popup instead of the video bar.",
+            "The video bar shows only the download and quality buttons, with no status or percentages.",
+            "A Telegram download no longer blocks downloading another video, and the same source is not downloaded twice.",
+            "A Telegram download stays tied to its video while you scroll.",
+            "A clear privacy policy, available from the extension window.",
         ],
     },
     {
@@ -1153,7 +1194,12 @@ def _fix_header_mojibake(val: str) -> str:
 
 def sanitize_filename(name: str) -> str:
     fixed = _fix_header_mojibake(name or "")
-    clean = "".join("_" if c in '<>:"/\\|?*\r\n\t' else c for c in (fixed or "download_file")).strip()
+    clean = "".join("_" if c in '<>:"/\\|?*\r\n\t' or ord(c) < 32 else c for c in (fixed or "download_file")).strip()
+    # Windows refuses names ending in a dot or space, and device names such as CON.mp4 or NUL.txt
+    clean = clean.rstrip(". ")
+    stem = clean.split(".", 1)[0].strip().upper()
+    if stem in {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}:
+        clean = "_" + clean
     return clean or "scorpion_download.bin"
 
 
@@ -2654,7 +2700,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             self.settings["updateUrl"] = "https://github.com/Mahmoud-847/scorpion-idm.git"
             self.save_state()
         self.cleanup_old_update_files()
-        self.sync_and_repair_browser_extensions()
+        # Reads every browser profile's preferences and hashes extension files: never on the window's thread
+        threading.Thread(target=self.sync_and_repair_browser_extensions, daemon=True).start()
         threading.Thread(target=self._speed_loop, daemon=True).start()
         threading.Thread(target=self._start_browser_rpc_bridge, daemon=True).start()
         threading.Thread(target=self._queue_loop, daemon=True).start()
@@ -2692,6 +2739,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "localPackage": "",
         }
         src = (self.settings.get("updateUrl") or "").strip()
+        if is_msix_packaged():
+            result["storeManaged"] = True
+            return result
         manifest = None
 
         if src:
@@ -2937,6 +2987,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         import time
         import zipfile
 
+        if is_msix_packaged():
+            return False, "تُدار التحديثات تلقائياً عبر Microsoft Store / Updates are managed by Microsoft Store."
+
         if not os.path.isfile(pkg_path):
             return False, "ملف التحديث غير موجود"
 
@@ -3154,6 +3207,12 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 pass
 
     def sync_and_repair_browser_extensions(self) -> dict:
+        # One at a time: startup runs it in the background while a dialog may ask for it
+        lock = self.__dict__.setdefault("_ext_sync_lock", threading.Lock())
+        with lock:
+            return self._sync_and_repair_browser_extensions()
+
+    def _sync_and_repair_browser_extensions(self) -> dict:
         """
         Ensures all browser extension files and per-install bridge-auth.json exist across:
         1. Declared extension directories (ext_source_dir, legacy_prog_ext_dir, appdata_ext_dir)
@@ -3162,6 +3221,15 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         """
         repaired_paths = []
         src_abs = os.path.normcase(os.path.abspath(self.ext_source_dir))
+        msix_mode = is_msix_packaged()
+        if msix_mode:
+            return {
+                "primaryPath": self.ext_source_dir,
+                "legacyPath": "",
+                "filesPresent": sum(os.path.exists(os.path.join(self.ext_source_dir, f)) for f in self.REQUIRED_EXT_FILES),
+                "filesTotal": len(self.REQUIRED_EXT_FILES),
+                "repairedPaths": [],
+            }
         candidate_dirs = [self.ext_source_dir, self.legacy_prog_ext_dir, self.appdata_ext_dir]
         # Avoid touching user Downloads in isolated temporary test environments (e.g. legacy_prog_ext_dir under TEMP)
         is_isolated_temp = os.path.normcase(os.path.abspath(self.legacy_prog_ext_dir)).startswith(
@@ -3218,6 +3286,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         }
 
     def get_permanent_ext_dir(self) -> str:
+        if is_msix_packaged():
+            return self.ext_source_dir
         self.sync_and_repair_browser_extensions()
         if os.path.exists(os.path.join(self.legacy_prog_ext_dir, "manifest.json")):
             return self.legacy_prog_ext_dir
@@ -3268,8 +3338,34 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         except Exception:
             pass
 
+    def create_store_pairing_code(self) -> str:
+        if not is_msix_packaged():
+            return ""
+        code = secrets.token_hex(6).upper()
+        with self.lock:
+            self._store_pairing = (code, time.monotonic() + 300, 6)
+        return "-".join(code[index:index + 4] for index in range(0, len(code), 4))
+
+    def redeem_store_pairing_code(self, code: str) -> str:
+        if not isinstance(code, str) or not re.fullmatch(r"[0-9A-Fa-f]{12}", code):
+            return ""
+        with self.lock:
+            pairing = getattr(self, "_store_pairing", None)
+            if pairing is None:
+                return ""
+            expected, deadline, attempts = pairing
+            if time.monotonic() >= deadline:
+                self._store_pairing = None
+                return ""
+            if hmac.compare_digest(expected, code.upper()):
+                self._store_pairing = None
+                return self.bridge_token
+            self._store_pairing = (expected, deadline, attempts - 1) if attempts > 1 else None
+            return ""
+
     def _start_browser_rpc_bridge(self):
         engine_ref = self
+        store_mode = is_msix_packaged()
 
         class BridgeHandler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
@@ -3283,8 +3379,6 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 return origin.startswith(BRIDGE_ALLOWED_ORIGIN_PREFIXES)
 
             def _is_trusted_client(self) -> bool:
-                import hmac
-
                 if not self._origin_allowed() or self.headers.get(BRIDGE_CLIENT_HEADER) != "1":
                     return False
                 try:
@@ -3294,11 +3388,16 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 if not expected_tok:
                     return False
                 provided_tok = (self.headers.get("X-Scorpion-Token") or "").strip()
-                return bool(provided_tok and hmac.compare_digest(provided_tok, expected_tok))
+                return bool(provided_tok and provided_tok.isascii() and
+                            hmac.compare_digest(provided_tok, expected_tok))
 
             def _send_cors(self, code=200):
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
+                if store_mode:
+                    self.send_header("X-Scorpion-Bridge-Mode", "store")
+                    self.send_header("Access-Control-Expose-Headers", "X-Scorpion-Bridge-Mode")
+                    self.send_header("Cache-Control", "no-store")
                 origin = (self.headers.get("Origin") or "").strip()
                 if origin and self._origin_allowed():
                     self.send_header("Access-Control-Allow-Origin", origin)
@@ -3335,7 +3434,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                     if qs.get("set_lang") and is_auth:
                         new_lang = (qs.get("set_lang") or [""])[0].strip().lower()
                         if new_lang in ("ar", "en") and engine_ref.settings.get("lang") != new_lang:
-                            engine_ref.settings["lang"] = new_lang
+                            with engine_ref.lock:
+                                engine_ref.settings["lang"] = new_lang
                             engine_ref.save_state()
                             engine_ref.signals.lang_changed.emit(new_lang)
                     self._send_cors(200)
@@ -3390,6 +3490,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
             def do_POST(self):
                 parsed = urllib.parse.urlparse(self.path)
+                if store_mode and parsed.path == "/pair":
+                    self._pair_store_extension()
+                    return
                 if not self._is_trusted_client():
                     self._reject()
                     return
@@ -3444,6 +3547,29 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 self._send_cors(404)
                 self.wfile.write(json.dumps({"ok": False}).encode("utf-8"))
 
+            def _pair_store_extension(self):
+                origin = (self.headers.get("Origin") or "").strip()
+                try:
+                    size = int(self.headers.get("Content-Length") or 0)
+                    if not 0 < size <= 128:
+                        raise ValueError("Invalid pairing request size")
+                    self.connection.settimeout(3)
+                    body = self.rfile.read(size)
+                    if (not re.fullmatch(r"chrome-extension://[a-p]{32}", origin) or
+                            self.headers.get(BRIDGE_CLIENT_HEADER) != "1" or
+                            self.headers.get_content_type() != "application/json"):
+                        self._reject()
+                        return
+                    data = json.loads(body)
+                    token = engine_ref.redeem_store_pairing_code(data.get("code")) if isinstance(data, dict) else ""
+                except (ValueError, OSError):
+                    token = ""
+                if not token:
+                    self._reject()
+                    return
+                self._send_cors(200)
+                self.wfile.write(json.dumps({"ok": True, "token": token}).encode("utf-8"))
+
         try:
             srv = ThreadingHTTPServer(("127.0.0.1", self.rpc_port), BridgeHandler)
             self.rpc_alive = True
@@ -3478,8 +3604,11 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             try:
                 if isinstance(data.get("settings"), dict):
                     self.settings.update(data["settings"])
-                    if int(self.settings.get("defaultConnections") or 0) < 32:
-                        self.settings["defaultConnections"] = 32
+                    # One-time move to the new default; afterwards the user's own choice is kept
+                    if not self.settings.get("connections32Migrated"):
+                        if int(self.settings.get("defaultConnections") or 0) < 32:
+                            self.settings["defaultConnections"] = 32
+                        self.settings["connections32Migrated"] = True
                 for item in data.get("downloads", []):
                     if not isinstance(item, dict) or not item.get("id"):
                         continue
@@ -3856,7 +3985,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         base, ext = os.path.splitext(filename)
         final_name = filename
         idx = 1
-        reserved_paths = {os.path.normcase(it.get("filePath") or "") for it in self.downloads.values()}
+        # Snapshot under the lock: another thread may add a download while we look
+        with self.lock:
+            reserved_paths = {os.path.normcase(it.get("filePath") or "") for it in list(self.downloads.values())}
         while os.path.exists(os.path.join(save_dir, final_name)) or os.path.normcase(os.path.join(save_dir, final_name)) in reserved_paths:
             final_name = f"{base} ({idx}){ext}"
             idx += 1
@@ -4863,6 +4994,11 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             orig_hdrs = ydl.params.get("http_headers")
             saved_hdrs = dict(orig_hdrs or {})
             saved_cookiefile = ydl.params.pop("cookiefile", None)
+            saved_cookies = []
+            try:
+                saved_cookies = list(ydl.cookiejar)
+            except Exception:
+                saved_cookies = []
             try:
                 if getattr(ydl, "cookiejar", None) is not None:
                     ydl.cookiejar.clear()
@@ -4883,6 +5019,12 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 pass
             if saved_cookiefile is not None:
                 ydl.params["cookiefile"] = saved_cookiefile
+            # The search failed: later fallbacks still need the site's sign-in cookies
+            for cookie in saved_cookies:
+                try:
+                    ydl.cookiejar.set_cookie(cookie)
+                except Exception:
+                    pass
             ydl.params["http_headers"] = orig_hdrs if orig_hdrs is not None else saved_hdrs
             return None
 
@@ -5014,7 +5156,10 @@ class ScorpionNativeEngine(BrowserTransferMixin):
 
     def _available_media_path(self, path: str, dl_id: str) -> str:
         base, ext = os.path.splitext(path)
-        reserved = {os.path.normcase(it.get("filePath") or "") for it in self.downloads.values() if it.get("id") != dl_id}
+        # Snapshot under the lock: a finishing transfer must never fail because a download was added meanwhile
+        with self.lock:
+            reserved = {os.path.normcase(it.get("filePath") or "") for it in list(self.downloads.values())
+                        if it.get("id") != dl_id}
         result, index = path, 1
         while os.path.exists(result) or os.path.normcase(result) in reserved:
             result = f"{base} ({index}){ext}"
@@ -6443,8 +6588,9 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         self.save_state()
 
     def delete_completed(self):
-        for k in [k for k, v in self.downloads.items() if v["status"] == "completed"]:
-            self.downloads.pop(k, None)
+        with self.lock:
+            for k in [k for k, v in list(self.downloads.items()) if v["status"] == "completed"]:
+                self.downloads.pop(k, None)
         self.save_state()
 
     def compute_checksum(self, dl_id: str):
@@ -7696,6 +7842,8 @@ class SettingsDialog(QDialog):
         self.chk_startup = QCheckBox(T("تشغيل البرنامج تلقائياً مع ويندوز (في الخلفية)", "Start with Windows (in the tray)"))
         self.chk_startup.setChecked(bool(s.get("startWithWindows", True)))
         g2.addWidget(self.chk_startup, 3, 0, 1, 3)
+        # The Store package declares its own startup task, which only Windows Settings can switch on
+        self.chk_startup.setVisible(not is_msix_packaged())
         self.chk_assoc = QCheckBox(T("فتح ملفات التورنت وروابط ماجنت بالبرنامج","Open .torrent files and Magnet links with Scorpion"))
         self.chk_assoc.setChecked(bool(s.get("associateTorrents", True)))
         g2.addWidget(self.chk_assoc, 4, 0, 1, 3)
@@ -7768,7 +7916,7 @@ class SettingsDialog(QDialog):
             s["schedLastFired"] = ""
         s["schedTime"] = new_time
         self.engine.save_state()
-        apply_shell_integration(s)
+        apply_shell_integration_async(s)
         self.accept()
 
 
@@ -7892,7 +8040,7 @@ class UpdateDialog(QDialog):
         root.addLayout(btns)
 
         self._refresh_view()
-        if update_info is None and not just_updated:
+        if update_info is None and not just_updated and not is_msix_packaged():
             QTimer.singleShot(80, self._check_now)
 
     def _save_prefs(self):
@@ -7905,20 +8053,31 @@ class UpdateDialog(QDialog):
 
     def _refresh_view(self):
         c = pal()
-        has_upd = bool(self.info.get("hasUpdate"))
-        error = (self.info.get("error") or "").strip()
+        msix_mode = is_msix_packaged()
+        has_upd = False if msix_mode else bool(self.info.get("hasUpdate"))
+        error = "" if msix_mode else (self.info.get("error") or "").strip()
         if " / " in error:  # friendly errors are stored as "Arabic / English"
             error = error.split(" / ", 1)[0 if self.is_ar else 1]
         lat_ver = self.info.get("latestVersion") or APP_VERSION
         pub_date = self.info.get("publishedAt") or CHANGELOG_HISTORY[0]["date"]
         checked = self.info.get("checkedAt") or ""
         checked_txt = self.T(f"آخر فحص: {L(checked)}", f"Last checked: {checked}") if checked else ""
+        self.btn_check.setVisible(not msix_mode)
         # "Update Now" only exists when there is something to install
         self.btn_update_now.setVisible(has_upd)
         if not self._updating:
             self.btn_update_now.setEnabled(has_upd)
 
-        if has_upd:
+        if msix_mode:
+            headline, color = self.T(
+                f"✅ الإصدار المثبّت من المتجر: {L('v' + APP_VERSION)}",
+                f"✅ Microsoft Store Edition (v{APP_VERSION})",
+            ), c["success"]
+            sub = self.T(
+                "تُدار التحديثات تلقائياً بواسطة متجر Microsoft Store.",
+                "Updates are managed and delivered automatically by Microsoft Store.",
+            )
+        elif has_upd:
             headline, color = self.T(
                 f"🚀 يتوفر تحديث جديد للبرنامج: الإصدار {L('v' + lat_ver)}",
                 f"🚀 New Update Available: Version v{lat_ver}",
@@ -8204,7 +8363,7 @@ def app_launch_command() -> str:
 
 
 def set_start_with_windows(enabled: bool):
-    if os.name != "nt" or not INSTALLED:
+    if os.name != "nt" or not INSTALLED or is_msix_packaged():
         return
     import winreg
     try:
@@ -8243,7 +8402,7 @@ def _reg_delete_tree(path: str):
 
 def set_torrent_association(enabled: bool):
     """Registers Scorpion as handler for .torrent files and magnet: links (current user only)."""
-    if os.name != "nt" or not INSTALLED:
+    if os.name != "nt" or not INSTALLED or is_msix_packaged():
         return
     import winreg
     cmd = f'{app_launch_command()} "%1"'
@@ -8350,7 +8509,7 @@ def create_shortcut_native(lnk_path: str, target_path: str, work_dir: str, icon_
 
 def ensure_app_shortcuts(settings: dict):
     """Self-heals Start Menu and Desktop shortcuts whenever the installed app runs."""
-    if os.name != "nt":
+    if os.name != "nt" or is_msix_packaged():
         return
     installed_exe = os.path.join(
         os.environ.get("LOCALAPPDATA", ""), "Programs", "ScorpionIDM", "ScorpionIDM.exe"
@@ -8397,7 +8556,12 @@ def apply_shell_integration(settings: dict):
     set_start_with_windows(bool(settings.get("startWithWindows", True)))
     set_torrent_association(bool(settings.get("associateTorrents", True)))
     ensure_app_shortcuts(settings)
-    register_native_messaging_hosts()
+    # The browser bridge host is registered by the engine's extension sync (in the background at startup)
+
+
+def apply_shell_integration_async(settings: dict):
+    """Registry and shortcut work, off the window's thread."""
+    threading.Thread(target=apply_shell_integration, args=(dict(settings),), daemon=True).start()
 
 
 def item_mode(it: dict) -> str:
@@ -9003,7 +9167,7 @@ class ScorpionMainWindow(QMainWindow):
         self.engine.signals.lang_changed.connect(self._on_remote_lang_changed)
         self.engine.signals.quit_requested.connect(self.quit_app)
         self.engine.signals.update_available.connect(self._on_update_available)
-        apply_shell_integration(self.engine.settings)
+        apply_shell_integration_async(self.engine.settings)
 
         if not self.engine.settings.get("connectedBrowsers") and not self.engine.settings.get("wizardShownOnce"):
             self.engine.settings["wizardShownOnce"] = True
@@ -9752,8 +9916,55 @@ class ScorpionMainWindow(QMainWindow):
             self.refresh_all()
 
     def open_browser_setup_dialog(self):
+        if is_msix_packaged():
+            self.open_store_pairing_dialog()
+            return
         dlg = BrowserSetupDialog(self.engine, self.lang, self)
         dlg.exec()
+        self.refresh_all()
+
+    def open_store_pairing_dialog(self):
+        ar = self.lang == "ar"
+        dialog = QDialog(self)
+        dialog.setWindowTitle("ربط المتصفح" if ar else "Connect Browser")
+        layout = QVBoxLayout(dialog)
+        hint = QLabel(
+            "ولّد رمزًا ثم أدخله في نافذة إضافة سكوربيون. الرمز صالح لمدة خمس دقائق ولمرة واحدة."
+            if ar else "Generate a code and enter it in the Scorpion extension. The code lasts five minutes and works once."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        code = QLineEdit()
+        code.setReadOnly(True)
+        code.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        code.setAccessibleName("رمز الربط" if ar else "Pairing code")
+        layout.addWidget(code)
+        addon_url = f"https://microsoftedge.microsoft.com/addons/detail/{OFFICIAL_EXTENSION_ID}"
+        addon = QLabel(
+            f'ثبّت <a href="{addon_url}">إضافة سكوربيون لإيدج</a>.'
+            if ar else f'Install the <a href="{addon_url}">Scorpion extension for Edge</a>.'
+        )
+        addon.setOpenExternalLinks(True)
+        layout.addWidget(addon)
+        buttons = QHBoxLayout()
+        generate = QPushButton("ولّد رمزًا" if ar else "Generate code")
+        copy = QPushButton("نسخ الرمز" if ar else "Copy code")
+        copy.setEnabled(False)
+        close = QPushButton("إغلاق" if ar else "Close")
+        for button in (generate, copy, close):
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+
+        def show_code():
+            code.setText(self.engine.create_store_pairing_code())
+            code.selectAll()
+            copy.setEnabled(True)
+
+        generate.clicked.connect(show_code)
+        copy.clicked.connect(lambda: self.clipboard.setText(code.text()))
+        close.clicked.connect(dialog.accept)
+        dialog.resize(445, dialog.sizeHint().height())
+        dialog.exec()
         self.refresh_all()
 
     def open_settings_dialog(self):
@@ -9768,6 +9979,8 @@ class ScorpionMainWindow(QMainWindow):
         dlg.exec()
 
     def _background_check_updates(self):
+        if is_msix_packaged():
+            return
         def worker():
             res = self.engine.check_for_updates()
             if res.get("hasUpdate"):
@@ -10542,7 +10755,33 @@ class ScorpionMainWindow(QMainWindow):
         self.btn_clear_done.setEnabled(bool(getattr(self, "_completed_count", 0)))
 
 
+def install_crash_guard(log_dir: str = ""):
+    """PyQt aborts the whole app on an exception left unhandled in a slot. Log it and keep running instead."""
+    log_dir = log_dir or os.path.join(os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local"),
+                                      "ScorpionIDM")
+
+    def _hook(exc_type, exc, tb):
+        if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+            return sys.__excepthook__(exc_type, exc, tb)
+        try:
+            import traceback
+
+            os.makedirs(log_dir, exist_ok=True)
+            log_p = os.path.join(log_dir, "app_errors.log")
+            if os.path.isfile(log_p) and os.path.getsize(log_p) > 512 * 1024:
+                os.replace(log_p, log_p + ".old")
+            with open(log_p, "a", encoding="utf-8") as f:
+                f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} v{APP_VERSION}\n")
+                f.write("".join(traceback.format_exception(exc_type, exc, tb)))
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+    return _hook
+
+
 if __name__ == "__main__":
+    install_crash_guard()
     # Arguments: "--tray" (started with Windows) and/or a .torrent path / magnet link opened from Explorer or the browser
     cli_args = sys.argv[1:]
     start_in_tray = "--tray" in cli_args

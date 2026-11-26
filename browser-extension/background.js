@@ -246,8 +246,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       Number.isInteger(info.frameId) ? info.frameId : null
     );
     if (!res || !res.ok) {
-      if (res && res.error === 'drmProtected') {
-        recordPopupError('drmProtected');
+      if (res && res.error) {
+        // DRM, or the page has several videos and it is unclear which one: never fall back to the page URL
+        recordPopupError(res.error);
         return;
       }
       if (!hasExplicitFrame && info.menuItemId === 'scorpion-download-page-video' && tab && tab.url) {
@@ -530,9 +531,9 @@ async function dispatchMediaCommandToTab(tabId, message, preferredFrameId = null
     tried.add(active.frameId);
     const res = await sendMessageToFrame(tabId, message, active.frameId);
     if (res && res.ok) return { ok: true, frameId: active.frameId };
-    if (res && res.error === 'drmProtected') {
-      return { ok: false, error: 'drmProtected', frameId: active.frameId };
-    }
+    // An explicit refusal (DRM, or unsure which video) is the answer: never try other frames,
+    // which could download a different video than the one the user picked.
+    if (res && res.error) return { ok: false, error: res.error, frameId: active.frameId };
     if ((active.prio || 1) >= 2 && !res.noListener) {
       return { ok: false, frameId: active.frameId };
     }
@@ -553,9 +554,7 @@ async function dispatchMediaCommandToTab(tabId, message, preferredFrameId = null
   for (const fid of frameOrder) {
     const res = await sendMessageToFrame(tabId, message, fid);
     if (res && res.ok) return { ok: true, frameId: fid };
-    if (res && res.error === 'drmProtected') {
-      return { ok: false, error: 'drmProtected', frameId: fid };
-    }
+    if (res && res.error) return { ok: false, error: res.error, frameId: fid };
   }
   return { ok: false };
 }
@@ -585,9 +584,13 @@ chrome.tabs.onReplaced.addListener((_, removedId) => {
 });
 chrome.tabs.onUpdated.addListener((id, change) => {
   if (change.url) {
-    tabStreams.delete(id);
-    activeMediaFrameByTab.delete(id);
-    chrome.tabs.sendMessage(id, { action: 'SCORPION_URL_CHANGED', url: change.url }, () => void chrome.runtime.lastError);
+    // The tab URL is the top page's. Embedded players (iframes) keep their own streams and selection.
+    const streams = tabStreams.get(id);
+    if (streams) for (const [url, s] of streams) if (!s.frameId) streams.delete(url);
+    const active = activeMediaFrameByTab.get(id);
+    if (active && !active.frameId) activeMediaFrameByTab.delete(id);
+    chrome.tabs.sendMessage(id, { action: 'SCORPION_URL_CHANGED', url: change.url }, { frameId: 0 },
+      () => void chrome.runtime.lastError);
   }
 });
 

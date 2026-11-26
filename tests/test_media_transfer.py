@@ -1,6 +1,8 @@
 import base64
 import contextlib
 import json
+import time
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -286,6 +288,52 @@ class MediaRegressionTests(unittest.TestCase):
         for path in (str(bad), str(bad) + ".missing"):
             with self.assertRaises(RuntimeError):
                 validate_media(path, sq.find_tool("ffprobe"))
+
+    def test_cancel_while_finishing_never_blocks_the_window(self):
+        token, item = self.start_transfer()
+        self.send(token, self.data[:100])
+        ctrl = self.engine._browser_transfers[token][1]
+        holding, release = threading.Event(), threading.Event()
+
+        def finishing():  # stands in for ffprobe / a move across drives holding the file lock
+            with ctrl["file_lock"]:
+                holding.set()
+                release.wait(5)
+
+        worker = threading.Thread(target=finishing)
+        worker.start()
+        holding.wait(5)
+        started = time.monotonic()
+        self.engine.pause_download(item["id"])
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertTrue(ctrl["aborted"])
+        release.set()
+        worker.join(5)
+        for _ in range(50):
+            if item["status"] == "error":
+                break
+            time.sleep(0.05)
+        self.assertEqual(item["status"], "error")
+        self.assertFalse(Path(item["tempFilePath"]).exists())
+
+    def test_windows_reserved_and_trailing_dot_names_are_made_safe(self):
+        self.assertEqual(sq.sanitize_filename("CON.mp4"), "_CON.mp4")
+        self.assertEqual(sq.sanitize_filename("com3.txt"), "_com3.txt")
+        self.assertEqual(sq.sanitize_filename("report. "), "report")
+        self.assertEqual(sq.sanitize_filename("Console.mp4"), "Console.mp4")
+
+    def test_crash_guard_logs_and_keeps_running(self):
+        folder = Path(tempfile.mkdtemp())
+        previous = sys.excepthook
+        try:
+            hook = sq.install_crash_guard(str(folder))
+            try:
+                raise RuntimeError("paint failed")
+            except RuntimeError as err:
+                hook(type(err), err, err.__traceback__)
+            self.assertIn("paint failed", (folder / "app_errors.log").read_text(encoding="utf-8"))
+        finally:
+            sys.excepthook = previous
 
     def test_valid_transfer_preserves_original_and_retries_idempotently(self):
         token, item = self.start_transfer()

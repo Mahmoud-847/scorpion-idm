@@ -128,9 +128,34 @@ def validate_release_sources(log):
             raise RuntimeError("Release validation failed; build and publication were stopped")
 
 
+# Download links to the Windows installer carry the release number; the publisher rewrites them
+INSTALLER_LINK_RE = r"releases/download/v[0-9][0-9.]*/Scorpion-Setup-[0-9][0-9.]*\.exe"
+INSTALLER_LINK_FILES = ("browser-extension/popup.html", "browser-extension/welcome.html", "docs/index.html", "README.md")
+
+
+def update_installer_links(new_ver: str) -> list:
+    """Point every installer download link at this release; returns the files that changed."""
+    changed = []
+    for rel in INSTALLER_LINK_FILES:
+        path = os.path.join(PROJECT_ROOT, rel)
+        if not os.path.isfile(path):
+            continue
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            text = f.read()
+        updated = re.sub(INSTALLER_LINK_RE, f"releases/download/v{new_ver}/Scorpion-Setup-{new_ver}.exe", text)
+        if updated != text:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(updated)
+            changed.append(rel)
+    return changed
+
+
 def _snapshot_digest(path: str, content: bytes) -> str:
     if os.path.splitext(path)[1].lower() in (".py", ".js", ".cjs", ".json", ".css", ".html", ".svg", ".ps1", ".iss", ".md", ".txt"):
         content = content.replace(b"\r\n", b"\n")
+    if os.path.splitext(path)[1].lower() in (".html", ".md"):
+        # A version bump rewrites installer links after the tests; that alone is not a source change
+        content = re.sub(INSTALLER_LINK_RE.encode("ascii"), b"releases/download/vX/Scorpion-Setup-X.exe", content)
     if path.endswith("scorpion_qt.py"):
         txt = content.decode("utf-8")
         txt = re.sub(r'APP_VERSION\s*=\s*"[^"]+"', 'APP_VERSION = ""', txt, count=1)
@@ -301,6 +326,44 @@ def wait_for_desktop_app(version, timeout=15):
             pass
         time.sleep(0.25)
     raise RuntimeError("لم تظهر واجهة البرنامج بعد التحديث. تم إيقاف النشر؛ راجع تشغيل النسخة المثبتة.")
+
+
+def publish_installer_release(version: str, setup_path: str, notes: str, log) -> None:
+    """Attach the Windows installer to release v<version>, which the download links point to."""
+    gh = find_gh()
+    if not gh:
+        raise RuntimeError("أداة GitHub CLI (gh) غير مثبتة — مطلوبة لرفع ملف التسطيب")
+    tag = f"v{version}"
+    run = lambda *a: subprocess.run(
+        [gh, *a], cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if run("release", "view", tag).returncode == 0:
+        log(f"==> Release {tag} exists; replacing its installer")
+        res = run("release", "upload", tag, setup_path, "--clobber")
+    else:
+        log(f"==> Creating release {tag} with the installer")
+        res = run("release", "create", tag, setup_path, "--title", f"Scorpion IDM {version}",
+                  "--notes", notes or f"Scorpion IDM {version}", "--target", "main", "--latest")
+    if res.returncode != 0:
+        raise RuntimeError(f"تعذر رفع ملف التسطيب: {(res.stderr or res.stdout).strip()[:160]}")
+
+
+def read_release_notes(version: str) -> str:
+    """The user-facing notes of this version from CHANGELOG_HISTORY, as a bulleted list."""
+    try:
+        import ast
+
+        with open(os.path.join(PROJECT_ROOT, "native_app", "scorpion_qt.py"), "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "CHANGELOG_HISTORY":
+                for entry in ast.literal_eval(node.value):
+                    if entry.get("version") == version:
+                        return "\n".join(f"- {line}" for line in entry.get("en") or entry.get("ar") or [])
+    except Exception:
+        pass
+    return ""
 
 
 def publish_tools_pack(version: str, pack_path: str, log) -> None:
@@ -650,6 +713,8 @@ class AutoPublisherWindow(QMainWindow):
                         note_ar,
                         note_ar,
                     )
+                    for rel in update_installer_links(new_ver):
+                        self.signals.log.emit(f"==> Installer link updated in {rel}")
                     self.last_snapshot = compute_snapshot()
                     self.signals.log.emit(f"==> Version updated: v{cur_ver} -> v{new_ver}")
 
@@ -717,8 +782,17 @@ class AutoPublisherWindow(QMainWindow):
                     os.path.join(dst_app, "browser-extension"),
                     os.path.join(os.environ.get("LOCALAPPDATA", ""), "ScorpionIDM", "browser-extension"),
                 ]
-                if os.path.isdir(user_dl_ext) and not os.path.islink(user_dl_ext) and (
-                    extension_tree_digest(user_dl_ext) == extension_tree_digest(ext_src)
+                # Refresh an unpacked copy in Downloads only when it is really ours (it used to be skipped
+                # unless it was already identical, so it never got updated)
+                def _is_scorpion_extension(folder):
+                    try:
+                        with open(os.path.join(folder, "manifest.json"), "r", encoding="utf-8") as mf:
+                            return "scorpion" in str(json.load(mf).get("name", "")).lower()
+                    except (OSError, ValueError):
+                        return False
+
+                if os.path.isdir(user_dl_ext) and not os.path.islink(user_dl_ext) and _is_scorpion_extension(user_dl_ext) and (
+                    extension_tree_digest(user_dl_ext) != extension_tree_digest(ext_src)
                 ):
                     ext_targets.append(user_dl_ext)
                 for ext_dst in ext_targets:
@@ -810,6 +884,10 @@ class AutoPublisherWindow(QMainWindow):
                 remote_head = run_git("rev-parse", "origin/main").stdout.strip()
                 if not local_head or local_head != remote_head:
                     raise RuntimeError("تم البناء لكن التحديث لم يصل إلى فرع main على GitHub — راجع السجل")
+
+                # The extension and site link to this release's installer: it must exist before anyone clicks
+                self.signals.progress.emit(90, "جاري رفع ملف التسطيب للإصدار الجديد...")
+                publish_installer_release(new_ver, setup_path, read_release_notes(new_ver), self.signals.log.emit)
 
                 self.last_snapshot = compute_snapshot()
                 self.signals.finished.emit(

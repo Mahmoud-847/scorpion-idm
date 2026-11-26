@@ -242,9 +242,19 @@ class BrowserTransferMixin:
     def cancel_browser_transfer(self, dl_id, message):
         with self.lock:
             items = list(self.__dict__.get("_browser_transfers", {}).items())
-        for token, (item, _) in items:
+        for token, (item, ctrl) in items:
             if item.get("id") == dl_id:
-                self.fail_browser_transfer(token, message)
+                # Called from the window. While the transfer is finishing (ffprobe, a move across drives) it
+                # holds file_lock for a long time: flag it and finish the cancel in the background instead of
+                # freezing the window. The finishing step sees the flag before it publishes the file.
+                ctrl["aborted"] = True
+                if ctrl["file_lock"].acquire(blocking=False):
+                    try:
+                        self.fail_browser_transfer(token, message)
+                    finally:
+                        ctrl["file_lock"].release()
+                else:
+                    threading.Thread(target=self.fail_browser_transfer, args=(token, message), daemon=True).start()
                 return True
         return False
 

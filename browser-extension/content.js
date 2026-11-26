@@ -59,6 +59,14 @@
     return Boolean(media && media.isVirtual);
   }
 
+  // Only a real user action may start a download: a web page can call .click() on our button.
+  // Page scripts cannot see this content script's globals, so only the test harness can set the flag.
+  let internalClick = false;
+  let markedGeneration = -1;
+  function isUserAction(e) {
+    return Boolean(e && (e.isTrusted || internalClick || globalThis.__scorpionTestTrustsSyntheticClicks));
+  }
+
   function sourceOf(media) {
     if (!media) return '';
     if (isFloatingVirtual(media)) return media.src || '';
@@ -980,11 +988,13 @@
     triggerEl.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      if (!isUserAction(e)) return;
       renderDropdownOptions();
       // Quick download: the first option is "best quality" (or best audio in audio mode)
       const first = dropdownEl.querySelector('.scorpion-idm-option');
       if (first) {
-        first.click();
+        internalClick = true;
+        try { first.click(); } finally { internalClick = false; }
         return;
       }
       setDropdownOpen(!dropdownEl.classList.contains('open'));
@@ -1264,6 +1274,7 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         e.preventDefault();
+        if (!isUserAction(e)) return;
         setSelectedButton(btn);
         triggerVideoDownload({
           url: opt.url,
@@ -1351,6 +1362,7 @@
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           e.preventDefault();
+          if (!isUserAction(e)) return;
           const ext = st.isAudio ? detectAudioExt(st.url).toLowerCase() : 'mp4';
           triggerVideoDownload({
             url: st.url,
@@ -1651,14 +1663,18 @@
     selectionReason = reason;
     activeMode = isAud ? 'audio' : 'video';
     positionPanelOverMedia(media);
-    if (reason === 'hover' || reason === 'play' || reason === 'explicit' || reason === 'viewport') {
+    // Once per selection: scrolling a feed re-selects the same video every frame
+    if (markedGeneration !== mediaGeneration && (reason === 'hover' || reason === 'play' || reason === 'explicit' || reason === 'viewport')) {
+      markedGeneration = mediaGeneration;
       try {
         chrome.runtime.sendMessage({ action: 'SCORPION_MARK_ACTIVE_FRAME', reason }, () => void chrome.runtime.lastError);
       } catch (_) {}
     }
     const session = mediaSession();
     const prefetchKey = `${location.href}|${activeSource}`;
-    if (media.__scorpionPrefetchedFor !== prefetchKey) {
+    // In a feed, read qualities only for a video the user points at, not for every one scrolled past
+    const passive = reason === 'viewport' || reason === 'scan';
+    if (!(passive && queryMedia().length > 1) && media.__scorpionPrefetchedFor !== prefetchKey) {
       media.__scorpionPrefetchedFor = prefetchKey;
       setTimeout(() => { if (sessionIsCurrent(session)) prefetchQualities(); }, 600);
     }
@@ -1810,7 +1826,8 @@
       const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
       if (!a) return;
       const href = (a.getAttribute('href') || '').trim();
-      if (href.toLowerCase().startsWith('magnet:?')) {
+      // A page script clicking a magnet link must not reach the app: leave it to the browser
+      if (href.toLowerCase().startsWith('magnet:?') && isUserAction(e)) {
         e.preventDefault();
         e.stopPropagation();
         const fallback = () => {

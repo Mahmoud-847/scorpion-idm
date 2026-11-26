@@ -27,6 +27,7 @@ pack_extension.py
 
 # Keep release/update.json and release/Scorpion-Update-Payload.zip for In-App Auto-Updates
 release/*.exe
+release/*.msix
 
 # Secrets & backups (never commit)
 *.pem
@@ -41,3 +42,6 @@ release/Scorpion-Tools.version
 
 # Local review outputs (keep untracked outside commits)
 review_artifacts/
+
+# Per-install bridge secret written into unpacked extension folders
+bridge-auth.json

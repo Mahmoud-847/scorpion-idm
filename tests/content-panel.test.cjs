@@ -43,6 +43,8 @@ function page(url = 'https://example.test/watch/123', options = {}) {
     return video;
   });
   if (options.beforeScripts) options.beforeScripts({ window, videos, states });
+  // jsdom clicks are never isTrusted. In Chrome the page cannot set this content-script global.
+  if (options.trustSyntheticClicks !== false) window.__scorpionTestTrustsSyntheticClicks = true;
   for (const script of ['media.js', 'browser-transfer.js', 'content.js']) {
     if (script === 'content.js' && options.beforeContent) options.beforeContent({ window, videos, states });
     window.eval(fs.readFileSync(path.join(__dirname, '../browser-extension', script), 'utf8'));
@@ -1154,4 +1156,48 @@ test('quality lookup recovers after synchronous messaging failure in authenticat
       if (authenticated) assert.ok(p.panel.textContent.includes('Recovered'));
     } finally { p.dom.window.close(); }
   }
+});
+
+test('a page script clicking the download button cannot start a download', () => {
+  const p = page('https://example.test/watch/123', { trustSyntheticClicks: false });
+  try {
+    fire(p, p.video, 'pointerenter');
+    assert.equal(hidden(p), false);
+    p.panel.querySelector('.scorpion-idm-trigger').click();
+    for (const option of p.panel.querySelectorAll('.scorpion-idm-option')) option.click();
+    assert.equal(downloads(p).length, 0);
+  } finally { p.dom.window.close(); }
+});
+
+test('a page script clicking a magnet link is left to the browser', () => {
+  const p = page('https://example.test/watch/123', { trustSyntheticClicks: false });
+  try {
+    const link = p.window.document.createElement('a');
+    link.href = 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567';
+    p.window.document.body.appendChild(link);
+    const event = new p.window.MouseEvent('click', { bubbles: true, cancelable: true });
+    link.dispatchEvent(event);
+    assert.equal(p.messages.some((m) => m.action === 'SCORPION_DOWNLOAD_LINK'), false);
+  } finally { p.dom.window.close(); }
+});
+
+test('scrolling a feed marks the selected frame once, not on every scroll frame', () => {
+  const p = page(undefined, { videos: [{ paused: true }] });
+  try {
+    for (let i = 0; i < 10; i++) p.window.dispatchEvent(new p.window.Event('scroll'));
+    assert.equal(p.messages.filter((m) => m.action === 'SCORPION_MARK_ACTIVE_FRAME').length, 1);
+  } finally { p.dom.window.close(); }
+});
+
+test('a feed does not look up qualities for videos only scrolled past', () => {
+  const p = page('https://feed.test/', { videos: [
+    { src: 'https://cdn.test/a.mp4', paused: true },
+    { src: 'https://cdn.test/b.mp4', paused: true, rect: { left: 100, top: 500, right: 740, bottom: 860, width: 640, height: 360 } },
+  ] });
+  try {
+    p.window.dispatchEvent(new p.window.Event('scroll'));
+    assert.equal(p.timers.some((tm) => tm.ms === 600), false);
+    fire(p, p.videos[0], 'pointerenter');
+    assert.equal(p.timers.some((tm) => tm.ms === 600), true);
+  } finally { p.dom.window.close(); }
 });

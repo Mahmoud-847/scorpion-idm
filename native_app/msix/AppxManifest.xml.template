@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap5 desktop rescap">
+
+  <Identity
+    Name="ScorpionLabs.ScorpionDownloadManager"
+    Publisher="CN=87941AB6-5938-4942-8107-74488061689C"
+    Version="__MSIX_VERSION__"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Scorpion Download Manager</DisplayName>
+    <PublisherDisplayName>Scorpion Labs</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.18362.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-US" />
+    <Resource Language="ar-SA" />
+  </Resources>
+
+  <Applications>
+    <Application Id="ScorpionIDM" Executable="ScorpionIDM.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Scorpion Download Manager"
+        Description="Multi-connection download manager, media capture, and BitTorrent client with local browser integration."
+        BackgroundColor="#0D0D11"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="ScorpionIDM.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="ScorpionIDM.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="torrent">
+            <uap:DisplayName>Torrent File</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType ContentType="application/x-bittorrent">.torrent</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+        <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="magnet">
+            <uap:DisplayName>Magnet Link</uap:DisplayName>
+          </uap:Protocol>
+        </uap:Extension>
+        <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="scorpion-idm">
+            <uap:DisplayName>Open Scorpion Download Manager</uap:DisplayName>
+          </uap:Protocol>
+        </uap:Extension>
+        <desktop:Extension Category="windows.startupTask" Executable="ScorpionIDM.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="ScorpionIDMStartup" Enabled="false" DisplayName="Scorpion Download Manager" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <Capability Name="internetClient" />
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

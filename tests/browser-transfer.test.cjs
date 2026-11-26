@@ -159,7 +159,7 @@ test('an authorized Telegram transfer survives DOM removal but cannot change sou
 
 function loadBackgroundHarness(fetchHandler, options = {}) {
   const captured = [], cookieQueries = [], cancelled = [], erased = [], sentToTabs = [], createdTabs = [];
-  const listeners = { onCreated: null, onMessage: null, onRemoved: null, onReplaced: null, onUpdated: null };
+  const listeners = { onCreated: null, onMessage: null, onRemoved: null, onReplaced: null, onUpdated: null, onMenuClicked: null };
   const event = (slot) => ({ addListener: (cb) => { if (slot) listeners[slot] = cb; } });
   const stored = options.storage || (options.fresh ? {} : { scorpionConfig: { interceptAllDownloads: true, lang: 'ar' } });
   const chrome = {
@@ -175,7 +175,7 @@ function loadBackgroundHarness(fetchHandler, options = {}) {
       onStartup: event(),
       onMessage: event('onMessage'),
     },
-    contextMenus: { removeAll: (cb) => cb(), create() {}, onClicked: event() },
+    contextMenus: { removeAll: (cb) => cb(), create() {}, onClicked: event('onMenuClicked') },
     tabs: {
       create: async ({ url }) => createdTabs.push(url),
       onCreated: event(),
@@ -187,7 +187,7 @@ function loadBackgroundHarness(fetchHandler, options = {}) {
         const callback = typeof opts === 'function' ? opts : cb;
         const frameId = typeof opts === 'object' && opts ? opts.frameId : 0;
         sentToTabs.push({ tabId, msg, frameId });
-        if (callback) callback({ ok: false });
+        if (callback) callback(options.tabReply ? options.tabReply(msg, frameId) : { ok: false });
       },
     },
     downloads: {
@@ -480,4 +480,19 @@ test('bound Telegram reader survives long throttle only with matching reader hea
   now += 181000;
   await send('SCORPION_READ_MEDIA_RANGE', { requestId: 'expired', offset: 8192, total: 16384 });
   assert.ok(replies.find(r => r.requestId === 'expired').error);
+});
+
+test('right-click page download never falls back to the page URL when the video is unclear', async () => {
+  const sent = [];
+  const h = loadBackgroundHarness(async (url) => { sent.push(url); return { ok: true, json: async () => ({ ok: true }) }; },
+    { tabReply: () => ({ ok: false, error: 'unclearSource' }) });
+  await h.listeners.onMenuClicked({ menuItemId: 'scorpion-download-page-video', frameId: 0 },
+    { id: 7, url: 'https://social.test/feed', title: 'Feed' });
+  assert.deepEqual(sent.filter((u) => !u.includes('/ping')), []);
+});
+
+test('a top page URL change keeps the streams an embedded player found', () => {
+  const h = loadBackgroundHarness(async () => ({ ok: true, json: async () => ({}) }));
+  h.listeners.onUpdated(7, { url: 'https://news.test/article#comments' });
+  assert.ok(h.sentToTabs.every((m) => m.msg.action !== 'SCORPION_URL_CHANGED' || m.frameId === 0));
 });

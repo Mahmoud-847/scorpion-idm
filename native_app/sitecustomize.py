@@ -7,12 +7,16 @@ import os
 import sys
 
 _runtime_args = list(getattr(sys, "orig_argv", ())[1:])
+_store_package = os.path.isfile(os.path.join(os.path.dirname(sys.executable), "AppxManifest.xml"))
 if "--native-messaging" in _runtime_args:
+    if _store_package:
+        os._exit(1)
     import json
     import secrets
     import struct
 
-    _base = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "ScorpionIDM")
+    # Exactly the folder the app uses (scorpion_qt: ~/AppData/Local/ScorpionIDM), even with folder redirection
+    _base = os.path.join(os.path.expanduser("~"), "AppData", "Local", "ScorpionIDM")
     _tok_path = os.path.join(_base, "bridge_token")
     _tok = ""
     try:
@@ -52,14 +56,18 @@ if "--native-messaging" in _runtime_args:
         pass
     os._exit(0)
 
-_app_request = not _runtime_args or _runtime_args[0] == "--tray" or (
+_store_open = (
+    _runtime_args in (["scorpion-idm://open"], ["scorpion-idm://open/"])
+    and _store_package
+)
+_app_request = not _runtime_args or _store_open or _runtime_args[0] == "--tray" or (
     _runtime_args[0].lower().startswith(("magnet:?", "http://", "https://")) or _runtime_args[0].lower().endswith(".torrent")
 )
 if _app_request and os.path.basename(sys.executable).lower() == "scorpionidm.exe":
     import runpy
 
     _script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scorpion_qt.py")
-    sys.argv = [_script, *_runtime_args]
+    sys.argv = [_script, *([] if _store_open else _runtime_args)]
     _code = 0
     try:
         runpy.run_path(_script, run_name="__main__")
