@@ -26,6 +26,19 @@ else:
 # in <install>/app (see build_installer.ps1). Older builds were frozen by PyInstaller.
 EMBEDDED_RUNTIME = not getattr(sys, "frozen", False) and os.path.basename(sys.executable).lower() == "scorpionidm.exe"
 INSTALLED = getattr(sys, "frozen", False) or EMBEDDED_RUNTIME
+def windows_display_language() -> str:
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            language_id = ctypes.windll.kernel32.GetUserDefaultUILanguage()
+            if language_id & 0x3FF == 0x01:
+                return "ar"
+        except (AttributeError, OSError):
+            pass
+    return "en"
+
+
 import hashlib
 import http.cookiejar
 import secrets
@@ -199,7 +212,7 @@ def glyph_icon(code: str, color: str = None, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-APP_VERSION = "2.1.29"
+APP_VERSION = "2.1.30"
 
 # External programs shipped with the app: <install>/tools (ffmpeg, ffprobe + DLLs, QuickJS) and <install>/build (aria2c)
 TOOLS_DIR = os.path.join(RESOURCE_ROOT, "tools")
@@ -610,6 +623,24 @@ def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool
 
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.30",
+        "date": "2026-11-26",
+        "title_ar": "قائمة جودات مقروءة وإصلاحات التثبيت والتنزيل",
+        "title_en": "Readable quality menu, setup language, and reliable downloads",
+        "ar": [
+            "قائمة الجودات تظل ظاهرة عند التبديل بين العربية والإنجليزية.",
+            "الإضافة تميّز بين عدم توفر جودات وأخطاء الاتصال وتفضل الفيديو المحدد.",
+            "أول تشغيل يتبع لغة التثبيت مع حفظ لغة المستخدم عند التحديث.",
+            "إصلاح تعلّق التنزيل المؤجل عند بدء التحميل أثناء فحص الرابط.",
+        ],
+        "en": [
+            "Keep the quality menu readable while switching between Arabic and English.",
+            "Distinguish missing qualities from connection errors and respect the selected video.",
+            "Follow the setup language on first launch and preserve saved language when updating.",
+            "Prevent a delayed link probe from leaving an active download stuck.",
+        ],
+    },
     {
         "version": "2.1.29",
         "date": "2026-11-19",
@@ -2602,7 +2633,6 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             "updateUrl": "https://github.com/Mahmoud-847/scorpion-idm.git",
             "lastSeenVersion": "",
             "theme": "dark",
-            "lang": "ar",
         }
         self.total_speed = 0
         self.downloads = {}
@@ -2617,10 +2647,12 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             os.makedirs(os.path.join(self.default_dl_root, cat), exist_ok=True)
 
         self._load_state()
+        self._apply_install_prefs()
+        if self.settings.get("lang") not in ("ar", "en"):
+            self.settings["lang"] = windows_display_language()
         if not (self.settings.get("updateUrl") or "").strip():
             self.settings["updateUrl"] = "https://github.com/Mahmoud-847/scorpion-idm.git"
             self.save_state()
-        self._apply_install_prefs()
         self.cleanup_old_update_files()
         self.sync_and_repair_browser_extensions()
         threading.Thread(target=self._speed_loop, daemon=True).start()
@@ -3058,7 +3090,7 @@ class ScorpionNativeEngine(BrowserTransferMixin):
             return True, "restarting"
 
     def _apply_install_prefs(self):
-        """One-time choices written by the installer (start with Windows / torrent association / shortcut)."""
+        """Apply one-time installer preferences while preserving a saved language."""
         old_bat = os.path.join(self.app_data, "uninstall.bat")
         if os.path.exists(old_bat):
             try:
@@ -3071,6 +3103,8 @@ class ScorpionNativeEngine(BrowserTransferMixin):
         try:
             with open(prefs_file, "r", encoding="utf-8") as f:
                 prefs = json.load(f)
+            if self.settings.get("lang") not in ("ar", "en") and prefs.get("lang") in ("ar", "en"):
+                self.settings["lang"] = prefs["lang"]
             for k in ("startWithWindows", "associateTorrents", "desktopShortcut"):
                 if k in prefs:
                     self.settings[k] = bool(prefs[k])
@@ -3949,16 +3983,20 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                 item["segments"] = self._create_segments(item["totalSize"], conn_count)
 
     def _async_probe_item(self, dl_id: str, cookies=None):
-        item = self.downloads.get(dl_id)
-        if not item:
-            return
+        with self.lock:
+            item = self.downloads.get(dl_id)
+            if not item or not item.get("_needsInitialProbe") or dl_id in self.controllers:
+                return
         try:
             p = self.probe_url(item["url"], referer=item.get("referer") or "", cookies=cookies)
-            self._apply_probe_result_to_item(item, p)
-            self.save_state()
-        except Exception:
             with self.lock:
-                item.pop("_needsInitialProbe", None)
+                # Starting a scheduled item claims its probe before creating download segments.
+                if self.downloads.get(dl_id) is not item or not item.get("_needsInitialProbe") or dl_id in self.controllers:
+                    return
+                self._apply_probe_result_to_item(item, p)
+                self.save_state()
+        except Exception:
+            pass
 
     def _probe_and_start_worker(self, item: dict, ctrl: dict):
         try:
@@ -9508,7 +9546,9 @@ class ScorpionMainWindow(QMainWindow):
         T = (lambda ar, en: ar) if is_ar else (lambda ar, en: en)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if is_ar else Qt.LayoutDirection.LeftToRight)
         self.app.setProperty("scorpionTheme", self.theme)
-        self.app.setStyleSheet(LIGHT_QSS if self.theme == "light" else DARK_QSS)
+        stylesheet = LIGHT_QSS if self.theme == "light" else DARK_QSS
+        if self.app.styleSheet() != stylesheet:
+            self.app.setStyleSheet(stylesheet)
         apply_win32_window_effects(self, self.theme == "dark")
         c = pal()
         self.setWindowTitle("Scorpion IDM")

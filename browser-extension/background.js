@@ -5,6 +5,13 @@ const RELEASE_INSTALLER = /^https:\/\/github\.com\/Mahmoud-847\/scorpion-idm\/re
 const SCORPION_HEADERS = { 'X-Scorpion-Client': '1' };
 let cachedBridgeToken = '';
 let inflightTokenRead = null;
+let bridgeMode = '';
+
+async function storeBridgeHeaders() {
+  const data = await chrome.storage.local.get('scorpionStoreBridgeToken');
+  const token = data?.scorpionStoreBridgeToken;
+  return token ? { ...SCORPION_HEADERS, 'X-Scorpion-Token': token } : SCORPION_HEADERS;
+}
 
 function persistTokenToStorage(tok) {
   try {
@@ -85,13 +92,41 @@ async function getBridgeHeaders(forceRefresh = false) {
 
 async function bridgeFetch(url, options = {}) {
   const baseHeaders = options.headers || {};
-  const headers = { ...baseHeaders, ...(await getBridgeHeaders(false)) };
-  let res = await fetch(url, { ...options, headers });
+  const requestMode = bridgeMode;
+  const headers = requestMode === 'store' ? await storeBridgeHeaders() : await getBridgeHeaders(false);
+  const send = (bridgeHeaders) => fetch(url, { ...options, redirect: 'error', headers: { ...baseHeaders, ...bridgeHeaders } });
+  let res = await send(headers);
+  const responseMode = res?.headers?.get('X-Scorpion-Bridge-Mode') === 'store' ? 'store' : '';
+  bridgeMode = responseMode;
   if (res && (res.status === 401 || res.status === 403)) {
-    const freshHeaders = { ...baseHeaders, ...(await getBridgeHeaders(true)) };
-    res = await fetch(url, { ...options, headers: freshHeaders });
+    if (responseMode === 'store') {
+      const fresh = await storeBridgeHeaders();
+      if (fresh['X-Scorpion-Token'] && fresh['X-Scorpion-Token'] !== headers['X-Scorpion-Token']) res = await send(fresh);
+    } else {
+      res = await send(await getBridgeHeaders(requestMode !== 'store'));
+    }
   }
   return res;
+}
+
+async function pairStoreBridge(rawCode) {
+  const code = typeof rawCode === 'string' ? rawCode.replace(/[\s-]/g, '') : '';
+  if (!/^[0-9a-f]{12}$/i.test(code)) return { ok: false, error: 'invalid' };
+  try {
+    const response = await fetch(`${SCORPION_SERVER}/pair`, {
+      method: 'POST', headers: { ...SCORPION_HEADERS, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }), signal: AbortSignal.timeout(5000), redirect: 'error',
+    });
+    if (response.headers.get('X-Scorpion-Bridge-Mode') !== 'store') return { ok: false, error: 'connection' };
+    if (!response.ok) return { ok: false, error: 'invalid' };
+    const data = await response.json();
+    if (data?.ok !== true || !/^[0-9a-f]{64}$/i.test(data.token)) return { ok: false, error: 'connection' };
+    await chrome.storage.local.set({ scorpionStoreBridgeToken: data.token });
+    bridgeMode = 'store';
+    return { ok: true };
+  } catch (_) {
+    return { ok: false, error: 'connection' };
+  }
 }
 
 let config = {
@@ -101,7 +136,7 @@ let config = {
   lang: /^ar(?:-|$)/i.test(navigator.language || '') ? 'ar' : 'en',
 };
 
-const VALID_ERROR_CODES = new Set(['connection', 'captureFailed', 'drmProtected', 'noVideo', 'telegramSource', 'telegramAudio', 'transfer']);
+const VALID_ERROR_CODES = new Set(['connection', 'captureFailed', 'drmProtected', 'noVideo', 'unclearSource', 'telegramSource', 'telegramAudio', 'transfer']);
 const DRM_VIDEO_HOST_RE = /(^|\.)(netflix\.com|disneyplus\.com|primevideo\.com|shahid\.mbc\.net|watchit\.com|osnplus\.com|tv\.apple\.com|hulu\.com|max\.com|peacocktv\.com|paramountplus\.com|tod\.tv|starzplay\.com)$/i;
 const NO_COOKIE_MUSIC_HOST_RE = /(^|\.)(open\.spotify\.com|spotify\.com|music\.apple\.com|deezer\.com|anghami\.com)$/i;
 
@@ -329,6 +364,7 @@ async function detectBrowserKey() {
 }
 
 let lastAppStats = null;
+let storePairingRequired = false;
 let pendingAliveCheck = null;
 
 function checkScorpionAlive() {
@@ -340,6 +376,7 @@ function checkScorpionAlive() {
 
 async function queryScorpionStatus() {
   lastAppStats = null;
+  storePairingRequired = false;
   try {
     await configReady;
     const br = await detectBrowserKey();
@@ -347,6 +384,7 @@ async function queryScorpionStatus() {
     const timer = setTimeout(() => ctrl.abort(), 1200);
     const res = await bridgeFetch(`${SCORPION_SERVER}/ping?ext=1&browser=${encodeURIComponent(br)}`, { signal: ctrl.signal });
     clearTimeout(timer);
+    storePairingRequired = bridgeMode === 'store' && res?.status === 403;
     if (res && res.ok) {
       try {
         const data = await res.json();
@@ -605,6 +643,11 @@ function clientHeadersFor(urls) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === 'SCORPION_PAIR_STORE') {
+    if (sender.url !== chrome.runtime.getURL('popup.html')) return false;
+    pairStoreBridge(msg.code).then(sendResponse);
+    return true;
+  }
   if (msg.action === 'SCORPION_TRY_SAMPLE') {
     if (sender.url !== chrome.runtime.getURL('welcome.html')) return false;
     sendToScorpion({
@@ -643,7 +686,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         src: msg.src || '',
       });
       if (!res || !res.ok) {
-        recordPopupError(res && res.error === 'drmProtected' ? 'drmProtected' : 'noVideo');
+        recordPopupError(VALID_ERROR_CODES.has(res?.error) ? res.error : 'noVideo');
       }
       sendResponse({ handled: true, ...res });
     })();
@@ -753,9 +796,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           signal: ctrl.signal,
         })
       )
-      .then((r) => (r && r.ok ? r.json() : null))
+      .then((response) => {
+        if (response?.status === 401 || response?.status === 403) return { ok: false, error: 'connection' };
+        return response?.ok ? response.json().catch(() => null) : null;
+      })
       .then((data) => sendResponse(data || { ok: false }))
-      .catch(() => sendResponse({ ok: false }))
+      .catch(() => sendResponse({ ok: false, error: ctrl.signal.aborted ? 'timeout' : 'connection' }))
       .finally(() => clearTimeout(timer));
     return true;
   }
@@ -776,7 +822,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'SCORPION_CHECK_STATUS') {
     configReady
       .then(() => checkScorpionAlive())
-      .then((alive) => sendResponse({ alive, config, stats: alive ? lastAppStats : null }));
+      .then(async (alive) => {
+        let storeApp = bridgeMode === 'store';
+        if (!alive && !storeApp) {
+          try { storeApp = Boolean((await storeBridgeHeaders())['X-Scorpion-Token']); } catch (_) {}
+        }
+        sendResponse({ alive, config, stats: alive ? lastAppStats : null, storeApp, pairingRequired: storePairingRequired });
+      });
     return true;
   }
 });

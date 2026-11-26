@@ -481,6 +481,71 @@ test('one blob player with two different reel links in its own article does not 
   } finally { p.dom.window.close(); }
 });
 
+test('a hidden audio element does not block qualities or contribute streams to the selected YouTube video', async () => {
+  const watchUrl = 'https://www.youtube.com/watch?v=Synthetic01';
+  const unrelatedManifest = 'https://cdn.test/background-audio/master.m3u8';
+  const requests = [];
+  const p = page(watchUrl, {
+    videos: [{ src: 'blob:https://www.youtube.com/selected-video', paused: true }],
+    performanceEntries: [{ name: unrelatedManifest, initiatorType: 'xmlhttprequest' }],
+    beforeScripts: ({ window }) => {
+      const audio = window.document.createElement('audio');
+      audio.hidden = true;
+      audio.src = unrelatedManifest;
+      window.document.body.appendChild(audio);
+    },
+    beforeContent: ({ window }) => {
+      const sendMessage = window.chrome.runtime.sendMessage;
+      window.chrome.runtime.sendMessage = (message, callback) => {
+        if (message.action !== 'SCORPION_LIST_QUALITIES') return sendMessage(message, callback);
+        requests.push(message);
+        callback({ ok: true, qualities: [{ quality: '720p', label: '720p' }] });
+      };
+    },
+  });
+  try {
+    fire(p, p.video, 'pointerenter');
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    await new Promise(setImmediate);
+    const request = requests.find((message) => message.allowCookies);
+    assert.ok(request, 'opening the quality menu queries the desktop app');
+    assert.equal(request.url, watchUrl);
+    assert.ok(!request.candidates.includes(unrelatedManifest));
+    assert.match(p.panel.querySelector('.scorpion-idm-dropdown').textContent, /720p/);
+  } finally { p.dom.window.close(); }
+});
+
+test('the quality menu stays open when switching languages and distinguishes empty results from failed requests', async () => {
+  let result = { ok: true, qualities: [] };
+  const p = page('https://unknown-site.test/player', {
+    beforeContent: ({ window }) => {
+      const send = window.chrome.runtime.sendMessage;
+      window.chrome.runtime.sendMessage = (message, callback) => {
+        if (message.action === 'SCORPION_LIST_QUALITIES') callback(result);
+        else send(message, callback);
+      };
+    },
+  });
+  try {
+    const menu = p.panel.querySelector('.scorpion-idm-dropdown');
+    p.panel.querySelector('.scorpion-idm-badge').click();
+    await new Promise(setImmediate);
+    assert.match(menu.textContent, /المصدر لا يعرض قائمة جودات/);
+    result = { ok: false, error: 'timeout' };
+    p.panel.querySelector('.scorpion-idm-lang-btn').click();
+    await new Promise(setImmediate);
+    assert.equal(p.panel.dir, 'ltr');
+    assert.ok(menu.classList.contains('open'));
+    assert.match(menu.textContent, /Reading qualities timed out/);
+    result = { ok: false, error: 'connection' };
+    p.panel.querySelector('.scorpion-idm-lang-btn').click();
+    await new Promise(setImmediate);
+    assert.equal(p.panel.dir, 'rtl');
+    assert.ok(menu.classList.contains('open'));
+    assert.match(menu.textContent, /تحقق من اتصال الإضافة بالبرنامج/);
+  } finally { p.dom.window.close(); }
+});
+
 test('a lone blob player in an embed frame sends the manifest its frame loaded', () => {
   const manifest = 'https://cdn.test/hls2/01/abc/master.m3u8?t=1';
   const p = page('https://player.test/embed-abc.html', {

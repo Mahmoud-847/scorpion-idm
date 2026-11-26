@@ -16,6 +16,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const dismissErrorBtn = document.getElementById('dismissErrorBtn');
   const privacyLink = document.getElementById('privacyLink');
   const installCard = document.getElementById('installCard');
+  const storeOpenCard = document.getElementById('storeOpenCard');
+  const storePairForm = document.getElementById('storePairForm');
+  const storePairCode = document.getElementById('storePairCode');
+  const storePairSubmit = document.getElementById('storePairSubmit');
+  const storePairError = document.getElementById('storePairError');
   const reviewCard = document.getElementById('reviewCard');
   const reviewInviteLink = document.getElementById('reviewInviteLink');
   const dismissReviewBtn = document.getElementById('dismissReviewBtn');
@@ -25,6 +30,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let lastStats = null;
   let lastError = null;
   let statusPending = false;
+  let storeApp = false;
+  let pairingRequired = false;
+  let pairingPending = false;
+  let pairingError = '';
   let configEdited = false;
   let reviewSeen = null;
   let reviewOpen = false;
@@ -38,6 +47,12 @@ document.addEventListener('DOMContentLoaded', () => {
       installDescription: 'لو البرنامج مثبّت، شغّله لربط الإضافة. لو دي أول مرة، حمّل برنامج ويندوز.',
       installer: 'تحميل برنامج Scorpion IDM للويندوز',
       setupHelp: 'مساعدة في الربط',
+      openStore: 'افتح سكوربيون',
+      pairStatus: 'نسخة المتجر تحتاج الربط',
+      pairHint: 'افتح «ربط المتصفحات» في سكوربيون وولّد رمزًا، ثم أدخله هنا.',
+      pairButton: 'ربط الإضافة',
+      pairInvalid: 'الرمز غير صحيح أو انتهت صلاحيته. ولّد رمزًا جديدًا وحاول تاني.',
+      pairConnection: 'تعذر الربط. تأكد إن نسخة المتجر شغّالة وحاول تاني.',
       reviewDescription: 'اكتملت ثلاث تحميلات عبر الإضافة. رأيك يساعدنا نحسّنها.',
       reviewInvite: 'شارك رأيك في الإضافة',
       reviewLink: 'تقييم الإضافة',
@@ -54,6 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
         captureFailed: 'تعذر إرسال هذا التنزيل. راجع البرنامج ثم حاول مرة أخرى.',
         drmProtected: 'هذا الفيديو محمي بتشفير DRM (مثل Netflix) ولا يدعم التنزيل الخارجي. استخدم ميزة التنزيل داخل تطبيق المنصة الرسمي.',
         noVideo: 'قف على الفيديو المطلوب أو مرّر الصفحة إليه، ثم استخدم الزر فوقه.',
+        unclearSource: 'تعذّر تحديد مصدر الفيديو. افتح صفحة الفيديو نفسه وأعد المحاولة.',
         telegramSource: 'افتح الفيديو المطلوب داخل تليجرام ثم أعد المحاولة. إذا لم يتوفر مصدر قابل للقراءة، استخدم تنزيل تليجرام الأصلي.',
         telegramAudio: 'نزّل فيديو تليجرام كاملًا أولًا؛ تنزيل الصوت وحده غير متاح لهذا المسار.',
         transfer: 'تعذر إكمال تنزيل تليجرام. راجع سبب الفشل في البرنامج، ثم أعد المحاولة من الفيديو.',
@@ -67,6 +83,12 @@ document.addEventListener('DOMContentLoaded', () => {
       installDescription: 'Open the desktop app to connect. If you are new to Scorpion, download the Windows app.',
       installer: 'Download Scorpion IDM (Windows)',
       setupHelp: 'Connection help',
+      openStore: 'Open Scorpion',
+      pairStatus: 'Store app needs pairing',
+      pairHint: 'Open Browser Integration in Scorpion, generate a code, and enter it here.',
+      pairButton: 'Pair extension',
+      pairInvalid: 'That code is invalid or expired. Generate a new code and try again.',
+      pairConnection: 'Could not pair. Make sure the Store app is running and try again.',
       reviewDescription: 'You’ve completed three downloads through the extension. Your feedback helps us improve it.',
       reviewInvite: 'Share your feedback',
       reviewLink: 'Rate extension',
@@ -83,6 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
         captureFailed: 'Could not send this download. Check the desktop app and try again.',
         drmProtected: 'This video is DRM-protected (e.g. Netflix) and cannot be downloaded externally. Use the platform’s official offline download feature.',
         noVideo: 'Point to the video or scroll to it, then use the button above it.',
+        unclearSource: 'Could not identify the video source. Open the video’s own page and try again.',
         telegramSource: 'Open the selected video in Telegram and retry. If no readable source is available, use Telegram’s own download button.',
         telegramAudio: 'Download the complete Telegram video first; audio-only download is unavailable for this source.',
         transfer: 'The Telegram download could not finish. Check the reason in the desktop application, then retry from the video.',
@@ -95,13 +118,21 @@ document.addEventListener('DOMContentLoaded', () => {
     document.documentElement.setAttribute('lang', currentLang);
     document.documentElement.setAttribute('dir', tr.dir);
     const state = isAlive === null ? '' : isAlive ? ' online' : ' offline';
-    const statusText = isAlive === null ? tr.checking : isAlive ? tr.online : tr.offline;
+    const statusText = pairingRequired ? tr.pairStatus : isAlive === null ? tr.checking : isAlive ? tr.online : tr.offline;
     if (statusBadge.textContent !== statusText) statusBadge.textContent = statusText;
     statusBadge.className = `status${state}`;
     if (statusMonitorIcon) {
       statusMonitorIcon.setAttribute('class', `status-ico${state}`);
     }
-    installCard.hidden = isAlive !== false;
+    installCard.hidden = isAlive !== false || storeApp;
+    storeOpenCard.hidden = isAlive !== false || !storeApp || pairingRequired;
+    storePairForm.hidden = isAlive !== false || !pairingRequired;
+    storePairSubmit.disabled = pairingPending;
+    storePairError.hidden = !pairingError;
+    storePairError.textContent = pairingError ? tr[pairingError] : '';
+    document.getElementById('openStoreApp').textContent = tr.openStore;
+    document.getElementById('storePairHint').textContent = tr.pairHint;
+    storePairSubmit.textContent = tr.pairButton;
     grabCurrentPageBtn.disabled = isAlive !== true;
     grabCurrentPageBtn.hidden = isAlive !== true;
     document.getElementById('installDescription').textContent = tr.installDescription;
@@ -186,6 +217,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const failed = Boolean(chrome.runtime.lastError);
       statusPending = false;
       isAlive = !failed && res?.alive === true;
+      storeApp = !failed && res?.storeApp === true;
+      pairingRequired = !failed && res?.pairingRequired === true;
+      if (isAlive) pairingError = '';
       lastStats = isAlive && res.stats && typeof res.stats === 'object' ? res.stats : null;
       if (!configEdited && res?.config) {
         interceptToggle.checked = Boolean(res.config.interceptAllDownloads);
@@ -200,6 +234,24 @@ document.addEventListener('DOMContentLoaded', () => {
       applyLang();
     });
   }
+  storePairForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (pairingPending) return;
+    pairingPending = true;
+    pairingError = '';
+    applyLang();
+    chrome.runtime.sendMessage({ action: 'SCORPION_PAIR_STORE', code: storePairCode.value }, (response) => {
+      const failed = Boolean(chrome.runtime.lastError);
+      pairingPending = false;
+      if (!failed && response?.ok) {
+        storePairCode.value = '';
+        refreshStatus();
+      } else {
+        pairingError = response?.error === 'invalid' ? 'pairInvalid' : 'pairConnection';
+      }
+      applyLang();
+    });
+  });
   applyLang();
   refreshStatus();
   window.setInterval(refreshStatus, 2500);
@@ -236,7 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!tab || !tab.url) return;
       const handleGrabReply = (res) => {
         if (!res || !res.ok) {
-          const code = ['drmProtected', 'connection'].includes(res?.error) ? res.error : 'noVideo';
+          const code = Object.hasOwn(I18N[currentLang].errors, res?.error) ? res.error : 'noVideo';
           if (code === 'connection') refreshStatus();
           lastError = { code, at: Date.now() };
           chrome.storage.session.set({ scorpionDownloadError: lastError }).catch(() => {});

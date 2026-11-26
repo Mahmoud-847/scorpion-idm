@@ -71,6 +71,35 @@ def _wait_download_done(it: dict, timeout: float = 6.0):
 
 
 class AuditFindingsRegressionTests(unittest.TestCase):
+    def test_startup_uses_setup_or_windows_language_and_preserves_saved_choice(self):
+        for saved, setup, windows, expected in (
+            (None, None, "en", "en"),
+            (None, None, "ar", "ar"),
+            (None, "ar", "en", "ar"),
+            (None, "en", "ar", "en"),
+            ("ar", "en", "en", "ar"),
+            ("en", "ar", "ar", "en"),
+        ):
+            with self.subTest(saved=saved, setup=setup, windows=windows), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                app_data = root / "AppData" / "Local" / "ScorpionIDM"
+                app_data.mkdir(parents=True)
+                if saved:
+                    (app_data / "scorpion_native_state.json").write_text(
+                        json.dumps({"settings": {"lang": saved}}), encoding="utf-8"
+                    )
+                prefs = app_data / "install_prefs.json"
+                if setup:
+                    prefs.write_text(json.dumps({"lang": setup, "startWithWindows": False}), encoding="utf-8")
+                with patch.object(sq.os.path, "expanduser", return_value=str(root)), \
+                     patch.object(sq, "windows_display_language", return_value=windows), \
+                     patch.object(sq.ScorpionNativeEngine, "cleanup_old_update_files"), \
+                     patch.object(sq.ScorpionNativeEngine, "sync_and_repair_browser_extensions"), \
+                     patch.object(sq.threading.Thread, "start"):
+                    engine = sq.ScorpionNativeEngine()
+                self.assertEqual(engine.settings["lang"], expected)
+                self.assertFalse(prefs.exists())
+
     def test_01_cleanup_never_touches_downloads_root_or_save_dir(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -256,6 +285,46 @@ class AuditFindingsRegressionTests(unittest.TestCase):
             self.assertFalse(before_events)
             self.assertEqual(it["totalSize"], 4096)
             self.assertEqual(it["filename"], "probed.bin")
+
+    def test_late_scheduled_probe_cannot_replace_downloading_segments(self):
+        with tempfile.TemporaryDirectory() as td:
+            e = _make_engine(Path(td))
+            scheduled_entered = threading.Event()
+            finish_scheduled = threading.Event()
+            scheduled_done = threading.Event()
+            segments_started = threading.Event()
+            probed = {"filename": "file.bin", "supportsRange": False, "totalSize": 4096}
+            async_probe = e._async_probe_item
+
+            def probe(url, **kwargs):
+                if not scheduled_entered.is_set():
+                    scheduled_entered.set()
+                    finish_scheduled.wait(3)
+                return probed
+
+            def scheduled(*args):
+                try:
+                    async_probe(*args)
+                finally:
+                    scheduled_done.set()
+
+            with patch.object(e, "probe_url", side_effect=probe), \
+                 patch.object(e, "_async_probe_item", side_effect=scheduled), \
+                 patch.object(e, "_run_segment_worker", side_effect=lambda *_: segments_started.set()):
+                item = e.add_download({"url": "https://example.test/file.bin", "startImmediately": False})
+                try:
+                    self.assertTrue(scheduled_entered.wait(3))
+                    e.start_download(item["id"])
+                    self.assertTrue(segments_started.wait(3))
+                    active_segments = item["segments"]
+                finally:
+                    finish_scheduled.set()
+                    self.assertTrue(scheduled_done.wait(3))
+                try:
+                    self.assertIs(item["segments"], active_segments)
+                    self.assertEqual(item["status"], "downloading")
+                finally:
+                    e.pause_download(item["id"])
 
     def test_05_atomic_state_save_concurrent_writers_and_bak_recovery(self):
         with tempfile.TemporaryDirectory() as td:

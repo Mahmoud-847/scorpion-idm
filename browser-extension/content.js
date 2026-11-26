@@ -292,7 +292,13 @@
       bestHd: 'أفضل جودة (MP4)',
       audioMp3: 'الصوت فقط MP3',
       loadingQualities: 'جاري قراءة الجودات المتاحة...',
-      noQualities: 'تعذر قراءة الجودات — استخدم أفضل جودة',
+      noQualities: 'المصدر لا يعرض قائمة جودات. يمكنك استخدام أفضل جودة.',
+      qualityError: 'تعذّر قراءة الجودات. افتح القائمة مجددًا للمحاولة.',
+      qualityTimeout: 'تأخرت قراءة الجودات. افتح القائمة مجددًا للمحاولة.',
+      qualityConnection: 'تحقق من اتصال الإضافة بالبرنامج ثم أعد المحاولة.',
+      unclearSource: 'تعذّر تحديد مصدر الفيديو. افتح صفحة الفيديو نفسه وأعد المحاولة.',
+      compactVideo: 'تحميل',
+      compactAudio: 'تحميل الصوت',
       qualityItem: (label) => (/mp4/i.test(String(label || '')) ? String(label) : `${label} MP4`),
       bestAudioOrig: 'أعلى جودة صوتية (MP3)',
       convertMp3: 'تحويل وتحميل بصيغة MP3',
@@ -311,7 +317,13 @@
       bestHd: 'Best Quality MP4',
       audioMp3: 'Audio Only MP3',
       loadingQualities: 'Reading available qualities...',
-      noQualities: "Couldn't read the qualities — use Best quality",
+      noQualities: 'This source does not list multiple qualities. You can use Best quality.',
+      qualityError: 'Could not read qualities. Reopen the menu to retry.',
+      qualityTimeout: 'Reading qualities timed out. Reopen the menu to retry.',
+      qualityConnection: 'Check the connection to the desktop app and try again.',
+      unclearSource: 'Could not identify the video source. Open the video’s own page and try again.',
+      compactVideo: 'Download',
+      compactAudio: 'Download audio',
       qualityItem: (label) => (/mp4/i.test(String(label || '')) ? String(label) : `${label} MP4`),
       bestAudioOrig: 'Best Audio Quality',
       convertMp3: 'Audio Only MP3',
@@ -331,6 +343,7 @@
 
   function currentMainLabel() {
     const tr = t();
+    if (window.innerWidth <= 300) return activeMode === 'audio' ? tr.compactAudio : tr.compactVideo;
     return activeMode === 'audio' ? tr.mainAudioText : tr.mainText;
   }
 
@@ -358,6 +371,7 @@
     if (dropdownEl && dropdownEl.classList.contains('open')) {
       renderDropdownOptions();
     }
+    if (activeMedia && panelEl.style.display !== 'none') positionPanelOverMedia(activeMedia);
   }
 
   function setLanguage(lang, syncRemote = true) {
@@ -738,17 +752,24 @@
     };
   }
 
+  function positionDropdown() {
+    if (!panelEl || !dropdownEl || !dropdownEl.classList.contains('open')) return;
+    const panel = panelEl.getBoundingClientRect();
+    const width = dropdownEl.offsetWidth;
+    const anchor = currentLang === 'ar' ? panel.right - width : panel.left;
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, anchor));
+    dropdownEl.style.setProperty('--scorpion-menu-left', `${left - panel.left}px`);
+    const below = Math.max(0, window.innerHeight - panel.bottom - 14);
+    const above = Math.max(0, panel.top - 14);
+    const dropUp = below < Math.min(340, dropdownEl.scrollHeight) && above > below;
+    dropdownEl.classList.toggle('drop-up', dropUp);
+    dropdownEl.style.setProperty('--scorpion-menu-height', `${Math.min(340, dropUp ? above : below)}px`);
+  }
+
   function setDropdownOpen(open) {
     if (!dropdownEl) return;
-    if (open && panelEl) {
-      const pRect = panelEl.getBoundingClientRect();
-      if (window.innerHeight - pRect.bottom < 220) {
-        dropdownEl.classList.add('drop-up');
-      } else {
-        dropdownEl.classList.remove('drop-up');
-      }
-    }
     dropdownEl.classList.toggle('open', Boolean(open));
+    if (open) positionDropdown();
     if (badgeEl) {
       badgeEl.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
@@ -812,6 +833,10 @@
         media.__scorpionDismissed = '';
         activateMediaElement(media, 'explicit');
         const target = computeDownloadTarget();
+        if (target.ambiguous) {
+          sendResponse({ ok: false, error: 'unclearSource' });
+          return false;
+        }
         const targetIsAudio = isAudioMedia(media) || AUDIO_RE.test(target.targetUrl);
         const isMusicFallback = target.isMusicPlatform && MUSIC_FALLBACK_SITE_RE.test(target.effectivePageUrl);
         const ok = triggerVideoDownload({
@@ -937,12 +962,13 @@
       if (!didMove) return;
       const panelW = panelEl.offsetWidth || 310;
       const newLeft = Math.max(8, Math.min(window.innerWidth - panelW - 8, e.clientX - dragOffsetX));
-      const newTop = Math.max(8, Math.min(window.innerHeight - 52, e.clientY - dragOffsetY));
+      const newTop = Math.max(8, Math.min(window.innerHeight - (panelEl.offsetHeight || 44) - 8, e.clientY - dragOffsetY));
       panelEl.style.left = `${newLeft}px`;
       panelEl.style.top = `${newTop}px`;
       panelEl.style.right = 'auto';
       panelEl.style.bottom = 'auto';
       panelEl.__userDraggedPos = { left: newLeft, top: newTop };
+      positionDropdown();
     });
 
     // Capture phase: the panel stops presses from reaching the page, which must not hide the release from us
@@ -1056,7 +1082,8 @@
     const childSources = activeMedia && !isFloatingVirtual(activeMedia) && typeof activeMedia.querySelectorAll === 'function'
       ? Array.from(activeMedia.querySelectorAll('source')).map((s) => s.src) : [];
     const sources = new Set([mediaSrc, ...childSources]);
-    const multipleMedia = isFloatingVirtual(activeMedia) ? false : queryMedia().length > 1;
+    const mediaElements = isFloatingVirtual(activeMedia) ? [] : queryMedia();
+    const multipleMedia = mediaElements.length > 1;
     const nowTs = Date.now();
     const scopedStreams = detectedStreams.filter(
       (stream) =>
@@ -1089,7 +1116,11 @@
     const scopedPost = isFloatingVirtual(activeMedia) || permalinks.length > 0 ||
       resolvePostUrlForMedia(activeMedia, pageUrl) !== pageUrl ||
       !multipleMedia && (effectivePageUrl !== pageUrl || PERMALINK_RE.test(location.pathname + location.search));
-    const ambiguous = multipleMedia && !scopedPost && !directMediaSrc && !ScorpionMedia.isTelegram(pageUrl);
+    // Hidden audio can share the frame without competing with the selected video.
+    // Keep the broader count above when deciding if frame streams belong to this player.
+    const ambiguous = multipleMedia && !scopedPost && !directMediaSrc && !ScorpionMedia.isTelegram(pageUrl) &&
+      (activeMode === 'audio' || mediaElements.some((media) => media !== activeMedia &&
+        (media.tagName !== 'AUDIO' || hasVisibleRect(media))));
     const allowDirectOnMusicSite =
       isMusicPlatform &&
       directMediaSrc &&
@@ -1148,8 +1179,7 @@
     if (ambiguous) {
       const message = document.createElement('div');
       message.className = 'scorpion-idm-hint';
-      message.textContent = currentLang === 'ar' ? 'افتح منشور الفيديو نفسه لتحديده بدقة، ثم شغّله.' :
-        'Open this video’s own post and play it to identify its source.';
+      message.textContent = tr.unclearSource;
       dropdownEl.appendChild(message);
       return;
     }
@@ -1265,9 +1295,11 @@
       dropdownEl.insertBefore(box, dropdownEl.children[1] || null);
       listQualities(targetUrl, pageUrl, candidates, true).then((res) => {
         if (!sessionIsCurrent(session) || renderedMenu !== menuGeneration || !box.isConnected) return;
-        const list = (res && res.qualities) || [];
-        if (!list.length) {
-          status.textContent = tr.noQualities;
+        const list = Array.isArray(res?.qualities) ? res.qualities : [];
+        if (!res?.ok || !list.length) {
+          const errors = { timeout: tr.qualityTimeout, connection: tr.qualityConnection };
+          status.textContent = res?.ok ? tr.noQualities : (errors[res?.error] || tr.qualityError);
+          positionDropdown();
           return;
         }
         status.remove();
@@ -1288,6 +1320,7 @@
         if (firstQualityBtn && presetButtons.length) {
           setSelectedButton(firstQualityBtn);
         }
+        positionDropdown();
       });
     }
 
@@ -1547,17 +1580,19 @@
       panelEl.style.visibility = 'hidden';
       panelEl.style.display = 'block';
     }
-    const panelW = Math.max(290, panelEl.offsetWidth || 320);
+    const panelW = panelEl.offsetWidth || Math.min(320, window.innerWidth - 16);
+    const panelH = panelEl.offsetHeight || 38;
     panelEl.style.visibility = '';
 
     if (panelEl.__userDraggedPos) {
       const clampedLeft = Math.max(8, Math.min(window.innerWidth - panelW - 8, panelEl.__userDraggedPos.left));
-      const clampedTop = Math.max(8, Math.min(window.innerHeight - 52, panelEl.__userDraggedPos.top));
+      const clampedTop = Math.max(8, Math.min(window.innerHeight - panelH - 8, panelEl.__userDraggedPos.top));
       panelEl.style.top = `${clampedTop}px`;
       panelEl.style.left = `${clampedLeft}px`;
       panelEl.style.bottom = 'auto';
       panelEl.style.right = 'auto';
       panelEl.style.display = 'block';
+      positionDropdown();
       return;
     }
 
@@ -1578,11 +1613,12 @@
       topPx = Math.min(visibleTop, visibleBottom - 38);
       leftPx = Math.max(8, Math.min(window.innerWidth - panelW - 8, rect.right - panelW - 10));
     }
-    panelEl.style.top = `${topPx}px`;
+    panelEl.style.top = `${Math.max(8, Math.min(window.innerHeight - panelH - 8, topPx))}px`;
     panelEl.style.left = `${leftPx}px`;
     panelEl.style.bottom = 'auto';
     panelEl.style.right = 'auto';
     panelEl.style.display = 'block';
+    positionDropdown();
   }
 
   function activateMediaElement(media, reason = 'scan') {

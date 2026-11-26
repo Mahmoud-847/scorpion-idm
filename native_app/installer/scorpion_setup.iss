@@ -32,10 +32,12 @@ WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
 ShowLanguageDialog=auto
+LanguageDetectionMethod=uilanguage
+UsePreviousLanguage=no
 
 [Languages]
-Name: "ar"; MessagesFile: "compiler:Languages\Arabic.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "ar"; MessagesFile: "compiler:Languages\Arabic.isl"
 
 [CustomMessages]
 ar.StartWithWindows=تشغيل البرنامج تلقائياً مع ويندوز
@@ -97,14 +99,14 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   PrefsDir: String;
 begin
-  { The app applies these once on its next start (startup entry, torrent association, desktop shortcut).
+  { The app applies these once on its next start, including setup language for a new profile.
     Silent updates keep the user's existing choices, so they write nothing. }
   if (CurStep = ssPostInstall) and not WizardSilent then
   begin
     PrefsDir := ExpandConstant('{localappdata}\ScorpionIDM');
     ForceDirectories(PrefsDir);
     SaveStringToFile(PrefsDir + '\install_prefs.json',
-      '{"startWithWindows": ' + BoolText(WizardIsTaskSelected('startup')) +
+      '{"lang": "' + ActiveLanguage + '", "startWithWindows": ' + BoolText(WizardIsTaskSelected('startup')) +
       ', "associateTorrents": ' + BoolText(WizardIsTaskSelected('torrents')) +
       ', "desktopShortcut": ' + BoolText(WizardIsTaskSelected('desktopicon')) + '}', False);
   end;

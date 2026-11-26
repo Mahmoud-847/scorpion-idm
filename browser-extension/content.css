@@ -17,6 +17,7 @@
 .scorpion-idm-main-btn {
   display: inline-flex !important;
   align-items: center !important;
+  flex-wrap: wrap !important;
   gap: 5px !important;
   max-width: min(100%, calc(100vw - 16px)) !important;
   box-sizing: border-box !important;
@@ -81,10 +82,10 @@
 }
 
 .scorpion-btn-text {
-  white-space: nowrap !important;
   min-width: 0 !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  text-align: start !important;
   letter-spacing: -0.01em !important;
 }
 
@@ -175,9 +176,9 @@
 .scorpion-idm-dropdown {
   position: absolute !important;
   top: calc(100% + 6px) !important;
-  inset-inline-start: 0 !important;
-  min-width: 215px !important;
-  max-width: calc(100vw - 24px) !important;
+  left: var(--scorpion-menu-left, 0px) !important;
+  width: min(280px, calc(100vw - 16px)) !important;
+  box-sizing: border-box !important;
   background: rgba(22, 22, 29, 0.98) !important;
   border: 1px solid rgba(255, 255, 255, 0.10) !important;
   border-radius: 10px !important;
@@ -187,7 +188,7 @@
   display: none !important;
   flex-direction: column !important;
   gap: 2px !important;
-  max-height: min(340px, 72vh) !important;
+  max-height: var(--scorpion-menu-height, min(340px, 72vh)) !important;
   overflow-y: auto !important;
   z-index: 2147483647 !important;
 }
@@ -216,6 +217,7 @@
   border: none !important;
   text-align: start !important;
   width: 100% !important;
+  box-sizing: border-box !important;
   transition: background 0.12s ease, color 0.12s ease !important;
 }
 
@@ -249,9 +251,9 @@
 }
 
 .scorpion-idm-opt-label {
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
+  min-width: 0 !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
 }
 
 .scorpion-idm-option-tag {

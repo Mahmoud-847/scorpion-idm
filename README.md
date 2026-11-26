@@ -2,7 +2,7 @@
 
 A native Windows desktop download manager (`PyQt6` + officially signed `Python 3.14` runtime) designed for high-speed multi-connection file downloads, video and audio capture, and BitTorrent/Magnet management.
 
-- ⬇️ **Latest Windows Installer (`v2.1.29`):** [GitHub Releases](https://github.com/Mahmoud-847/scorpion-idm/releases/latest)
+- ⬇️ **Latest Windows Installer (`v2.1.30`):** [GitHub Releases](https://github.com/Mahmoud-847/scorpion-idm/releases/latest)
 - 🌐 **Official Microsoft Edge Extension:** [Scorpion IDM Integration Module — Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/hgcdbjpjlfgnejhceobphikeebmhmgcj)
 - 🔒 **Privacy Policy:** [PRIVACY.md](https://github.com/Mahmoud-847/scorpion-idm/blob/main/PRIVACY.md)
 - 🎬 **Video Downloads & Support Scope:** [VIDEO_DOWNLOADS.md](VIDEO_DOWNLOADS.md)

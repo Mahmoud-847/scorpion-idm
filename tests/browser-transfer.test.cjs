@@ -161,9 +161,10 @@ function loadBackgroundHarness(fetchHandler, options = {}) {
   const captured = [], cookieQueries = [], cancelled = [], erased = [], sentToTabs = [], createdTabs = [];
   const listeners = { onCreated: null, onMessage: null, onRemoved: null, onReplaced: null, onUpdated: null };
   const event = (slot) => ({ addListener: (cb) => { if (slot) listeners[slot] = cb; } });
+  const stored = options.storage || (options.fresh ? {} : { scorpionConfig: { interceptAllDownloads: true, lang: 'ar' } });
   const chrome = {
     storage: {
-      local: { get: (_, cb) => cb(options.fresh ? {} : { scorpionConfig: { interceptAllDownloads: true, lang: 'ar' } }), set() {} },
+      local: { get: (_, cb) => cb ? cb(stored) : Promise.resolve(stored), set: async (values) => Object.assign(stored, values) },
       session: { set: async () => {}, get: async () => ({}), remove: async () => {} },
       onChanged: event(),
     },
@@ -211,15 +212,47 @@ function loadBackgroundHarness(fetchHandler, options = {}) {
     URL, AbortController, AbortSignal, setTimeout: () => 0, clearTimeout() {}, setInterval() {}, console,
     fetch: async (url, opts) => {
       if (url.endsWith('bridge-auth.json')) {
+        if (options.noAuthFile) return { ok: false, status: 404 };
         return { ok: true, json: async () => ({ token: 'unit-bridge-secret' }) };
       }
-      if (url.includes('/ping')) return { ok: true, json: async () => ({ lang: 'ar' }) };
+      if (url.includes('/ping') && !options.customPing) return { ok: true, json: async () => ({ lang: 'ar' }) };
       return fetchHandler(url, opts, captured);
     },
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../browser-extension/background.js'), 'utf8'), context);
   return { context, listeners, captured, cookieQueries, cancelled, erased, sentToTabs, createdTabs };
 }
+
+test('Store pairing survives worker restart and leaves the traditional credential intact', async () => {
+  const token = 'a'.repeat(64);
+  const storage = { scorpionBridgeToken: 'existing-exe-token' };
+  const reply = (data, status = 200) => new Response(JSON.stringify(data), {
+    status, headers: { 'X-Scorpion-Bridge-Mode': 'store' },
+  });
+  const fetchStore = async (url, options) => {
+    if (url.endsWith('/pair')) {
+      assert.equal(JSON.parse(options.body).code, 'ABCD1234ABCD');
+      assert.equal(options.redirect, 'error');
+      return reply({ ok: true, token });
+    }
+    return options.headers['X-Scorpion-Token'] === token ?
+      reply({ authenticated: true, totalCount: 0, activeCount: 0 }) : reply({ ok: false }, 403);
+  };
+  const makeWorker = () => loadBackgroundHarness(fetchStore, {
+    customPing: true, noAuthFile: true, storage,
+  }).listeners.onMessage;
+  const send = (worker, message, url) => new Promise((resolve) => worker(message, { url }, resolve));
+  const worker = makeWorker();
+  const status = { action: 'SCORPION_CHECK_STATUS' };
+  const pair = { action: 'SCORPION_PAIR_STORE', code: 'ABCD-1234-ABCD' };
+  assert.equal((await send(worker, status)).pairingRequired, true);
+  assert.equal(worker(pair, { url: 'https://files.test/' }, () => assert.fail('Untrusted sender')), false);
+  const paired = await send(worker, pair, 'chrome-extension://test-ext/popup.html');
+  assert.equal(paired.ok, true);
+  assert.equal(paired.token, undefined);
+  assert.equal(storage.scorpionBridgeToken, 'existing-exe-token');
+  assert.equal((await send(makeWorker(), status)).alive, true);
+});
 
 test('only a fresh installation opens welcome and the default follows browser language', async () => {
   const h = loadBackgroundHarness(async () => { throw new Error('unexpected external request'); }, { fresh: true });

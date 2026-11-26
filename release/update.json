@@ -1,22 +1,24 @@
 {
-  "version": "2.1.29",
-  "publishedAt": "2026-11-19",
+  "version": "2.1.30",
+  "publishedAt": "2026-11-26",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "9a8d0b41231178e752c63813119fa779828ae4ce312c9026c4a9fd3111a0a0d3",
-  "sourceSha256": "927eaa5435b3e7aeb8adb5e26c3c02d1758e9b4073203cd74d0e8b8281b65ace",
-  "extensionSha256": "fb981a5522709e9bf222e9b2a3e0b2a20fd321e57fa4ade82885788841509a78",
+  "sha256": "b89d88fdb9b1fd560c315c92d9cc50fb41c5440e4767335c696e00e1cc91cc76",
+  "sourceSha256": "1fba8a7c149429752c05bdaad66a35aff83fa500c33e70d8c2c244e51c19a3f5",
+  "extensionSha256": "d277da2cde895f864d0d6e25da9b3f8d5c60e76de562c08939d1de3454eed863",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "الإصدار 2.1.29 — ربط سريع لمستخدمي الإضافة ودليل التثبيت المباشر",
-  "title_en": "Version 2.1.29 — Seamless Extension Onboarding & Direct Windows Installer Flow",
+  "title_ar": "قائمة جودات مقروءة وإصلاحات التثبيت والتنزيل",
+  "title_en": "Readable quality menu, setup language, and reliable downloads",
   "changelog_ar": [
-    "إضافة كارت تحميل برنامج ويندوز مباشرةً داخل نافذة إضافة المتصفح عند عدم الاتصال مع صفحة ترحيب وتجربة تحميل فورية عند التثبيت الجديد.",
-    "اكتشاف لغة المتصفح تلقائياً وتجاوز التقاط رابط مثبّت البرنامج نفسه، ودعوة اختيارية لتقييم الإضافة بعد إتمام 3 تحميلات من المتصفح.",
-    "إطلاق صفحة التعريف والتحميل المباشر ثنائية اللغة في GitHub Pages وتحديث تعبئة ملفات الترحيب لإضافات المتصفح كافة."
+    "قائمة الجودات تظل ظاهرة عند التبديل بين العربية والإنجليزية.",
+    "الإضافة تميّز بين عدم توفر جودات وأخطاء الاتصال وتفضل الفيديو المحدد.",
+    "أول تشغيل يتبع لغة التثبيت مع حفظ لغة المستخدم عند التحديث.",
+    "إصلاح تعلّق التنزيل المؤجل عند بدء التحميل أثناء فحص الرابط."
   ],
   "changelog_en": [
-    "Add a direct Windows installer card inside the extension popup when disconnected, alongside a first-install welcome page with live connection check and Quick Start download test.",
-    "Auto-detect browser locale, keep official Scorpion-Setup installer downloads in the browser, and show an optional store review prompt after 3 completed non-incognito extension downloads.",
-    "Ship the bilingual GitHub Pages landing site under docs/ and bundle welcome page assets across all local browser extension installations."
+    "Keep the quality menu readable while switching between Arabic and English.",
+    "Distinguish missing qualities from connection errors and respect the selected video.",
+    "Follow the setup language on first launch and preserve saved language when updating.",
+    "Prevent a delayed link probe from leaving an active download stuck."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",
