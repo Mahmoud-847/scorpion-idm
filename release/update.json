@@ -1,34 +1,18 @@
 {
-  "version": "2.1.31",
+  "version": "2.1.32",
   "publishedAt": "2026-11-26",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "2e85cc27dbab03768513729eaed18e268e786a7081ceb02be9c750d6d0b166d3",
-  "sourceSha256": "354e464792450445bb5e6836e87dba348e276a702e22b23e84ef55b1ae30ea16",
-  "extensionSha256": "38bf81011967d9d8673430e35a1943fef6c0ce935e8b2da218ada260cb2dcfc7",
+  "sha256": "feec416552b4adcf35c9deb2818bc15c68778fb4cb5228af61c63a4bce8133e5",
+  "sourceSha256": "97858693a3c0f49740f1ff7604ec860e1753ded84d8a72de0ab4744226e4e82f",
+  "extensionSha256": "0d13ff8164abc1a8824c655f7de9823115e9cc7f60b0d471261592cfa90a484f",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "تنزيل أدق وأمان أكثر وبرنامج أخف",
-  "title_en": "More precise downloads, safer, lighter",
+  "title_ar": "إصلاح تنزيل يوتيوب",
+  "title_en": "YouTube downloads fixed",
   "changelog_ar": [
-    "كليك يمين «تنزيل الفيديو» لم يعد ينزّل فيديو آخر في الصفحات التي فيها أكثر من فيديو.",
-    "المواقع لم تعد تستطيع بدء تنزيل من غير ما تضغط أنت على الزر.",
-    "البرنامج يفتح أسرع، ولا يتجمد عند إلغاء تنزيل تيليجرام وهو على وشك الانتهاء.",
-    "لو حدث خطأ غير متوقع في الواجهة يكمل البرنامج عمله بدل أن يُغلق.",
-    "عدد الاتصالات الذي تختاره في الإعدادات يبقى كما هو بعد إعادة التشغيل.",
-    "الإضافة أخف على صفحات فيسبوك والصفحات الطويلة أثناء التمرير.",
-    "المشغلات المضمّنة في المقالات تحتفظ بالفيديو حتى لو تغيّر رابط الصفحة.",
-    "حفظ الملفات التي أسماؤها محجوزة في ويندوز (مثل CON) بدل فشل التنزيل.",
-    "إلغاء تثبيت البرنامج ينظّف ربطه بالمتصفحات بالكامل."
+    "إصلاح فشل تنزيل فيديوهات يوتيوب وظهور «تعذر قراءة الجودات» عند تسجيل الدخول في المتصفح، بعد تغيير في يوتيوب."
   ],
   "changelog_en": [
-    "Right-click “Download video” no longer downloads a different video on pages with several videos.",
-    "Websites can no longer start a download without you clicking the button.",
-    "The app opens faster and no longer freezes when you cancel a Telegram download that is about to finish.",
-    "An unexpected error in the window no longer closes the app.",
-    "The number of connections you choose in Settings is kept after a restart.",
-    "The extension is lighter on Facebook and other long pages while scrolling.",
-    "Players embedded in articles keep their video even when the page address changes.",
-    "Files whose names Windows reserves (such as CON) are saved instead of failing.",
-    "Uninstalling now fully removes the app's link to your browsers."
+    "Fix YouTube downloads failing, and “Could not read qualities”, when signed in to YouTube in the browser, after a change on YouTube's side."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",
