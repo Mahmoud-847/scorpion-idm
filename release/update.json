@@ -1,18 +1,20 @@
 {
-  "version": "2.1.32",
-  "publishedAt": "2026-11-26",
+  "version": "2.1.33",
+  "publishedAt": "2026-11-27",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "feec416552b4adcf35c9deb2818bc15c68778fb4cb5228af61c63a4bce8133e5",
-  "sourceSha256": "97858693a3c0f49740f1ff7604ec860e1753ded84d8a72de0ab4744226e4e82f",
-  "extensionSha256": "0d13ff8164abc1a8824c655f7de9823115e9cc7f60b0d471261592cfa90a484f",
+  "sha256": "02f35fec73bf194910e5eb1c7234c107dac90ea818daebbf70373807f35761e7",
+  "sourceSha256": "d94d8e82867ca355b490a075946e0483e559c0780f9263672332f11a4fc2e16a",
+  "extensionSha256": "cf89b06ef7ec96a62162afbdbc02d7a3d836fa0696adad3e1686cccf1984b7e2",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "إصلاح تنزيل يوتيوب",
-  "title_en": "YouTube downloads fixed",
+  "title_ar": "اسم واحد واضح للبرنامج",
+  "title_en": "One clear name everywhere",
   "changelog_ar": [
-    "إصلاح فشل تنزيل فيديوهات يوتيوب وظهور «تعذر قراءة الجودات» عند تسجيل الدخول في المتصفح، بعد تغيير في يوتيوب."
+    "البرنامج والإضافة يظهران باسم «Scorpion Download Manager» في كل مكان.",
+    "إصلاح ظهور علامة «+» مرتين على زر «إضافة رابط»."
   ],
   "changelog_en": [
-    "Fix YouTube downloads failing, and “Could not read qualities”, when signed in to YouTube in the browser, after a change on YouTube's side."
+    "The app and the extension now show the name “Scorpion Download Manager” everywhere.",
+    "Fix the “Add URL” button showing the plus sign twice."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",
