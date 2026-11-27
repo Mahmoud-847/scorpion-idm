@@ -1,7 +1,7 @@
 const messages = {
   en: {
     heading: 'Connect your extension', stepDownload: 'Download the Windows app',
-    downloadHint: 'Run the installer and open Scorpion Download Manager.', downloadInstaller: 'Download Scorpion Download Manager (Windows)',
+    downloadHint: 'Get the app from Microsoft Store or download the installer, then open Scorpion Download Manager.', downloadStore: 'Get it from Microsoft Store', downloadInstaller: 'Download the installer (.exe)',
     stepConnect: 'Confirm the connection',
     connectionHint: 'This page checks for the desktop app while it is open. If the app is running and still cannot connect, open Connect Browser in the app.',
     tryDownload: 'Try your first download', checking: 'Checking connection…',
@@ -10,7 +10,7 @@ const messages = {
   },
   ar: {
     heading: 'اربط إضافة المتصفح', stepDownload: 'حمّل برنامج ويندوز',
-    downloadHint: 'شغّل المثبّت وافتح البرنامج بعد انتهاء التثبيت.', downloadInstaller: 'تحميل برنامج Scorpion Download Manager للويندوز',
+    downloadHint: 'حمّل البرنامج من Microsoft Store أو حمّل ملف التسطيب، وبعد التثبيت افتح البرنامج.', downloadStore: 'تحميل من Microsoft Store', downloadInstaller: 'تحميل ملف التسطيب (exe)',
     stepConnect: 'تأكد من الاتصال',
     connectionHint: 'الصفحة بتتحقق من حالة الاتصال وهي مفتوحة. لو البرنامج شغّال ولسه مفيش اتصال، افتح «ربط المتصفح» من البرنامج.',
     tryDownload: 'جرّب أول تحميل', checking: 'جاري التحقق من الاتصال…',
@@ -32,7 +32,7 @@ function render() {
   document.documentElement.lang = lang;
   document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
   document.title = tr.heading + ' | Scorpion Download Manager';
-  for (const id of ['heading', 'stepDownload', 'downloadHint', 'downloadInstaller', 'stepConnect', 'connectionHint', 'tryDownload']) {
+  for (const id of ['heading', 'stepDownload', 'downloadHint', 'downloadStore', 'downloadInstaller', 'stepConnect', 'connectionHint', 'tryDownload']) {
     const el = document.getElementById(id);
     if (el.textContent !== tr[id]) el.textContent = tr[id];
   }

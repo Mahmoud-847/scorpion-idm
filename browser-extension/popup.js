@@ -44,8 +44,9 @@ document.addEventListener('DOMContentLoaded', () => {
       online: 'متصل ببرنامج سطح المكتب',
       offline: 'برنامج سطح المكتب غير متصل',
       checking: 'جاري التحقق من الاتصال…',
-      installDescription: 'لو البرنامج مثبّت، شغّله لربط الإضافة. لو دي أول مرة، حمّل برنامج ويندوز.',
-      installer: 'تحميل برنامج Scorpion Download Manager للويندوز',
+      installDescription: 'لو البرنامج مثبّت، شغّله لربط الإضافة. لو دي أول مرة، حمّل برنامج ويندوز بالطريقة اللي تناسبك.',
+      storeInstaller: 'تحميل من Microsoft Store',
+      installer: 'تحميل ملف التسطيب (exe)',
       setupHelp: 'مساعدة في الربط',
       openStore: 'افتح سكوربيون',
       pairStatus: 'نسخة المتجر تحتاج الربط',
@@ -80,8 +81,9 @@ document.addEventListener('DOMContentLoaded', () => {
       online: 'Desktop App Connected',
       offline: 'Desktop App Disconnected',
       checking: 'Checking connection…',
-      installDescription: 'Open the desktop app to connect. If you are new to Scorpion, download the Windows app.',
-      installer: 'Download Scorpion Download Manager (Windows)',
+      installDescription: 'Open the desktop app to connect. If you are new to Scorpion, get the Windows app either way.',
+      storeInstaller: 'Get it from Microsoft Store',
+      installer: 'Download installer (.exe)',
       setupHelp: 'Connection help',
       openStore: 'Open Scorpion',
       pairStatus: 'Store app needs pairing',
@@ -136,6 +138,7 @@ document.addEventListener('DOMContentLoaded', () => {
     grabCurrentPageBtn.disabled = isAlive !== true;
     grabCurrentPageBtn.hidden = isAlive !== true;
     document.getElementById('installDescription').textContent = tr.installDescription;
+    document.getElementById('storeLink').textContent = tr.storeInstaller;
     document.getElementById('installerLink').textContent = tr.installer;
     document.getElementById('setupHelpLink').textContent = tr.setupHelp;
     document.getElementById('reviewDescription').textContent = tr.reviewDescription;

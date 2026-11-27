@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Scorpion Download Manager",
-  "version": "1.8.20",
+  "version": "1.8.21",
   "description": "Download videos and files faster with the Scorpion Download Manager app for Windows.",
   "icons": {
     "16": "icons/icon-16.png",

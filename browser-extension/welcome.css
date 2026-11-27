@@ -12,6 +12,8 @@ h2 { font-size: 1.2rem; margin: 0; }
 p { color: #ccc2c5; line-height: 1.55; margin: 8px 0 14px; }
 a, button { display: inline-block; border: 1px solid #664726; border-radius: 8px; padding: 10px 14px; font: inherit; font-weight: 650; text-decoration: none; cursor: pointer; }
 .primary { background: #ffab47; color: #211204; }
+.primary + .primary { margin-inline-start: 10px; }
+@media (max-width: 520px) { .primary { display: block; text-align: center; } .primary + .primary { margin: 10px 0 0; } }
 button { background: #2e2115; color: #ffd29b; }
 button:disabled { opacity: .65; cursor: default; }
 :focus-visible { outline: 2px solid #ffd29b; outline-offset: 4px; }
