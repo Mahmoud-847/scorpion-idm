@@ -1,20 +1,18 @@
 {
-  "version": "2.1.33",
+  "version": "2.1.34",
   "publishedAt": "2026-11-27",
   "packageFile": "Scorpion-Update-Payload.zip",
-  "sha256": "02f35fec73bf194910e5eb1c7234c107dac90ea818daebbf70373807f35761e7",
-  "sourceSha256": "d94d8e82867ca355b490a075946e0483e559c0780f9263672332f11a4fc2e16a",
-  "extensionSha256": "cf89b06ef7ec96a62162afbdbc02d7a3d836fa0696adad3e1686cccf1984b7e2",
+  "sha256": "18baea9654a0d3143063243cf58173ec229899064be3af62ec893bbf1cf12df4",
+  "sourceSha256": "4b5dfd02bd96d305c2e90703d413220773c5542a573cc721fdc196abc968ced6",
+  "extensionSha256": "4d06360e75015a4d2607ae8e6aaec57d0637d61d3bf981306c429c25fe5ab330",
   "downloadUrl": "https://github.com/Mahmoud-847/scorpion-idm/raw/main/release/Scorpion-Update-Payload.zip",
-  "title_ar": "اسم واحد واضح للبرنامج",
-  "title_en": "One clear name everywhere",
+  "title_ar": "ربط تلقائي مع إضافة المتصفح",
+  "title_en": "Automatic browser connection",
   "changelog_ar": [
-    "البرنامج والإضافة يظهران باسم «Scorpion Download Manager» في كل مكان.",
-    "إصلاح ظهور علامة «+» مرتين على زر «إضافة رابط»."
+    "نسخة متجر Microsoft تتصل بإضافة سكوربيون من متجر Edge تلقائيًا، دون إدخال أي رمز."
   ],
   "changelog_en": [
-    "The app and the extension now show the name “Scorpion Download Manager” everywhere.",
-    "Fix the “Add URL” button showing the plus sign twice."
+    "The Microsoft Store edition connects to the Scorpion extension from the Edge store automatically, with no code to enter."
   ],
   "tools": {
     "version": "e6ba2ae25e2d",
