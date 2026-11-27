@@ -230,6 +230,7 @@ test('Store pairing survives worker restart and leaves the traditional credentia
     status, headers: { 'X-Scorpion-Bridge-Mode': 'store' },
   });
   const fetchStore = async (url, options) => {
+    if (url.endsWith('/pair') && JSON.parse(options.body).auto === true) return reply({ ok: false }, 403); // not the official ID
     if (url.endsWith('/pair')) {
       assert.equal(JSON.parse(options.body).code, 'ABCD1234ABCD');
       assert.equal(options.redirect, 'error');
@@ -252,6 +253,38 @@ test('Store pairing survives worker restart and leaves the traditional credentia
   assert.equal(paired.token, undefined);
   assert.equal(storage.scorpionBridgeToken, 'existing-exe-token');
   assert.equal((await send(makeWorker(), status)).alive, true);
+});
+
+test('the official extension pairs with the Store edition by itself, with no code', async () => {
+  const token = 'b'.repeat(64);
+  const storage = {};
+  const pairBodies = [];
+  const reply = (data, status = 200) => new Response(JSON.stringify(data), {
+    status, headers: { 'X-Scorpion-Bridge-Mode': 'store' },
+  });
+  const worker = loadBackgroundHarness(async (url, options) => {
+    if (url.endsWith('/pair')) {
+      pairBodies.push(JSON.parse(options.body));
+      return reply({ ok: true, token });
+    }
+    return options.headers['X-Scorpion-Token'] === token ?
+      reply({ authenticated: true, totalCount: 0, activeCount: 0 }) : reply({ ok: false }, 403);
+  }, { customPing: true, noAuthFile: true, storage }).listeners.onMessage;
+  const status = await new Promise((resolve) => worker({ action: 'SCORPION_CHECK_STATUS' }, {}, resolve));
+  assert.equal(status.alive, true);
+  assert.equal(status.pairingRequired, false);
+  assert.deepEqual(pairBodies, [{ auto: true }]);
+  assert.equal(storage.scorpionStoreBridgeToken, token);
+});
+
+test('the regular app (not the Store edition) never receives a pairing request', async () => {
+  const urls = [];
+  const worker = loadBackgroundHarness(async (url) => {
+    urls.push(url);
+    return new Response(JSON.stringify({ ok: false }), { status: 403 });
+  }, { customPing: true, noAuthFile: true, storage: {} }).listeners.onMessage;
+  await new Promise((resolve) => worker({ action: 'SCORPION_CHECK_STATUS' }, {}, resolve));
+  assert.equal(urls.some((u) => u.endsWith('/pair')), false);
 });
 
 test('only a fresh installation opens welcome and the default follows browser language', async () => {

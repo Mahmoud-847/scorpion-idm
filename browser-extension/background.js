@@ -100,13 +100,38 @@ async function bridgeFetch(url, options = {}) {
   bridgeMode = responseMode;
   if (res && (res.status === 401 || res.status === 403)) {
     if (responseMode === 'store') {
-      const fresh = await storeBridgeHeaders();
+      let fresh = await storeBridgeHeaders();
+      // The official store extension pairs with the Store edition by itself; the code is only a fallback
+      if ((!fresh['X-Scorpion-Token'] || fresh['X-Scorpion-Token'] === headers['X-Scorpion-Token']) &&
+          (await autoPairStoreBridge()).ok) fresh = await storeBridgeHeaders();
       if (fresh['X-Scorpion-Token'] && fresh['X-Scorpion-Token'] !== headers['X-Scorpion-Token']) res = await send(fresh);
     } else {
       res = await send(await getBridgeHeaders(requestMode !== 'store'));
     }
   }
   return res;
+}
+
+// Automatic pairing: accepted only for the official store extension. A manual or unofficial copy is
+// refused and falls back to the code, so try at most every 30 seconds.
+let lastAutoPairAttempt = 0;
+async function autoPairStoreBridge() {
+  if (Date.now() - lastAutoPairAttempt < 30000) return { ok: false, error: 'throttled' };
+  lastAutoPairAttempt = Date.now();
+  try {
+    const response = await fetch(`${SCORPION_SERVER}/pair`, {
+      method: 'POST', headers: { ...SCORPION_HEADERS, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auto: true }), signal: AbortSignal.timeout(5000), redirect: 'error',
+    });
+    if (response.headers.get('X-Scorpion-Bridge-Mode') !== 'store' || !response.ok) return { ok: false, error: 'refused' };
+    const data = await response.json();
+    if (data?.ok !== true || !/^[0-9a-f]{64}$/i.test(data.token)) return { ok: false, error: 'refused' };
+    await chrome.storage.local.set({ scorpionStoreBridgeToken: data.token });
+    bridgeMode = 'store';
+    return { ok: true };
+  } catch (_) {
+    return { ok: false, error: 'connection' };
+  }
 }
 
 async function pairStoreBridge(rawCode) {

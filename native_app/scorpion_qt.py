@@ -479,6 +479,12 @@ BRIDGE_TOKEN_HEADER = "X-Scorpion-Token"
 BRIDGE_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "moz-extension://", "extension://")
 NATIVE_HOST_NAME = "com.scorpionidm.bridge"
 OFFICIAL_EXTENSION_ID = "hgcdbjpjlfgnejhceobphikeebmhmgcj"
+# Extensions published by us in browser stores: they connect to the Store edition without a pairing code
+OFFICIAL_STORE_EXTENSION_IDS = frozenset({OFFICIAL_EXTENSION_ID})
+
+
+def store_extension_trusted(extension_id: str) -> bool:
+    return extension_id in OFFICIAL_STORE_EXTENSION_IDS
 
 
 def load_or_create_bridge_token(app_data_dir: str = "") -> str:
@@ -650,6 +656,18 @@ def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool
 
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.34",
+        "date": "2026-11-27",
+        "title_ar": "ربط تلقائي مع إضافة المتصفح",
+        "title_en": "Automatic browser connection",
+        "ar": [
+            "نسخة متجر Microsoft تتصل بإضافة سكوربيون من متجر Edge تلقائيًا، دون إدخال أي رمز.",
+        ],
+        "en": [
+            "The Microsoft Store edition connects to the Scorpion extension from the Edge store automatically, with no code to enter.",
+        ],
+    },
     {
         "version": "2.1.33",
         "date": "2026-11-27",
@@ -3581,13 +3599,22 @@ class ScorpionNativeEngine(BrowserTransferMixin):
                         raise ValueError("Invalid pairing request size")
                     self.connection.settimeout(3)
                     body = self.rfile.read(size)
-                    if (not re.fullmatch(r"chrome-extension://[a-p]{32}", origin) or
+                    match = re.fullmatch(r"(?:chrome-)?extension://([a-p]{32})", origin)
+                    if (not match or
                             self.headers.get(BRIDGE_CLIENT_HEADER) != "1" or
                             self.headers.get_content_type() != "application/json"):
                         self._reject()
                         return
                     data = json.loads(body)
-                    token = engine_ref.redeem_store_pairing_code(data.get("code")) if isinstance(data, dict) else ""
+                    if not isinstance(data, dict):
+                        token = ""
+                    elif data.get("auto") is True:
+                        # The official store extension pairs by itself. Web pages cannot forge an extension
+                        # Origin, so this keeps them out exactly like the code does; other extensions
+                        # (manual or unofficial copies) still need the one-time code.
+                        token = engine_ref.bridge_token if store_extension_trusted(match.group(1)) else ""
+                    else:
+                        token = engine_ref.redeem_store_pairing_code(data.get("code"))
                 except (ValueError, OSError):
                     token = ""
                 if not token:
@@ -9958,8 +9985,11 @@ class ScorpionMainWindow(QMainWindow):
         dialog.setWindowTitle("ربط المتصفح" if ar else "Connect Browser")
         layout = QVBoxLayout(dialog)
         hint = QLabel(
-            "ولّد رمزًا ثم أدخله في نافذة إضافة سكوربيون. الرمز صالح لمدة خمس دقائق ولمرة واحدة."
-            if ar else "Generate a code and enter it in the Scorpion extension. The code lasts five minutes and works once."
+            "إضافة سكوربيون من متجر Edge تتصل بالبرنامج تلقائيًا ولا تحتاج رمزًا.\n"
+            "إذا كنت تستخدم نسخة يدوية من الإضافة: ولّد رمزًا وأدخله في نافذتها (صالح لخمس دقائق ولمرة واحدة)."
+            if ar else
+            "The Scorpion extension from the Edge store connects automatically, with no code.\n"
+            "Using a manually installed copy? Generate a code and enter it in its window (it lasts five minutes and works once)."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
