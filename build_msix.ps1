@@ -3,6 +3,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Windows PowerShell's download progress bar slows Invoke-WebRequest down to a crawl
+$ProgressPreference = "SilentlyContinue"
+# Windows PowerShell 5.1 may not offer TLS 1.2 by default; nuget.org requires it
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # Build a Microsoft Store-ready unsigned MSIX package (Microsoft signs it cleanly on Store certification).
 $root = $PSScriptRoot
@@ -24,7 +28,8 @@ if ([version]$msixVersion -lt $minimumStoreVersion) {
 }
 
 # 1) Ensure MakeAppx.exe + MakePri.exe from official Microsoft Windows SDK BuildTools
-$sdkRoot = Join-Path $work "sdk_tools"
+# Outside native_app\_build: build_installer.ps1 wipes that folder on every release
+$sdkRoot = Join-Path $root "build\sdk_tools"
 $makeAppx = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "makeappx.exe" -Recurse -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -match "\\x64\\makeappx\.exe$" } |
     Select-Object -Last 1 -ExpandProperty FullName
