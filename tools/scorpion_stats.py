@@ -14,6 +14,8 @@ import os
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 
@@ -26,8 +28,8 @@ except Exception:
 
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon
-from PyQt6.QtWidgets import (QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QApplication, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+                             QMessageBox, QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 REPO = "Mahmoud-847/scorpion-idm"
 EDGE_CRX_ID = "hgcdbjpjlfgnejhceobphikeebmhmgcj"
@@ -81,11 +83,99 @@ def fetch_edge():
             "ratings": int(d.get("ratingCount") or 0), "version": d.get("version") or ""}
 
 
+STORE_CREDS = os.path.join(DATA_DIR, "store_api.json")
+STORE_FIRST_DAY = "2026-11-20"  # before the app was in the Store
+
+
+def _dpapi(data: bytes, protect: bool) -> bytes:
+    """Windows DPAPI: only this Windows user on this PC can decrypt what it encrypts."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Blob(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    buf = ctypes.create_string_buffer(data, len(data))
+    src, out = Blob(len(data), buf), Blob()
+    fn = ctypes.windll.crypt32.CryptProtectData if protect else ctypes.windll.crypt32.CryptUnprotectData
+    if not fn(ctypes.byref(src), None, None, None, None, 0x1, ctypes.byref(out)):  # 0x1: no UI
+        raise OSError("Windows could not encrypt or decrypt the Store key")
+    try:
+        return ctypes.string_at(out.pbData, out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(out.pbData)
+
+
+def save_store_creds(tenant_id, client_id, secret):
+    import base64
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    data = {"tenant_id": tenant_id.strip(), "client_id": client_id.strip(),
+            "secret": base64.b64encode(_dpapi(secret.strip().encode("utf-8"), True)).decode("ascii")}
+    tmp = STORE_CREDS + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, STORE_CREDS)
+
+
+def load_store_creds():
+    import base64
+
+    try:
+        with open(STORE_CREDS, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["secret"] = _dpapi(base64.b64decode(data["secret"]), False).decode("utf-8")
+        return data if data.get("tenant_id") and data.get("client_id") and data.get("secret") else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def store_token(creds):
+    body = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": creds["client_id"],
+                                   "client_secret": creds["secret"],
+                                   "resource": "https://manage.devcenter.microsoft.com"}).encode()
+    req = urllib.request.Request(f"https://login.microsoftonline.com/{urllib.parse.quote(creds['tenant_id'])}/oauth2/token",
+                                 data=body, headers={"User-Agent": "ScorpionStats"})
+    with urllib.request.urlopen(req, timeout=20) as res:
+        return json.load(res)["access_token"]
+
+
+def fetch_store_acquisitions(creds):
+    """Daily acquisitions from the Microsoft Store analytics API (data can lag up to 72 hours)."""
+    token = store_token(creds)
+    end = time.strftime("%Y-%m-%d", time.gmtime())
+    url = ("https://manage.devcenter.microsoft.com/v1.0/my/analytics/appacquisitions"
+           f"?applicationId={STORE_ID}&startDate={STORE_FIRST_DAY}&endDate={end}&top=10000&aggregationLevel=day")
+    days = {}
+    while url:
+        d = get_json(url, {"Authorization": f"Bearer {token}"})
+        for row in d.get("Value") or []:
+            day = (row.get("date") or "")[:10]
+            days[day] = days.get(day, 0) + int(row.get("acquisitionQuantity") or 0)
+        nxt = d.get("@nextLink")
+        url = ("https://manage.devcenter.microsoft.com/v1.0/my/analytics/" + nxt) if nxt and not nxt.startswith("http") else nxt
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    week_ago = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 6 * 86400))
+    return {"total": sum(days.values()), "today": days.get(today, 0),
+            "week": sum(v for k, v in days.items() if k >= week_ago),
+            "last_day": max((k for k, v in days.items() if v), default="")}
+
+
 def fetch_store():
     d = get_json(f"https://storeedgefd.dsx.mp.microsoft.com/v9.0/products/{STORE_ID}"
                  "?market=EG&locale=en-us&deviceFamily=Windows.Desktop")
     p = d.get("Payload") or d
-    return {"rating": float(p.get("AverageRating") or 0), "ratings": int(p.get("RatingCount") or 0)}
+    out = {"rating": float(p.get("AverageRating") or 0), "ratings": int(p.get("RatingCount") or 0)}
+    creds = load_store_creds()
+    if creds:
+        try:
+            out["acq"] = fetch_store_acquisitions(creds)
+        except urllib.error.HTTPError as err:
+            out["acq_error"] = ("المفتاح مرفوض أو منتهي. أعد الربط." if err.code in (400, 401, 403)
+                                else f"خطأ من Microsoft ({err.code})")
+        except Exception as err:
+            out["acq_error"] = str(err)[:120]
+    return out
 
 
 def load_history():
@@ -131,7 +221,75 @@ QPushButton { background: #2a2016; border: 1px solid #62451e; border-radius: 8px
 QPushButton:hover { background: #3a2b1a; }
 QPushButton#primary { background: #ffab47; color: #1b1005; border: none; }
 QPushButton#primary:hover { background: #ffbf70; }
+QLineEdit { background: #1b1813; border: 1px solid #62451e; border-radius: 6px; padding: 6px; color: #ffffff; }
 """
+
+
+class StoreLinkDialog(QDialog):
+    """Takes the Partner Center Azure AD app values. The secret is kept encrypted with Windows DPAPI."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("ربط متجر Microsoft")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setStyleSheet(CSS)
+        self.setMinimumWidth(560)
+        lay = QVBoxLayout(self)
+        info = QLabel("من Partner Center ← الترس ← Account settings ← User management ← Azure AD applications، "
+                      "انسخ القيم دي والصقها هنا. المفتاح السري بيتحفظ مشفّر على الجهاز ده بس.")
+        info.setWordWrap(True)
+        info.setObjectName("sub")
+        lay.addWidget(info)
+        form = QFormLayout()
+        old = load_store_creds() or {}
+        self.tenant = QLineEdit(old.get("tenant_id", ""))
+        self.client = QLineEdit(old.get("client_id", ""))
+        self.secret = QLineEdit()
+        self.secret.setEchoMode(QLineEdit.EchoMode.Password)
+        self.secret.setPlaceholderText("محفوظ — اتركه فاضي لو مش هتغيره" if old else "")
+        for w in (self.tenant, self.client, self.secret):
+            w.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        form.addRow("Tenant ID", self.tenant)
+        form.addRow("Client ID", self.client)
+        form.addRow("Key (Client secret)", self.secret)
+        lay.addLayout(form)
+        self.msg = QLabel("")
+        self.msg.setObjectName("err")
+        self.msg.setWordWrap(True)
+        lay.addWidget(self.msg)
+        row = QHBoxLayout()
+        self.ok = QPushButton("حفظ واختبار")
+        self.ok.setObjectName("primary")
+        self.ok.clicked.connect(self.save)
+        cancel = QPushButton("إلغاء")
+        cancel.clicked.connect(self.reject)
+        row.addStretch()
+        row.addWidget(cancel)
+        row.addWidget(self.ok)
+        lay.addLayout(row)
+        self._old_secret = old.get("secret", "")
+
+    def save(self):
+        creds = {"tenant_id": self.tenant.text().strip(), "client_id": self.client.text().strip(),
+                 "secret": self.secret.text().strip() or self._old_secret}
+        if not all(creds.values()):
+            self.msg.setText("لازم القيم التلاتة.")
+            return
+        self.ok.setEnabled(False)
+        self.msg.setText("جاري الاختبار…")
+        QApplication.processEvents()
+        try:
+            store_token(creds)
+        except urllib.error.HTTPError as err:
+            self.msg.setText(f"Microsoft رفضت القيم ({err.code}). راجع Tenant ID و Client ID والمفتاح.")
+            self.ok.setEnabled(True)
+            return
+        except Exception as err:
+            self.msg.setText(f"تعذر الاتصال: {str(err)[:100]}")
+            self.ok.setEnabled(True)
+            return
+        save_store_creds(creds["tenant_id"], creds["client_id"], creds["secret"])
+        self.accept()
 
 
 class Card(QFrame):
@@ -208,6 +366,9 @@ class StatsWindow(QWidget):
         self.status = QLabel("")
         self.status.setObjectName("sub")
         head.addWidget(self.status)
+        self.link_btn = QPushButton("ربط متجر Microsoft")
+        self.link_btn.clicked.connect(self.link_store)
+        head.addWidget(self.link_btn)
         self.refresh_btn = QPushButton("تحديث الآن")
         self.refresh_btn.setObjectName("primary")
         self.refresh_btn.clicked.connect(self.refresh)
@@ -243,6 +404,11 @@ class StatsWindow(QWidget):
         self.status.setText("جاري التحديث…")
         threading.Thread(target=self.fetcher.run, daemon=True).start()
 
+    def link_store(self):
+        if StoreLinkDialog(self).exec():
+            QMessageBox.information(self, "تم", "تم ربط المتجر. ممكن تتأخر أرقام Microsoft لحد 72 ساعة.")
+            self.refresh()
+
     def _delta(self, path, value):
         """Change since the value seen in the previous session."""
         base = self.history.get("baseline", {}).get(path)
@@ -268,8 +434,18 @@ class StatsWindow(QWidget):
             self.c_store.set_values("", "", "", error=store["error"])
         else:
             stars = f"{store['rating']:.1f} ★ من {store['ratings']} تقييم" if store["ratings"] else "لا توجد تقييمات بعد"
-            self.c_store.set_values(stars, "التقييم في المتجر",
-                              "عدد التحميلات من المتجر غير متاح للعامة. اضغط «فتح» لرؤيته في Partner Center ← Analytics.")
+            acq = store.get("acq")
+            if acq:
+                last = f"  •  آخر يوم فيه بيانات {acq['last_day']}" if acq.get("last_day") else ""
+                self.c_store.set_values(f"{acq['total']:,}", "تحميل من المتجر (إجمالي)",
+                                        f"النهارده {acq['today']:,}  •  آخر 7 أيام {acq['week']:,}  •  {stars}{last}",
+                                        self._delta("store_total", acq["total"]))
+            elif store.get("acq_error"):
+                self.c_store.set_values(stars, "التقييم في المتجر", "", error="تعذر جلب التحميلات: " + store["acq_error"])
+            else:
+                self.c_store.set_values(stars, "التقييم في المتجر",
+                                        "لعرض عدد التحميلات اضغط «ربط متجر Microsoft» فوق.")
+        self.link_btn.setText("إعادة ربط المتجر" if load_store_creds() else "ربط متجر Microsoft")
         when = time.strftime("%H:%M", time.localtime(data.get("at", time.time())))
         self.status.setText(("آخر بيانات محفوظة " if from_cache else "آخر تحديث ") + when +
                             f"  •  تحديث تلقائي كل {REFRESH_MINUTES} دقائق")
@@ -283,6 +459,8 @@ class StatsWindow(QWidget):
             values.update(setup=gh["setup"], ext_zip=gh["ext_zip"])
         if "error" not in edge:
             values["edge_users"] = edge["users"]
+        if store.get("acq"):
+            values["store_total"] = store["acq"]["total"]
         for k, v in values.items():
             baseline.setdefault(k, v)
         self.history["last"] = data
@@ -300,6 +478,9 @@ class StatsWindow(QWidget):
             base.update(setup=gh["setup"], ext_zip=gh["ext_zip"])
         if "users" in edge:
             base["edge_users"] = edge["users"]
+        acq = last.get("store", {}).get("acq")
+        if acq:
+            base["store_total"] = acq["total"]
         self.history["baseline"] = base
         try:
             save_history(self.history)
