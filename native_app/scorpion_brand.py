@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Scorpion IDM — Visual Design System, Golden-Scorpion Brand Loader,
+Scorpion Download Manager — Visual Design System, Golden-Scorpion Brand Loader,
 Vector Outline Icon Set & Rich Card Thumbnail Renderer.
 """
 import ctypes

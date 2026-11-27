@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Scorpion IDM — Custom Title Bar, Sidebar Delegate, Stacked Download Card Delegate,
+Scorpion Download Manager — Custom Title Bar, Sidebar Delegate, Stacked Download Card Delegate,
 Inline Torrent File-Selection Panel, and Queue & Scheduler Dialog.
 """
 import os
@@ -150,7 +150,7 @@ class ScorpionTitleBar(QFrame):
         self.lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.lbl_icon)
 
-        self.lbl_title = QLabel("Scorpion IDM")
+        self.lbl_title = QLabel("Scorpion Download Manager")
         self.lbl_title.setStyleSheet("font-size: 13.5px; font-weight: 600;")
         lay.addWidget(self.lbl_title)
         lay.addStretch(1)
@@ -1158,7 +1158,7 @@ class QueueSchedulerDialog(QDialog):
         self.engine = engine
         self.is_ar = lang == "ar"
         self.T = (lambda ar, en: ar) if self.is_ar else (lambda ar, en: en)
-        self.setWindowTitle(self.T("إدارة الطوابير والجدولة — Scorpion IDM", "Queues & Scheduler — Scorpion IDM"))
+        self.setWindowTitle(self.T("إدارة الطوابير والجدولة — Scorpion Download Manager", "Queues & Scheduler — Scorpion Download Manager"))
         self.resize(620, 490)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if self.is_ar else Qt.LayoutDirection.LeftToRight)
 

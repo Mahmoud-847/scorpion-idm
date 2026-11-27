@@ -1816,7 +1816,7 @@
     }
   }, { passive: true });
 
-  // Intercept Magnet links & direct .torrent links so Scorpion IDM handles them automatically
+  // Intercept Magnet links & direct .torrent links so Scorpion Download Manager handles them automatically
   document.addEventListener(
     'click',
     (e) => {

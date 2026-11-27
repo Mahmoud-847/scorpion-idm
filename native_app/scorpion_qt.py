@@ -626,7 +626,7 @@ def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool
             bf.write(bat_cmd)
         manifest = {
             "name": NATIVE_HOST_NAME,
-            "description": "Scorpion IDM Local Bridge Pairing Host",
+            "description": "Scorpion Download Manager Local Bridge Pairing Host",
             "path": bat_path,
             "type": "stdio",
             "allowed_origins": _discover_unpacked_extension_origins(),
@@ -650,6 +650,20 @@ def register_native_messaging_hosts(app_data_dir: str = "", write_registry: bool
 
 
 CHANGELOG_HISTORY = [
+    {
+        "version": "2.1.33",
+        "date": "2026-11-27",
+        "title_ar": "اسم واحد واضح للبرنامج",
+        "title_en": "One clear name everywhere",
+        "ar": [
+            "البرنامج والإضافة يظهران باسم «Scorpion Download Manager» في كل مكان.",
+            "إصلاح ظهور علامة «+» مرتين على زر «إضافة رابط».",
+        ],
+        "en": [
+            "The app and the extension now show the name “Scorpion Download Manager” everywhere.",
+            "Fix the “Add URL” button showing the plus sign twice.",
+        ],
+    },
     {
         "version": "2.1.32",
         "date": "2026-11-26",
@@ -2220,14 +2234,14 @@ class AddDownloadDialog(QDialog):
 
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         if is_torrent:
-            title_ar = "تحميل تورنت أو رابط Magnet — Scorpion IDM"
-            title_en = "Add Torrent / Magnet Link — Scorpion IDM"
+            title_ar = "تحميل تورنت أو رابط Magnet — Scorpion Download Manager"
+            title_en = "Add Torrent / Magnet Link — Scorpion Download Manager"
         elif is_video:
-            title_ar = "سحب فيديو ذكي (32 بورت) — Scorpion IDM"
-            title_en = "Smart Video Grabber (32 Ports) — Scorpion IDM"
+            title_ar = "سحب فيديو ذكي (32 بورت) — Scorpion Download Manager"
+            title_en = "Smart Video Grabber (32 Ports) — Scorpion Download Manager"
         else:
-            title_ar = "إضافة رابط تحميل جديد (32 بورت) — Scorpion IDM"
-            title_en = "Add New Download (32 Ports) — Scorpion IDM"
+            title_ar = "إضافة رابط تحميل جديد (32 بورت) — Scorpion Download Manager"
+            title_en = "Add New Download (32 Ports) — Scorpion Download Manager"
         self.setWindowTitle(title_ar if self.is_ar else title_en)
         self.resize(660, 420)
         self.setMinimumWidth(560)
@@ -7055,9 +7069,9 @@ class BrowserSetupDialog(QDialog):
 
         p = pal()
         self.setWindowTitle(
-            "معالج ربط المتصفحات الذكي — Scorpion IDM"
+            "معالج ربط المتصفحات الذكي — Scorpion Download Manager"
             if self.is_ar
-            else "Smart Browser Setup Wizard — Scorpion IDM"
+            else "Smart Browser Setup Wizard — Scorpion Download Manager"
         )
         self.resize(740, 540)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if self.is_ar else Qt.LayoutDirection.LeftToRight)
@@ -7160,9 +7174,9 @@ class BrowserSetupDialog(QDialog):
         ic_lay.setSpacing(4)
 
         h_lbl = QLabel(
-            "اختر المتصفح الذي تريد ربطه ببرنامج Scorpion IDM:"
+            "اختر المتصفح الذي تريد ربطه ببرنامج Scorpion Download Manager:"
             if self.is_ar
-            else "Select the browser you want to integrate with Scorpion IDM:"
+            else "Select the browser you want to integrate with Scorpion Download Manager:"
         )
         h_lbl.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {p['text']};")
         ic_lay.addWidget(h_lbl)
@@ -7472,9 +7486,9 @@ class BrowserSetupDialog(QDialog):
         c_lay.addWidget(self.lbl_s3_title)
 
         self.lbl_s3_sub = QLabel(
-            "تم الاتصال بنجاح بين إضافة المتصفح وبرنامج Scorpion IDM!"
+            "تم الاتصال بنجاح بين إضافة المتصفح وبرنامج Scorpion Download Manager!"
             if self.is_ar
-            else "Browser extension is now actively linked to Scorpion IDM!"
+            else "Browser extension is now actively linked to Scorpion Download Manager!"
         )
         self.lbl_s3_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_s3_sub.setStyleSheet(f"font-size: 13px; color: {p['muted']};")
@@ -7488,8 +7502,8 @@ class BrowserSetupDialog(QDialog):
                 "✓  All browser downloads are automatically intercepted at full speed (16 channels)",
             ),
             (
-                "✓  ظهور زر «تحميل الفيديو بواسطة Scorpion IDM» تلقائياً أعلى أي فيديو مع اختيار الجودة",
-                "✓  Floating 'Download Video with Scorpion IDM' button appears on video players",
+                "✓  ظهور زر «تحميل الفيديو بواسطة Scorpion Download Manager» تلقائياً أعلى أي فيديو مع اختيار الجودة",
+                "✓  Floating 'Download Video with Scorpion Download Manager' button appears on video players",
             ),
             (
                 "✓  المسار محفوظ بشكل دائم في النظام ولن تحتاج لإعادة تفعيله مرة أخرى",
@@ -7776,7 +7790,7 @@ class SettingsDialog(QDialog):
         T = (lambda ar, en: ar) if self.is_ar else (lambda ar, en: en)
         self.T = T
         s = engine.settings
-        self.setWindowTitle(T("الإعدادات — Scorpion IDM", "Settings — Scorpion IDM"))
+        self.setWindowTitle(T("الإعدادات — Scorpion Download Manager", "Settings — Scorpion Download Manager"))
         self.setMinimumSize(460, 300)
         try:
             avail = (self.screen() or QApplication.primaryScreen()).availableGeometry()
@@ -7914,7 +7928,7 @@ class SettingsDialog(QDialog):
             for cat in list(CATEGORY_MAP.keys()) + ["General"]:
                 os.makedirs(os.path.join(new_root, cat), exist_ok=True)
         except Exception as e:
-            QMessageBox.warning(self, "Scorpion IDM", str(e))
+            QMessageBox.warning(self, "Scorpion Download Manager", str(e))
             return
         s["downloadsRoot"] = new_root
         s["defaultConnections"] = int(self.cmb_conn.currentText())
@@ -7959,7 +7973,7 @@ class UpdateDialog(QDialog):
         self._updating = False
 
         self.setWindowTitle(
-            self.T("تحديثات البرنامج وسجل الإضافات — Scorpion IDM", "Software Updates & What's New — Scorpion IDM")
+            self.T("تحديثات البرنامج وسجل الإضافات — Scorpion Download Manager", "Software Updates & What's New — Scorpion Download Manager")
         )
         self.resize(650, 560)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if self.is_ar else Qt.LayoutDirection.LeftToRight)
@@ -8120,7 +8134,7 @@ class UpdateDialog(QDialog):
         else:
             headline, color = self.T(
                 f"✅ برنامجك محدث إلى آخر إصدار ({L('v' + APP_VERSION)})",
-                f"✅ Scorpion IDM is up to date (v{APP_VERSION})",
+                f"✅ Scorpion Download Manager is up to date (v{APP_VERSION})",
             ), c["success"]
             sub = checked_txt or self.T(f"الإصدار الحالي: {L('v' + APP_VERSION)}", f"Current version: v{APP_VERSION}")
         if checked_txt and sub != checked_txt:
@@ -8238,7 +8252,7 @@ class UpdateDialog(QDialog):
                     55,
                     self.T(
                         "جاري تطبيق التحديث وتحديث الملفات وإعادة تشغيل البرنامج...",
-                        "Applying update files and restarting Scorpion IDM...",
+                        "Applying update files and restarting Scorpion Download Manager...",
                     ),
                 )
                 ok, msg = self.engine.install_update_package(
@@ -8276,7 +8290,7 @@ class UpdateDialog(QDialog):
                 self.lbl_prog.setText(
                     self.T(
                         "⚠️ اكتمل تثبيت التحديث بنجاح، لكن تعذّر إعادة التشغيل تلقائياً. أعد تشغيل البرنامج يدوياً.",
-                        "⚠️ Update installed successfully, but automatic restart failed. Please restart Scorpion IDM manually.",
+                        "⚠️ Update installed successfully, but automatic restart failed. Please restart Scorpion Download Manager manually.",
                     )
                 )
             else:
@@ -8427,7 +8441,7 @@ def set_torrent_association(enabled: bool):
     try:
         if enabled:
             base = rf"Software\Classes\{TORRENT_PROGID}"
-            _reg_set(base, "", "Torrent File (Scorpion IDM)")
+            _reg_set(base, "", "Torrent File (Scorpion Download Manager)")
             _reg_set(base + r"\DefaultIcon", "", icon)
             _reg_set(base + r"\shell\open\command", "", cmd)
             _reg_set(r"Software\Classes\.torrent", "", TORRENT_PROGID)
@@ -9277,7 +9291,7 @@ class ScorpionMainWindow(QMainWindow):
             self.tray_icon = None
             return
         self.tray_icon = QSystemTrayIcon(self.app_icon, self)
-        self.tray_icon.setToolTip(f"Scorpion IDM v{APP_VERSION}")
+        self.tray_icon.setToolTip(f"Scorpion Download Manager v{APP_VERSION}")
         self._rebuild_tray_menu()
         self.tray_icon.activated.connect(
             lambda reason: self.bring_to_front()
@@ -9292,7 +9306,7 @@ class ScorpionMainWindow(QMainWindow):
         is_ar = self.lang == "ar"
         tray_menu = QMenu(self)
         for text, slot in [
-            ("إظهار البرنامج" if is_ar else "Show Scorpion IDM", self.bring_to_front),
+            ("إظهار البرنامج" if is_ar else "Show Scorpion Download Manager", self.bring_to_front),
             ("إضافة رابط" if is_ar else "Add URL", lambda: self.open_add_dialog("", False)),
             ("ربط المتصفحات" if is_ar else "Browser Integration", self.open_browser_setup_dialog),
             ("التحديثات وسجل الإضافات" if is_ar else "Updates & What's New", self.open_update_dialog),
@@ -9598,7 +9612,7 @@ class ScorpionMainWindow(QMainWindow):
             webbrowser.open("https://github.com/Mahmoud-847/scorpion-idm/blob/main/PRIVACY.md")
         m_help.addAction(T("سياسة الخصوصية", "Privacy Policy"), _open_privacy)
         m_help.addSeparator()
-        m_help.addAction(T("حول Scorpion IDM", "About Scorpion IDM"), self._show_about_dialog)
+        m_help.addAction(T("حول Scorpion Download Manager", "About Scorpion Download Manager"), self._show_about_dialog)
 
     def _set_nav_filter(self, state: str, cat: str):
         self.filter_state, self.filter_cat = state, cat
@@ -9616,7 +9630,7 @@ class ScorpionMainWindow(QMainWindow):
         is_ar = self.lang == "ar"
         QMessageBox.information(
             self,
-            "Scorpion IDM",
+            "Scorpion Download Manager",
             (
                 f"Scorpion Download Manager v{APP_VERSION}\n"
                 "مدير تحميلات سريع متعدد القنوات ومتكامل مع المتصفح والتورنت."
@@ -9730,7 +9744,7 @@ class ScorpionMainWindow(QMainWindow):
             self.app.setStyleSheet(stylesheet)
         apply_win32_window_effects(self, self.theme == "dark")
         c = pal()
-        self.setWindowTitle("Scorpion IDM")
+        self.setWindowTitle("Scorpion Download Manager")
         self.title_bar.refresh_theme(is_ar=is_ar)
         self._rebuild_menu_bar()
 
@@ -10295,7 +10309,7 @@ class ScorpionMainWindow(QMainWindow):
             self._tray_badge_count = n
             self.tray_icon.setIcon(self._tray_icon_with_badge(n))
             self.tray_icon.setToolTip(
-                f"Scorpion IDM v{APP_VERSION}"
+                f"Scorpion Download Manager v{APP_VERSION}"
                 + ((f" — {n} تحميل شغال" if self.lang == "ar" else f" — {n} downloading") if n else "")
             )
 
@@ -10335,7 +10349,8 @@ class ScorpionMainWindow(QMainWindow):
             for btn in self._toolbar_buttons:
                 full = btn.property("fullText") or ""
                 if btn is self.btn_add:
-                    btn.setText(f"+ {full}" if m != "tiny" else "+")
+                    # The button already shows a plus icon: no second "+" in the text
+                    btn.setText(full if m != "tiny" else "")
                     btn.setToolTip("" if m != "tiny" else full)
                     continue
                 keep_text = (m == "full") or (m == "standard" and btn in labeled_standard)
@@ -10410,7 +10425,7 @@ class ScorpionMainWindow(QMainWindow):
             if not getattr(self, "_tray_hint_shown", False):
                 self._tray_hint_shown = True
                 self.tray_icon.showMessage(
-                    "Scorpion IDM",
+                    "Scorpion Download Manager",
                     "البرنامج شغال في الخلفية بجوار الساعة ويستقبل التحميلات من المتصفح"
                     if self.lang == "ar"
                     else "Scorpion keeps running in the tray to catch browser downloads",

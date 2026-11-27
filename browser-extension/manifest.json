@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Scorpion IDM Integration Module",
-  "version": "1.8.18",
-  "description": "Download Manager Integration & Video Helper for Scorpion IDM.",
+  "name": "Scorpion Download Manager",
+  "version": "1.8.19",
+  "description": "Download videos and files faster with the Scorpion Download Manager app for Windows.",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -29,7 +29,7 @@
       "48": "icons/icon-48.png",
       "128": "icons/icon-128.png"
     },
-    "default_title": "Scorpion IDM"
+    "default_title": "Scorpion Download Manager"
   },
   "content_scripts": [
     {

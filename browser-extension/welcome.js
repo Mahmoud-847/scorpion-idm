@@ -1,7 +1,7 @@
 const messages = {
   en: {
     heading: 'Connect your extension', stepDownload: 'Download the Windows app',
-    downloadHint: 'Run the installer and open Scorpion IDM.', downloadInstaller: 'Download Scorpion IDM (Windows)',
+    downloadHint: 'Run the installer and open Scorpion Download Manager.', downloadInstaller: 'Download Scorpion Download Manager (Windows)',
     stepConnect: 'Confirm the connection',
     connectionHint: 'This page checks for the desktop app while it is open. If the app is running and still cannot connect, open Connect Browser in the app.',
     tryDownload: 'Try your first download', checking: 'Checking connection…',
@@ -10,7 +10,7 @@ const messages = {
   },
   ar: {
     heading: 'اربط إضافة المتصفح', stepDownload: 'حمّل برنامج ويندوز',
-    downloadHint: 'شغّل المثبّت وافتح البرنامج بعد انتهاء التثبيت.', downloadInstaller: 'تحميل برنامج Scorpion IDM للويندوز',
+    downloadHint: 'شغّل المثبّت وافتح البرنامج بعد انتهاء التثبيت.', downloadInstaller: 'تحميل برنامج Scorpion Download Manager للويندوز',
     stepConnect: 'تأكد من الاتصال',
     connectionHint: 'الصفحة بتتحقق من حالة الاتصال وهي مفتوحة. لو البرنامج شغّال ولسه مفيش اتصال، افتح «ربط المتصفح» من البرنامج.',
     tryDownload: 'جرّب أول تحميل', checking: 'جاري التحقق من الاتصال…',
@@ -31,7 +31,7 @@ function render() {
   const tr = messages[lang];
   document.documentElement.lang = lang;
   document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
-  document.title = tr.heading + ' | Scorpion IDM';
+  document.title = tr.heading + ' | Scorpion Download Manager';
   for (const id of ['heading', 'stepDownload', 'downloadHint', 'downloadInstaller', 'stepConnect', 'connectionHint', 'tryDownload']) {
     const el = document.getElementById(id);
     if (el.textContent !== tr[id]) el.textContent = tr[id];

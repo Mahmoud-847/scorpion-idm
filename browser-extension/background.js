@@ -163,17 +163,17 @@ function updateContextMenus(lang) {
     chrome.contextMenus.removeAll(() => {
       chrome.contextMenus.create({
         id: 'scorpion-download-link',
-        title: isEn ? 'Download link with Scorpion IDM' : 'تحميل الرابط بواسطة Scorpion IDM',
+        title: isEn ? 'Download link with Scorpion' : 'تحميل الرابط بواسطة Scorpion',
         contexts: ['link'],
       });
       chrome.contextMenus.create({
         id: 'scorpion-download-media',
-        title: isEn ? 'Download video with Scorpion IDM' : 'تحميل الفيديو بواسطة Scorpion IDM',
+        title: isEn ? 'Download video with Scorpion' : 'تحميل الفيديو بواسطة Scorpion',
         contexts: ['video', 'audio'],
       });
       chrome.contextMenus.create({
         id: 'scorpion-download-page-video',
-        title: isEn ? 'Grab this page video with Scorpion IDM' : 'سحب فيديو هذه الصفحة بواسطة Scorpion IDM',
+        title: isEn ? 'Grab this page video with Scorpion' : 'سحب فيديو هذه الصفحة بواسطة Scorpion',
         contexts: ['page'],
       });
     });
